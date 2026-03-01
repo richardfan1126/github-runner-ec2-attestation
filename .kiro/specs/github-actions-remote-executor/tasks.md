@@ -152,7 +152,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 32: Offset-Based Output Retrieval**
     - **Validates: Requirements 5.3, 5.4, 6.3, 6.4, 6.5, 6.6**
 
-  - [ ]* 8.3 Write unit tests for output collector
+  - [x] 8.3 Write unit tests for output collector
     - Test large output handling
     - Test concurrent output capture
     - Test offset edge cases (0, beyond end, negative)
