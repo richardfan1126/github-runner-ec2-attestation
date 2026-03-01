@@ -123,19 +123,17 @@ This document specifies the requirements for transforming the existing attestabl
 6. THE GHA_Server SHALL not expose internal system details in error responses
 7. THE GHA_Server SHALL log the duration of each request processing phase
 
-### Requirement 8: Security and Isolation
+### Requirement 8: Security and Resource Management
 
-**User Story:** As a security engineer, I want script execution to be isolated and secure, so that malicious scripts cannot compromise the system
+**User Story:** As a system administrator, I want script execution to be managed and monitored, so that system resources are properly controlled
 
 #### Acceptance Criteria
 
-1. THE Script_Executor SHALL execute scripts with minimal system privileges
-2. THE Script_Executor SHALL restrict script access to network resources
-3. THE Script_Executor SHALL restrict script access to filesystem locations outside the temporary execution directory
-4. THE GHA_Server SHALL validate script file size before execution
-5. IF the script file exceeds the maximum allowed size, THEN THE GHA_Server SHALL return HTTP 413 with a file too large error
-6. THE Script_Executor SHALL clean up all temporary files after execution regardless of success or failure
-7. THE GHA_Server SHALL rate limit requests per source IP address
+1. THE Script_Executor SHALL execute scripts as root with full system privileges
+2. THE GHA_Server SHALL validate script file size before execution
+3. IF the script file exceeds the maximum allowed size, THEN THE GHA_Server SHALL return HTTP 413 with a file too large error
+4. THE Script_Executor SHALL clean up all temporary files after execution regardless of success or failure
+5. THE GHA_Server SHALL rate limit requests per source IP address
 
 ### Requirement 9: Configuration Management
 

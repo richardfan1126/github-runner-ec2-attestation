@@ -32,7 +32,6 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Implement ExecutionStatus enum
     - Implement AttestationDocument dataclass
     - Implement OutputData dataclass
-    - Implement SandboxConfig dataclass
     - _Requirements: 2.1, 2.2, 2.3, 2.6_
 
   - [x] 2.2 Implement RequestValidator class
@@ -158,43 +157,31 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test offset edge cases (0, beyond end, negative)
     - _Requirements: 5.3, 5.4, 6.3, 6.4, 6.5, 6.6_
 
-- [ ] 9. Implement sandbox environment and script executor
-  - [ ] 9.1 Create SandboxEnvironment class
-    - Implement isolated process creation with minimal privileges
-    - Implement filesystem access restrictions using chroot or containers
-    - Implement network access restrictions using network namespaces
-    - Implement resource limits (memory, CPU)
-    - Create temporary execution directories
-    - _Requirements: 8.1, 8.2, 8.3_
-
-  - [ ] 9.2 Create ScriptExecutor class
-    - Implement execute_async method for background execution
+- [ ] 9. Implement script executor
+  - [ ] 9.1 Create ScriptExecutor class
+    - Implement execute_async method for background execution as root
     - Capture stdout and stderr streams
     - Implement execution timeout with process termination
     - Capture exit codes
     - Integrate with OutputCollector for stream capture
     - Update ExecutionManager status throughout lifecycle
     - Clean up temporary files after execution
-    - _Requirements: 5.1, 5.2, 5.3, 5.5, 5.6, 5.7, 8.6_
+    - _Requirements: 5.1, 5.2, 5.3, 5.5, 5.6, 5.7, 8.4_
 
-  - [ ]* 9.3 Write property tests for script executor
+  - [ ]* 9.2 Write property tests for script executor
     - **Property 21: Asynchronous Script Execution**
     - **Property 22: Process Isolation**
     - **Property 25: Execution Timeout Configuration**
     - **Property 26: Timeout Termination**
     - **Property 27: Exit Code Capture**
     - **Property 28: Temporary File Cleanup**
-    - **Property 44: Minimal Privilege Execution**
-    - **Property 45: Network Access Restriction**
-    - **Property 46: Filesystem Access Restriction**
-    - **Validates: Requirements 5.1, 5.2, 5.5, 5.6, 5.7, 8.1, 8.2, 8.3, 8.6**
+    - **Validates: Requirements 5.1, 5.2, 5.5, 5.6, 5.7, 8.4**
 
-  - [ ]* 9.4 Write unit tests for script executor
+  - [ ]* 9.3 Write unit tests for script executor
     - Test script execution with known output
     - Test timeout scenarios
     - Test cleanup on success and failure
-    - Test privilege restrictions
-    - _Requirements: 5.1-5.7, 8.1-8.3, 8.6_
+    - _Requirements: 5.1-5.7, 8.4_
 
 - [ ] 10. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
@@ -218,7 +205,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Initiate async execution using ScriptExecutor
     - Return immediate response with execution_id and attestation_document
     - Handle all error cases with appropriate HTTP status codes
-    - _Requirements: 1.1, 1.2, 1.3, 1.4, 4.8, 4.9, 8.4, 8.5_
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 4.8, 4.9, 8.2, 8.3_
 
   - [ ] 11.3 Implement GET /execution/{execution_id}/output endpoint
     - Parse execution_id from URL path
@@ -239,14 +226,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 47: Script Size Validation**
     - **Property 48: Oversized Script Rejection**
     - **Property 49: Rate Limiting per IP**
-    - **Validates: Requirements 1.3, 1.4, 1.5, 4.8, 4.9, 6.2, 6.7, 6.8, 6.9, 8.4, 8.5, 8.7**
+    - **Validates: Requirements 1.3, 1.4, 1.5, 4.8, 4.9, 6.2, 6.7, 6.8, 6.9, 8.2, 8.3, 8.5**
 
   - [ ]* 11.5 Write unit tests for HTTP endpoints
     - Test complete request/response flow
     - Test error responses for each error case
     - Test rate limiting behavior
     - Test concurrent request handling
-    - _Requirements: 1.1-1.5, 4.8-4.10, 6.1-6.9, 8.4, 8.5, 8.7_
+    - _Requirements: 1.1-1.5, 4.8-4.10, 6.1-6.9, 8.2, 8.3, 8.5_
 
 - [ ] 12. Implement health and metrics endpoints
   - [ ] 12.1 Create GET /health endpoint
@@ -342,6 +329,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Create example environment variable configuration
   - Create README with setup and deployment instructions
   - Document AWS Nitro EC2 instance requirements
+  - Note that scripts execute as root with full privileges
   - _Requirements: 9.1_
 
 - [ ] 17. Final checkpoint - Ensure all tests pass
@@ -351,9 +339,9 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 60 correctness properties from the design document
+- Property tests validate the 57 correctness properties from the design document
 - The implementation uses Python with Flask/FastAPI for the HTTP server
 - AWS Nitro attestation requires running on a Nitro-based EC2 instance
-- Sandbox isolation may use containers (Docker) or process isolation (chroot, namespaces)
-- All 60 properties should be tested with hypothesis library (minimum 100 iterations each)
+- Scripts execute as root with full system privileges
+- All 57 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation

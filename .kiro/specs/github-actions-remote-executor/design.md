@@ -8,7 +8,7 @@ The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-b
 
 1. **Asynchronous Execution Model**: Requests return immediately with an execution ID and attestation document, while script execution proceeds in the background
 2. **Polling-based Output Retrieval**: Clients poll a separate endpoint to retrieve incremental output rather than maintaining long HTTP connections
-3. **Security Isolation**: Scripts execute in isolated environments with restricted privileges and resource access
+3. **Root Execution**: Scripts execute as root with full system privileges for maximum flexibility
 4. **Attestable Environment**: AWS Nitro attestation provides cryptographic proof of the execution environment
 5. **Stateless Request Handling**: Each request is independent, with execution state stored separately
 
@@ -16,9 +16,8 @@ The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-b
 
 - Support concurrent execution of multiple scripts
 - Provide verifiable proof of execution environment through attestation
-- Minimize resource consumption through efficient isolation
 - Enable reliable output retrieval through polling
-- Maintain security boundaries between executions
+- Maintain execution tracking and monitoring capabilities
 
 ## Architecture
 
@@ -56,11 +55,11 @@ The system consists of the following major components:
 └───────────────────────────────────────────────────────────────┘
             │                     │                     │
 ┌───────────▼─────────────────────▼─────────────────────▼─────┐
-│                    Storage & Isolation Layer                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Execution   │  │  Temporary   │  │   Sandbox    │      │
-│  │    Store     │  │   Storage    │  │  Environment │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│                    Storage Layer                              │
+│  ┌──────────────┐  ┌──────────────┐                         │
+│  │  Execution   │  │  Temporary   │                         │
+│  │    Store     │  │   Storage    │                         │
+│  └──────────────┘  └──────────────┘                         │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,10 +121,10 @@ The system consists of the following major components:
 - Cleans up completed executions after retention period
 
 **Script Executor**
-- Executes scripts in isolated sandbox environments
+- Executes scripts as root with full system privileges
 - Captures stdout and stderr streams
 - Monitors execution progress
-- Enforces resource limits
+- Enforces resource limits (timeouts)
 - Handles process termination
 - Records exit codes
 
@@ -146,13 +145,6 @@ The system consists of the following major components:
 - Provides isolated directories per execution
 - Handles cleanup after execution
 
-**Sandbox Environment**
-- Provides isolated execution environment
-- Enforces security boundaries
-- Restricts filesystem access
-- Restricts network access
-- Limits resource consumption
-
 ### Request Flow
 
 **Execution Request Flow:**
@@ -164,7 +156,7 @@ The system consists of the following major components:
 5. Attestation Generator creates attestation document with execution metadata
 6. Execution Manager creates execution record with unique ID
 7. Response returned immediately with execution ID and attestation document
-8. Script Executor begins asynchronous execution in sandbox
+8. Script Executor begins asynchronous execution as root
 9. Output Collector captures stdout/stderr streams
 10. Execution Manager updates status upon completion
 
@@ -360,9 +352,8 @@ class ExecutionManager:
 
 ```python
 class ScriptExecutor:
-    def execute_async(self, execution_id: str, script_path: str, 
-                     sandbox: SandboxConfig) -> None:
-        """Executes script asynchronously in sandbox"""
+    def execute_async(self, execution_id: str, script_path: str) -> None:
+        """Executes script asynchronously as root"""
         pass
     
     def terminate(self, execution_id: str) -> None:
@@ -447,19 +438,6 @@ class OutputData:
     stderr_offset: int
     complete: bool
     exit_code: Optional[int]
-```
-
-### SandboxConfig
-
-```python
-@dataclass
-class SandboxConfig:
-    working_directory: str
-    max_memory_mb: int
-    max_cpu_percent: int
-    network_enabled: bool
-    timeout_seconds: int
-    allowed_paths: List[str]
 ```
 
 ### Configuration
@@ -741,41 +719,23 @@ class ServerConfig:
 
 **Validates: Requirements 7.7**
 
-### Property 44: Minimal Privilege Execution
-
-*For any* script execution, the script process should run with minimal system privileges (non-root user, restricted capabilities).
-
-**Validates: Requirements 8.1**
-
-### Property 45: Network Access Restriction
-
-*For any* script execution with network restrictions enabled, the script should be unable to access network resources.
-
-**Validates: Requirements 8.2**
-
-### Property 46: Filesystem Access Restriction
-
-*For any* script execution, the script should be unable to access filesystem locations outside its temporary execution directory.
-
-**Validates: Requirements 8.3**
-
 ### Property 47: Script Size Validation
 
 *For any* execution request, the server should validate the script file size before execution.
 
-**Validates: Requirements 8.4**
+**Validates: Requirements 8.2**
 
 ### Property 48: Oversized Script Rejection
 
 *For any* script file that exceeds the maximum allowed size, the server should return HTTP 413 with a file too large error.
 
-**Validates: Requirements 8.5**
+**Validates: Requirements 8.3**
 
 ### Property 49: Rate Limiting per IP
 
 *For any* source IP address that exceeds the configured rate limit, subsequent requests should be rejected with HTTP 429.
 
-**Validates: Requirements 8.7**
+**Validates: Requirements 8.5**
 
 ### Property 50: Configuration Loading
 
@@ -842,8 +802,6 @@ class ServerConfig:
 *For any* set of script executions, the metrics endpoint should accurately track the count of successful and failed executions.
 
 **Validates: Requirements 10.6**
-
-## Error Handling
 
 ### Error Categories
 
@@ -989,8 +947,8 @@ def test_execution_id_uniqueness(requests):
 - Property tests: Random output sizes, offset values, concurrent access
 
 **Security Testing**
-- Unit tests: Specific privilege escalation attempts, path traversal
-- Property tests: Random filesystem/network access attempts
+- Unit tests: Path traversal attempts, token handling
+- Property tests: Random input validation scenarios
 
 **Configuration Testing**
 - Unit tests: Specific missing config, invalid values
@@ -1008,7 +966,7 @@ def test_execution_id_uniqueness(requests):
 **External Dependencies**:
 - Mock GitHub API for predictable testing
 - Mock NSM device for attestation testing
-- Use test containers for isolation testing
+- Use separate processes for execution testing
 
 ### Performance Testing
 
@@ -1027,14 +985,15 @@ def test_execution_id_uniqueness(requests):
 ### Security Testing
 
 **Penetration Testing**:
-- Privilege escalation attempts
-- Filesystem access violations
-- Network access violations
-- Resource exhaustion attacks
 - Token extraction attempts
+- Resource exhaustion attacks
+- Input validation bypass attempts
 
 **Compliance Testing**:
 - Verify no sensitive data in logs
 - Verify no sensitive data in error responses
 - Verify proper cleanup of temporary files
 - Verify attestation signature validity
+
+
+## Error Handling
