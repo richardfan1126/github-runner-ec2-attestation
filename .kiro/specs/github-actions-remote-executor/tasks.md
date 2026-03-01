@@ -145,7 +145,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Implement thread-safe buffered writes
     - _Requirements: 5.3, 5.4, 6.3, 6.4, 6.5, 6.6_
 
-  - [ ]* 8.2 Write property tests for output collector
+  - [x] 8.2 Write property tests for output collector
     - **Property 23: Output Stream Capture**
     - **Property 24: Output Storage Round-Trip**
     - **Property 31: Output Structure Separation**
