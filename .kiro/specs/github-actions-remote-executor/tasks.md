@@ -105,7 +105,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 20: Attestation Failure Response**
     - **Validates: Requirements 4.1-4.6, 4.10**
 
-  - [ ]* 5.3 Write unit tests for attestation generator
+  - [x] 5.3 Write unit tests for attestation generator
     - Test with mocked NSM device
     - Test attestation document structure
     - Test signature verification
