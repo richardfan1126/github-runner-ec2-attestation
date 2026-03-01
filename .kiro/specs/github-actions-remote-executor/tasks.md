@@ -82,12 +82,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [ ] 5. Implement AWS Nitro attestation generator
   - [ ] 5.1 Create AttestationGenerator class
-    - Implement verify_nsm_available method to check NSM device
-    - Implement generate_attestation method using NSM device
-    - Include repository URL, commit hash, script path, timestamp in attestation
-    - Sign attestation document using NSM cryptographic capabilities
-    - Encode attestation in CBOR format
-    - Handle attestation generation failures
+    - Implement verify_nsm_available method to check NSM device at `/usr/bin/nitro-tpm-attest`
+    - Implement generate_attestation method that:
+      1. Accepts optional user_data and nonce parameters for inclusion in attestation
+      2. Writes user_data and nonce to temporary files if provided (using tempfile.mkstemp)
+      3. Invokes `/usr/bin/nitro-tpm-attest` with optional `--user-data` and `--nonce` flags
+      4. Captures binary CBOR-encoded attestation document from stdout using subprocess.run
+      5. Implements 30-second timeout for attestation generation
+      6. Returns attestation document as bytes or detailed error information
+      7. Cleans up temporary files in finally block
+      8. Handles subprocess failures, timeouts, and OS errors
+      9. Returns error responses with command, exit code, stdout, stderr, and context for debugging
+    - Include repository URL, commit hash, script path, timestamp in user_data
+    - Encode attestation in CBOR format (handled by nitro-tpm-attest)
+    - Handle attestation generation failures with detailed error context
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.10_
 
   - [ ]* 5.2 Write property tests for attestation generator

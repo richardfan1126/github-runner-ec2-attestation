@@ -99,10 +99,20 @@ The system consists of the following major components:
 - Caches authentication state
 
 **Attestation Generator**
-- Interfaces with AWS Nitro Security Module (NSM)
+- Interfaces with AWS Nitro Security Module (NSM) via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
 - Signs documents using NSM cryptographic capabilities
 - Encodes attestation in standard format (CBOR)
+- Implementation approach (based on `demo_api.py::AttestationAPIHandler.generate_attestation_document()`):
+  1. Accepts optional user_data and nonce parameters for inclusion in attestation
+  2. Writes user_data and nonce to temporary files if provided
+  3. Invokes `/usr/bin/nitro-tpm-attest` with optional `--user-data` and `--nonce` flags
+  4. Captures binary CBOR-encoded attestation document from stdout
+  5. Implements 30-second timeout for attestation generation
+  6. Returns attestation document as bytes or detailed error information
+  7. Cleans up temporary files in finally block
+  8. Error handling includes: subprocess failures, timeouts, and OS errors
+  9. Error responses include command, exit code, stdout, stderr, and context for debugging
 
 **Execution Manager**
 - Generates unique execution IDs
