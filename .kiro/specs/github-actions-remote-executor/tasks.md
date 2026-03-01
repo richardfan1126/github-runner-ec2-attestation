@@ -64,7 +64,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Store fetched files in temporary secure location
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
 
-  - [ ]* 4.2 Write property tests for repository client
+  - [x] 4.2 Write property tests for repository client
     - **Property 8: GitHub Authentication**
     - **Property 9: Exact Commit File Retrieval**
     - **Property 10: Authentication Failure Response**
