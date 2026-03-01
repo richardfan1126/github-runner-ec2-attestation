@@ -80,8 +80,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test file size validation
     - _Requirements: 3.1-3.7, 8.4_
 
-- [ ] 5. Implement AWS Nitro attestation generator
-  - [ ] 5.1 Create AttestationGenerator class
+- [x] 5. Implement AWS Nitro attestation generator
+  - [x] 5.1 Create AttestationGenerator class
     - Implement verify_nsm_available method to check NSM device at `/usr/bin/nitro-tpm-attest`
     - Implement generate_attestation method that:
       1. Accepts optional user_data and nonce parameters for inclusion in attestation
