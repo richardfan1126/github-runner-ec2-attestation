@@ -98,7 +98,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle attestation generation failures with detailed error context
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.10_
 
-  - [ ]* 5.2 Write property tests for attestation generator
+  - [x] 5.2 Write property tests for attestation generator
     - **Property 15: Attestation Document Generation**
     - **Property 16: Attestation Document Completeness**
     - **Property 17: Attestation Document Signing**
