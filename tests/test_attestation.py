@@ -3,7 +3,7 @@ import json
 import os
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, UTC
 from unittest.mock import Mock, patch, MagicMock
 
 import pytest
@@ -108,13 +108,13 @@ class TestAttestationDocumentStructure:
         mock_result.stdout = b"mock_attestation"
         mock_run.return_value = mock_result
         
-        before = datetime.utcnow()
+        before = datetime.now(UTC)
         doc, error = generator.generate_attestation(
             "https://github.com/owner/repo",
             "a" * 40,
             "script.sh"
         )
-        after = datetime.utcnow()
+        after = datetime.now(UTC)
         
         assert error is None
         assert before <= doc.timestamp <= after

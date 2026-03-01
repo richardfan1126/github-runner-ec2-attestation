@@ -4,7 +4,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Optional, Dict, Any
 
 from src.models import AttestationDocument
@@ -78,7 +78,7 @@ class AttestationGenerator:
         
         try:
             # Create user_data with execution metadata
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(UTC)
             user_data = {
                 "repository_url": repository_url,
                 "commit_hash": commit_hash,

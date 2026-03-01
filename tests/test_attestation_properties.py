@@ -8,7 +8,7 @@ import tempfile
 import pytest
 from hypothesis import given, strategies as st, assume, settings
 from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
+from datetime import datetime, UTC
 from src.attestation import AttestationGenerator, AttestationError
 from src.models import AttestationDocument
 
@@ -160,7 +160,7 @@ def test_property_16_attestation_document_completeness(
         mock_run.return_value = mock_result
         
         # Capture time before generation
-        time_before = datetime.utcnow()
+        time_before = datetime.now(UTC)
         
         # Generate attestation
         attestation_doc, error = generator.generate_attestation(
@@ -170,7 +170,7 @@ def test_property_16_attestation_document_completeness(
         )
         
         # Capture time after generation
-        time_after = datetime.utcnow()
+        time_after = datetime.now(UTC)
         
         # Should have all required fields
         assert attestation_doc is not None
