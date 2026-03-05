@@ -503,3 +503,90 @@ def add_routes(app: FastAPI) -> None:
                     "details": {}
                 }
             )
+
+    @app.get("/health")
+    async def health_check(request: Request):
+        """
+        Health check endpoint for monitoring
+
+        Returns:
+        {
+            "status": "healthy",
+            "attestation_available": true,
+            "disk_space_mb": 10240,
+            "active_executions": 3
+        }
+        """
+        try:
+            import shutil
+
+            # Check attestation capability
+            attestation_gen = request.app.state.attestation_generator
+            attestation_available = attestation_gen.verify_nsm_available()
+
+            # Check disk space
+            config = request.app.state.config
+            disk_usage = shutil.disk_usage(config.temp_storage_path)
+            disk_space_mb = disk_usage.free // (1024 * 1024)
+
+            # Get active executions count
+            exec_manager = request.app.state.execution_manager
+            active_executions = exec_manager.get_active_count()
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "healthy",
+                    "attestation_available": attestation_available,
+                    "disk_space_mb": disk_space_mb,
+                    "active_executions": active_executions
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error in health check endpoint: {e}", exc_info=True)
+            # Still return 200 but indicate degraded status
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "degraded",
+                    "attestation_available": False,
+                    "disk_space_mb": 0,
+                    "active_executions": 0
+                }
+            )
+
+    @app.get("/metrics")
+    async def metrics(request: Request):
+        """
+        Metrics endpoint for monitoring
+
+        Returns:
+        {
+            "total_executions": 1523,
+            "successful_executions": 1450,
+            "failed_executions": 73,
+            "average_duration_ms": 3421,
+            "active_executions": 3
+        }
+        """
+        try:
+            exec_manager = request.app.state.execution_manager
+            metrics_data = exec_manager.get_metrics()
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=metrics_data
+            )
+
+        except Exception as e:
+            logger.error(f"Error in metrics endpoint: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "internal_server_error",
+                    "message": "An unexpected error occurred",
+                    "details": {}
+                }
+            )
+

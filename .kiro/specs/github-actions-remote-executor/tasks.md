@@ -235,15 +235,15 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test concurrent request handling
     - _Requirements: 1.1-1.5, 4.8-4.10, 6.1-6.9, 8.2, 8.3, 8.5_
 
-- [ ] 12. Implement health and metrics endpoints
-  - [ ] 12.1 Create GET /health endpoint
+- [x] 12. Implement health and metrics endpoints
+  - [x] 12.1 Create GET /health endpoint
     - Return HTTP 200 when operational
     - Include attestation capability status
     - Include disk space availability
     - Include active executions count
     - _Requirements: 10.1, 10.2, 10.3, 10.4_
 
-  - [ ] 12.2 Create GET /metrics endpoint
+  - [x] 12.2 Create GET /metrics endpoint
     - Track total executions count
     - Track successful executions count
     - Track failed executions count
@@ -251,13 +251,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Include active executions count
     - _Requirements: 10.5, 10.6_
 
-  - [ ] 12.3 Write property tests for health and metrics
+  - [x] 12.3 Write property tests for health and metrics
     - **Property 58: Health Check Attestation Status**
     - **Property 59: Health Check Disk Space**
     - **Property 60: Execution Metrics Tracking**
     - **Validates: Requirements 10.3, 10.4, 10.6**
 
-  - [ ] 12.4 Write unit tests for health and metrics
+  - [x] 12.4 Write unit tests for health and metrics
     - Test health endpoint response structure
     - Test metrics accuracy
     - Test metrics under concurrent executions

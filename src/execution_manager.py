@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.models import ExecutionRecord, ExecutionStatus
 
@@ -13,13 +13,19 @@ class ExecutionManager:
     def __init__(self, output_retention_hours: int):
         """
         Initialize execution manager
-        
+
         Args:
             output_retention_hours: Hours to retain execution records after completion
         """
         self._executions: Dict[str, ExecutionRecord] = {}
         self._lock = Lock()
         self._output_retention_hours = output_retention_hours
+
+        # Metrics tracking
+        self._total_executions = 0
+        self._successful_executions = 0
+        self._failed_executions = 0
+        self._execution_durations: list[float] = []  # Store durations in milliseconds
     
     def create_execution(
         self,
@@ -30,18 +36,18 @@ class ExecutionManager:
     ) -> ExecutionRecord:
         """
         Create a new execution record with unique ID
-        
+
         Args:
             repository_url: GitHub repository URL
             commit_hash: Git commit SHA
             script_path: Path to script file in repository
             timeout_seconds: Execution timeout in seconds
-        
+
         Returns:
             ExecutionRecord with unique execution_id and QUEUED status
         """
         execution_id = str(uuid.uuid4())
-        
+
         record = ExecutionRecord(
             execution_id=execution_id,
             repository_url=repository_url,
@@ -54,10 +60,11 @@ class ExecutionManager:
             exit_code=None,
             timeout_seconds=timeout_seconds
         )
-        
+
         with self._lock:
             self._executions[execution_id] = record
-        
+            self._total_executions += 1
+
         return record
     
     def get_execution(self, execution_id: str) -> Optional[ExecutionRecord]:
@@ -81,15 +88,15 @@ class ExecutionManager:
     ) -> bool:
         """
         Update execution status with lifecycle tracking
-        
+
         Tracks status transitions: queued → running → (completed|failed|timed_out)
         Updates timestamps appropriately for each transition.
-        
+
         Args:
             execution_id: Unique execution identifier
             status: New execution status
             exit_code: Exit code (only for completed/failed/timed_out status)
-        
+
         Returns:
             True if update succeeded, False if execution not found
         """
@@ -97,20 +104,31 @@ class ExecutionManager:
             record = self._executions.get(execution_id)
             if record is None:
                 return False
-            
+
             # Update status
             record.status = status
-            
+
             # Update timestamps based on status transition
             if status == ExecutionStatus.RUNNING and record.started_at is None:
                 record.started_at = datetime.now(timezone.utc)
-            
+
             if status in (ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.TIMED_OUT):
                 if record.completed_at is None:
                     record.completed_at = datetime.now(timezone.utc)
                 if exit_code is not None:
                     record.exit_code = exit_code
-            
+
+                # Update metrics
+                if status == ExecutionStatus.COMPLETED:
+                    self._successful_executions += 1
+                elif status in (ExecutionStatus.FAILED, ExecutionStatus.TIMED_OUT):
+                    self._failed_executions += 1
+
+                # Track execution duration
+                if record.started_at and record.completed_at:
+                    duration_ms = (record.completed_at - record.started_at).total_seconds() * 1000
+                    self._execution_durations.append(duration_ms)
+
             return True
     
     def cleanup_expired(self) -> int:
@@ -169,3 +187,36 @@ class ExecutionManager:
         """
         with self._lock:
             return len(self._executions)
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """
+        Get execution metrics for monitoring
+
+        Returns:
+            Dictionary containing:
+            - total_executions: Total number of executions created
+            - successful_executions: Number of completed executions
+            - failed_executions: Number of failed/timed_out executions
+            - average_duration_ms: Average execution duration in milliseconds
+            - active_executions: Number of currently active executions
+        """
+        with self._lock:
+            # Calculate average duration
+            avg_duration = 0.0
+            if self._execution_durations:
+                avg_duration = sum(self._execution_durations) / len(self._execution_durations)
+
+            # Count active executions
+            active_count = sum(
+                1 for record in self._executions.values()
+                if record.status in (ExecutionStatus.QUEUED, ExecutionStatus.RUNNING)
+            )
+
+            return {
+                "total_executions": self._total_executions,
+                "successful_executions": self._successful_executions,
+                "failed_executions": self._failed_executions,
+                "average_duration_ms": round(avg_duration, 2),
+                "active_executions": active_count
+            }
+
