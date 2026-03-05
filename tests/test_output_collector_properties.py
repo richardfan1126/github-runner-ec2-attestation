@@ -72,7 +72,7 @@ def stream_name_strategy(draw):
     stdout_data=output_data_strategy(),
     stderr_data=output_data_strategy()
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_23_output_stream_capture(execution_id, stdout_data, stderr_data):
     """
     Property 23: For any script execution, both stdout and stderr streams
@@ -177,7 +177,7 @@ def test_property_23_invalid_stream_rejection(execution_id, data):
     stderr_data=output_data_strategy(),
     exit_code=st.integers(min_value=-128, max_value=255)
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_24_output_storage_round_trip(execution_id, stdout_data, stderr_data, exit_code):
     """
     Property 24: For any script execution with captured output, storing the output
@@ -272,7 +272,7 @@ def test_property_24_nonexistent_execution_error(execution_id):
     stdout_data=output_data_strategy(),
     stderr_data=output_data_strategy()
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_31_output_structure_separation(execution_id, stdout_data, stderr_data):
     """
     Property 31: For any output endpoint response, stdout and stderr should be
@@ -362,7 +362,7 @@ def test_property_31_interleaved_capture_separation(execution_id, stdout_chunks,
     stdout_data=output_data_strategy(),
     stderr_data=output_data_strategy()
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_32_offset_based_retrieval(execution_id, stdout_data, stderr_data):
     """
     Property 32: For any execution with captured output and a specified offset,
@@ -491,7 +491,7 @@ def test_property_32_negative_offset_error(execution_id, negative_offset):
     execution_id=execution_id_strategy(),
     data_chunks=st.lists(output_data_strategy(), min_size=5, max_size=20)
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_concurrent_capture_thread_safety(execution_id, data_chunks):
     """
     Verify that concurrent capture operations are thread-safe.

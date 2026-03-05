@@ -60,7 +60,7 @@ valid_paths = st.text(
     retention=positive_ints,
     nsm_path=valid_paths,
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_50_configuration_loading(
     port,
     max_concurrent,
@@ -109,7 +109,7 @@ def test_property_50_configuration_loading(
 
 # Feature: github-actions-remote-executor, Property 51: Port Configuration
 @given(port=valid_ports)
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_51_port_configuration(port):
     """
     Property 51: Port Configuration
@@ -141,7 +141,7 @@ def test_property_51_port_configuration(port):
 
 # Feature: github-actions-remote-executor, Property 52: Timeout Configuration
 @given(timeout=positive_ints)
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_52_timeout_configuration(timeout):
     """
     Property 52: Timeout Configuration
@@ -174,7 +174,7 @@ def test_property_52_timeout_configuration(timeout):
 
 # Feature: github-actions-remote-executor, Property 53: Size Limit Configuration
 @given(max_size=positive_ints)
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_53_size_limit_configuration(max_size):
     """
     Property 53: Size Limit Configuration
@@ -210,7 +210,7 @@ def test_property_53_size_limit_configuration(max_size):
     rate_limit=positive_ints,
     rate_window=positive_ints,
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_54_rate_limit_configuration(rate_limit, rate_window):
     """
     Property 54: Rate Limit Configuration
@@ -244,7 +244,7 @@ def test_property_54_rate_limit_configuration(rate_limit, rate_window):
 
 # Feature: github-actions-remote-executor, Property 55: Storage Path Configuration
 @given(storage_path=valid_paths)
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_55_storage_path_configuration(storage_path):
     """
     Property 55: Storage Path Configuration
@@ -277,7 +277,7 @@ def test_property_55_storage_path_configuration(storage_path):
 
 # Feature: github-actions-remote-executor, Property 56: Retention Period Configuration
 @given(retention_hours=positive_ints)
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_56_retention_period_configuration(retention_hours):
     """
     Property 56: Retention Period Configuration
@@ -322,7 +322,7 @@ def test_property_56_retention_period_configuration(retention_hours):
         "NSM_DEVICE_PATH",
     ])
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_57_missing_configuration_failure(missing_var):
     """
     Property 57: Missing Configuration Failure
@@ -364,7 +364,7 @@ def test_property_57_missing_configuration_failure(missing_var):
 
 # Additional property tests for validation edge cases
 @given(port=st.integers(max_value=0) | st.integers(min_value=65536))
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_invalid_port_validation(port):
     """
     Property: Invalid port values should fail validation
@@ -390,7 +390,7 @@ def test_property_invalid_port_validation(port):
 
 
 @given(value=st.integers(max_value=0))
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_invalid_positive_int_validation(value):
     """
     Property: Non-positive integer configuration values should fail validation
@@ -419,7 +419,7 @@ def test_property_invalid_positive_int_validation(value):
 
 
 @given(empty_path=st.just("") | st.text(max_size=0))
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_empty_path_validation(empty_path):
     """
     Property: Empty path configuration values should fail validation

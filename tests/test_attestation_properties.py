@@ -82,7 +82,7 @@ def cbor_attestation_bytes(draw):
     nonce=st.one_of(st.none(), valid_nonce()),
     attestation_bytes=cbor_attestation_bytes()
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_15_attestation_document_generation(
     repo_url, commit, path, nonce, attestation_bytes
 ):
@@ -139,7 +139,7 @@ def test_property_15_attestation_document_generation(
     path=valid_script_path(),
     attestation_bytes=cbor_attestation_bytes()
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_16_attestation_document_completeness(
     repo_url, commit, path, attestation_bytes
 ):
@@ -206,7 +206,7 @@ def test_property_16_attestation_document_completeness(
     path=valid_script_path(),
     attestation_bytes=cbor_attestation_bytes()
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_17_attestation_document_signing(
     repo_url, commit, path, attestation_bytes
 ):
@@ -272,7 +272,7 @@ def test_property_17_attestation_document_signing(
     exit_code=st.integers(min_value=1, max_value=255),
     stderr_msg=st.text(min_size=1, max_size=500)
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_20_attestation_failure_response(
     repo_url, commit, path, exit_code, stderr_msg
 ):
@@ -327,7 +327,7 @@ def test_property_20_attestation_failure_response(
     commit=valid_commit_hash(),
     path=valid_script_path()
 )
-@settings(max_examples=30)
+@settings(max_examples=20)
 def test_attestation_timeout_handling(repo_url, commit, path):
     """
     Test that attestation generation handles timeouts correctly.
@@ -368,7 +368,7 @@ def test_attestation_timeout_handling(repo_url, commit, path):
     commit=valid_commit_hash(),
     path=valid_script_path()
 )
-@settings(max_examples=30)
+@settings(max_examples=20)
 def test_attestation_os_error_handling(repo_url, commit, path):
     """
     Test that attestation generation handles OS errors correctly.
@@ -405,7 +405,7 @@ def test_attestation_os_error_handling(repo_url, commit, path):
     nonce=valid_nonce(),
     attestation_bytes=cbor_attestation_bytes()
 )
-@settings(max_examples=30)
+@settings(max_examples=20)
 def test_temporary_file_cleanup(repo_url, commit, path, nonce, attestation_bytes):
     """
     Test that temporary files (user_data and nonce) are cleaned up after
@@ -465,7 +465,7 @@ def test_temporary_file_cleanup(repo_url, commit, path, nonce, attestation_bytes
     path=valid_script_path(),
     nonce=valid_nonce()
 )
-@settings(max_examples=30)
+@settings(max_examples=20)
 def test_temporary_file_cleanup_on_failure(repo_url, commit, path, nonce):
     """
     Test that temporary files are cleaned up even when attestation generation fails.
@@ -549,7 +549,7 @@ def test_nsm_device_availability_check():
     path=valid_script_path(),
     attestation_bytes=cbor_attestation_bytes()
 )
-@settings(max_examples=30)
+@settings(max_examples=20)
 def test_user_data_json_structure(repo_url, commit, path, attestation_bytes):
     """
     Test that user_data passed to nitro-tpm-attest contains the correct

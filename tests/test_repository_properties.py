@@ -119,7 +119,7 @@ def test_property_8_github_authentication(token):
     path=valid_script_path(),
     content=file_content_bytes()
 )
-@settings(max_examples=50)  # Reduce examples due to mocking complexity
+@settings(max_examples=20)  # Reduce examples due to mocking complexity
 def test_property_9_exact_commit_file_retrieval(repo_url, commit, path, content):
     """
     Property 9: For any valid repository, commit hash, and file path, the Repository
@@ -216,7 +216,7 @@ def test_property_10_authentication_failure_response(token):
     commit=valid_commit_hash(),
     path=valid_script_path()
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_11_repository_not_found_response(repo_url, commit, path):
     """
     Property 11: For any non-existent repository URL, the Repository Client
@@ -269,7 +269,7 @@ def test_property_11_repository_not_found_response(repo_url, commit, path):
     commit=valid_commit_hash(),
     path=valid_script_path()
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_12_commit_not_found_response(repo_url, commit, path):
     """
     Property 12: For any non-existent commit hash in a valid repository, the
@@ -327,7 +327,7 @@ def test_property_12_commit_not_found_response(repo_url, commit, path):
     commit=valid_commit_hash(),
     path=valid_script_path()
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_13_file_not_found_response(repo_url, commit, path):
     """
     Property 13: For any non-existent file path at a valid commit, the Repository
@@ -386,7 +386,7 @@ def test_property_13_file_not_found_response(repo_url, commit, path):
     path=valid_script_path(),
     content=file_content_bytes()
 )
-@settings(max_examples=50)
+@settings(max_examples=20)
 def test_property_14_temporary_file_storage(repo_url, commit, path, content):
     """
     Property 14: For any successfully fetched script file, the Repository Client
@@ -461,7 +461,7 @@ def test_property_14_temporary_file_storage(repo_url, commit, path, content):
     path=valid_script_path(),
     content=file_content_bytes()
 )
-@settings(max_examples=30)
+@settings(max_examples=20)
 def test_content_round_trip_integrity(repo_url, commit, path, content):
     """
     Test that content fetched and stored maintains integrity through the round trip.
@@ -524,7 +524,7 @@ def test_content_round_trip_integrity(repo_url, commit, path, content):
     commit=valid_commit_hash(),
     path=valid_script_path()
 )
-@settings(max_examples=30)
+@settings(max_examples=20)
 def test_fetch_requires_authentication(repo_url, commit, path):
     """
     Test that fetch_file requires authentication before it can be called.

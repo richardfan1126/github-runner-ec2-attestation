@@ -183,11 +183,11 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test cleanup on success and failure
     - _Requirements: 5.1-5.7, 8.4_
 
-- [ ] 10. Checkpoint - Ensure all tests pass
+- [x] 10. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 11. Implement HTTP server and request handlers
-  - [ ] 11.1 Create HTTP server with Flask or FastAPI
+- [x] 11. Implement HTTP server and request handlers
+  - [x] 11.1 Create HTTP server with Flask or FastAPI
     - Set up HTTP server listening on configured port
     - Implement request routing
     - Implement rate limiting middleware per source IP
@@ -195,7 +195,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Implement error handling middleware
     - _Requirements: 1.1, 1.2, 1.5, 7.2, 8.7_
 
-  - [ ] 11.2 Implement POST /execute endpoint
+  - [x] 11.2 Implement POST /execute endpoint
     - Parse request body into ExecutionRequest
     - Validate request using RequestValidator
     - Authenticate and fetch file using RepositoryClient
@@ -207,7 +207,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle all error cases with appropriate HTTP status codes
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 4.8, 4.9, 8.2, 8.3_
 
-  - [ ] 11.3 Implement GET /execution/{execution_id}/output endpoint
+  - [x] 11.3 Implement GET /execution/{execution_id}/output endpoint
     - Parse execution_id from URL path
     - Parse optional offset query parameter
     - Retrieve execution record using ExecutionManager
@@ -216,7 +216,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle non-existent execution IDs with 404
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9_
 
-  - [ ]* 11.4 Write property tests for HTTP endpoints
+  - [x] 11.4 Write property tests for HTTP endpoints
     - **Property 3: Concurrent Request Handling**
     - **Property 19: Immediate Response with Attestation**
     - **Property 30: Output Endpoint Status Return**
@@ -228,7 +228,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 49: Rate Limiting per IP**
     - **Validates: Requirements 1.3, 1.4, 1.5, 4.8, 4.9, 6.2, 6.7, 6.8, 6.9, 8.2, 8.3, 8.5**
 
-  - [ ]* 11.5 Write unit tests for HTTP endpoints
+  - [x] 11.5 Write unit tests for HTTP endpoints
     - Test complete request/response flow
     - Test error responses for each error case
     - Test rate limiting behavior
@@ -251,13 +251,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Include active executions count
     - _Requirements: 10.5, 10.6_
 
-  - [ ]* 12.3 Write property tests for health and metrics
+  - [ ] 12.3 Write property tests for health and metrics
     - **Property 58: Health Check Attestation Status**
     - **Property 59: Health Check Disk Space**
     - **Property 60: Execution Metrics Tracking**
     - **Validates: Requirements 10.3, 10.4, 10.6**
 
-  - [ ]* 12.4 Write unit tests for health and metrics
+  - [ ] 12.4 Write unit tests for health and metrics
     - Test health endpoint response structure
     - Test metrics accuracy
     - Test metrics under concurrent executions
@@ -281,7 +281,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Use consistent error response format
     - _Requirements: 7.5, 7.6_
 
-  - [ ]* 13.3 Write property tests for logging and error handling
+  - [ ] 13.3 Write property tests for logging and error handling
     - **Property 37: Error Logging with Context**
     - **Property 38: Request Logging without Token**
     - **Property 39: Execution Event Logging**
@@ -291,7 +291,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 43: Request Phase Duration Logging**
     - **Validates: Requirements 7.1-7.7**
 
-  - [ ]* 13.4 Write unit tests for logging
+  - [ ] 13.4 Write unit tests for logging
     - Test log output for various scenarios
     - Test token exclusion from logs
     - Test error message sanitization
@@ -316,7 +316,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Ensure proper dependency injection
     - _Requirements: All requirements_
 
-  - [ ]* 15.3 Write integration tests
+  - [ ] 15.3 Write integration tests
     - Test complete end-to-end execution flow
     - Test error scenarios (auth failure, timeout, not found)
     - Test concurrent execution handling

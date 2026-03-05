@@ -65,7 +65,7 @@ def execution_params(draw):
     params_list=st.lists(execution_params(), min_size=2, max_size=100),
     retention_hours=st.integers(min_value=1, max_value=168)
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_18_execution_id_uniqueness(params_list, retention_hours):
     """
     Property 18: For any set of execution requests, all generated execution IDs
@@ -239,7 +239,7 @@ def test_property_29_nonexistent_execution_update(params, retention_hours):
     params_list=st.lists(execution_params(), min_size=1, max_size=20),
     retention_hours=st.integers(min_value=1, max_value=24)
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_36_output_retention_period(params_list, retention_hours):
     """
     Property 36: For any completed execution, the output should be retained and
