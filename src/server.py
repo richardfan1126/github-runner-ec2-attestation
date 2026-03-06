@@ -1,6 +1,7 @@
 """HTTP server for GitHub Actions Remote Executor"""
 import logging
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from threading import Lock
@@ -17,8 +18,32 @@ from src.attestation import AttestationGenerator
 from src.script_executor import ScriptExecutor
 from src.validation import RequestValidator
 from src.models import ExecutionStatus
+from src.logging_config import set_log_context, clear_log_context, sanitize_for_logging, sanitize_error_message
 
 logger = logging.getLogger(__name__)
+
+
+def create_error_response(
+    error_code: str,
+    message: str,
+    details: dict = None
+) -> dict:
+    """
+    Create consistent error response format
+    
+    Args:
+        error_code: Machine-readable error code
+        message: Human-readable error message (should not expose internal details)
+        details: Optional additional context (should not expose internal details)
+    
+    Returns:
+        Dictionary with consistent error response structure
+    """
+    return {
+        "error": error_code,
+        "message": message,
+        "details": details or {}
+    }
 
 
 class RateLimiter:
@@ -117,21 +142,32 @@ def create_app(config: ServerConfig) -> FastAPI:
         """Log all requests excluding sensitive tokens"""
         start_time = time.time()
         
+        # Generate request ID for tracing
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+        
+        # Set log context
+        set_log_context(request_id=request_id)
+        
         # Log request (will exclude token in endpoint handlers)
         logger.info(
             f"Request: {request.method} {request.url.path} from {request.client.host}"
         )
         
-        response = await call_next(request)
-        
-        # Log response time
-        duration_ms = (time.time() - start_time) * 1000
-        logger.info(
-            f"Response: {request.method} {request.url.path} "
-            f"status={response.status_code} duration={duration_ms:.2f}ms"
-        )
-        
-        return response
+        try:
+            response = await call_next(request)
+            
+            # Log response time
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                f"Response: {request.method} {request.url.path} "
+                f"status={response.status_code} duration={duration_ms:.2f}ms"
+            )
+            
+            return response
+        finally:
+            # Clear log context after request
+            clear_log_context()
     
     # Rate limiting middleware
     @app.middleware("http")
@@ -148,13 +184,11 @@ def create_app(config: ServerConfig) -> FastAPI:
             logger.warning(f"Rate limit exceeded for IP: {ip_address}")
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={
-                    "error": "rate_limit_exceeded",
-                    "message": "Too many requests. Please try again later.",
-                    "details": {
-                        "retry_after_seconds": config.rate_limit_window_seconds
-                    }
-                }
+                content=create_error_response(
+                    "rate_limit_exceeded",
+                    "Too many requests. Please try again later.",
+                    {"retry_after_seconds": config.rate_limit_window_seconds}
+                )
             )
         
         response = await call_next(request)
@@ -170,18 +204,22 @@ def create_app(config: ServerConfig) -> FastAPI:
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         """Handle unexpected errors without exposing internal details"""
+        # Get request ID if available
+        request_id = getattr(request.state, 'request_id', '-')
+        
+        # Log error with full context and stack trace
         logger.error(
             f"Unexpected error processing {request.method} {request.url.path}: {exc}",
             exc_info=True
         )
         
+        # Return sanitized error message
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": "internal_server_error",
-                "message": "An unexpected error occurred. Please try again later.",
-                "details": {}
-            }
+            content=create_error_response(
+                "internal_server_error",
+                "An unexpected error occurred. Please try again later."
+            )
         )
     
     # Add routes
@@ -224,14 +262,14 @@ def add_routes(app: FastAPI) -> None:
                 logger.warning(f"Malformed request body: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "malformed_request",
-                        "message": "Request body must be valid JSON",
-                        "details": {}
-                    }
+                    detail=create_error_response(
+                        "malformed_request",
+                        "Request body must be valid JSON"
+                    )
                 )
             
             # Log request details (exclude token)
+            sanitized_body = sanitize_for_logging(body)
             logger.info(
                 f"Execution request: repo={body.get('repository_url')}, "
                 f"commit={body.get('commit_hash')}, path={body.get('script_path')}"
@@ -246,11 +284,11 @@ def add_routes(app: FastAPI) -> None:
                 logger.warning(f"Validation failed: {validation_result.errors}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "validation_failed",
-                        "message": "Request validation failed",
-                        "details": {"errors": validation_result.errors}
-                    }
+                    detail=create_error_response(
+                        "validation_failed",
+                        "Request validation failed",
+                        {"errors": validation_result.errors}
+                    )
                 )
             
             phase_times['validation'] = (time.time() - validation_start) * 1000
@@ -264,11 +302,10 @@ def add_routes(app: FastAPI) -> None:
                 logger.warning(f"Authentication failed: {auth_result.error_message}")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail={
-                        "error": "authentication_failed",
-                        "message": auth_result.error_message or "GitHub authentication failed",
-                        "details": {}
-                    }
+                    detail=create_error_response(
+                        "authentication_failed",
+                        auth_result.error_message or "GitHub authentication failed"
+                    )
                 )
             
             phase_times['authentication'] = (time.time() - auth_start) * 1000
@@ -286,11 +323,10 @@ def add_routes(app: FastAPI) -> None:
                 logger.warning(f"GitHub API error: {e.message}")
                 raise HTTPException(
                     status_code=e.status_code,
-                    detail={
-                        "error": "github_api_error",
-                        "message": e.message,
-                        "details": {}
-                    }
+                    detail=create_error_response(
+                        "github_api_error",
+                        e.message
+                    )
                 )
             
             phase_times['file_retrieval'] = (time.time() - fetch_start) * 1000
@@ -307,14 +343,14 @@ def add_routes(app: FastAPI) -> None:
                 
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail={
-                        "error": "file_too_large",
-                        "message": f"Script file exceeds maximum size of {config.max_script_size_bytes} bytes",
-                        "details": {
+                    detail=create_error_response(
+                        "file_too_large",
+                        f"Script file exceeds maximum size of {config.max_script_size_bytes} bytes",
+                        {
                             "file_size": file_content.size_bytes,
                             "max_size": config.max_script_size_bytes
                         }
-                    }
+                    )
                 )
             
             # Generate attestation
@@ -336,11 +372,10 @@ def add_routes(app: FastAPI) -> None:
                 
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={
-                        "error": "attestation_failed",
-                        "message": "Failed to generate attestation document",
-                        "details": {}
-                    }
+                    detail=create_error_response(
+                        "attestation_failed",
+                        "Failed to generate attestation document"
+                    )
                 )
             
             phase_times['attestation'] = (time.time() - attestation_start) * 1000
@@ -354,7 +389,11 @@ def add_routes(app: FastAPI) -> None:
                 config.execution_timeout_seconds
             )
             
+            # Set log context with execution ID
+            set_log_context(execution_id=execution_record.execution_id)
+            
             logger.info(f"Created execution record: {execution_record.execution_id}")
+            logger.info(f"Attestation generated for execution: {execution_record.execution_id}")
             
             # Prepare response
             import base64
@@ -392,11 +431,10 @@ def add_routes(app: FastAPI) -> None:
             logger.error(f"Unexpected error in execute endpoint: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": "internal_server_error",
-                    "message": "An unexpected error occurred",
-                    "details": {}
-                }
+                detail=create_error_response(
+                    "internal_server_error",
+                    "An unexpected error occurred"
+                )
             )
 
     
@@ -425,11 +463,11 @@ def add_routes(app: FastAPI) -> None:
             if offset < 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "invalid_offset",
-                        "message": "Offset must be non-negative",
-                        "details": {"offset": offset}
-                    }
+                    detail=create_error_response(
+                        "invalid_offset",
+                        "Offset must be non-negative",
+                        {"offset": offset}
+                    )
                 )
             
             # Retrieve execution record
@@ -440,11 +478,10 @@ def add_routes(app: FastAPI) -> None:
                 logger.warning(f"Execution not found: {execution_id}")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "error": "execution_not_found",
-                        "message": f"Execution ID not found: {execution_id}",
-                        "details": {}
-                    }
+                    detail=create_error_response(
+                        "execution_not_found",
+                        f"Execution ID not found: {execution_id}"
+                    )
                 )
             
             # Retrieve output
@@ -497,11 +534,10 @@ def add_routes(app: FastAPI) -> None:
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": "internal_server_error",
-                    "message": "An unexpected error occurred",
-                    "details": {}
-                }
+                detail=create_error_response(
+                    "internal_server_error",
+                    "An unexpected error occurred"
+                )
             )
 
     @app.get("/health")
@@ -583,10 +619,9 @@ def add_routes(app: FastAPI) -> None:
             logger.error(f"Error in metrics endpoint: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": "internal_server_error",
-                    "message": "An unexpected error occurred",
-                    "details": {}
-                }
+                detail=create_error_response(
+                    "internal_server_error",
+                    "An unexpected error occurred"
+                )
             )
 

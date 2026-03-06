@@ -9,6 +9,7 @@ from typing import Optional
 from src.execution_manager import ExecutionManager
 from src.output_collector import OutputCollector
 from src.models import ExecutionStatus
+from src.logging_config import set_log_context
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,9 @@ class ScriptExecutor:
             execution_id: Unique execution identifier
             script_path: Path to script file to execute
         """
+        # Set log context for this execution
+        set_log_context(execution_id=execution_id)
+        
         temp_dir = None
         
         try:

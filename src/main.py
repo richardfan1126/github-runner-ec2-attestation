@@ -3,13 +3,9 @@
 import sys
 import logging
 from config import load_config, ConfigurationError
+from src.logging_config import setup_logging
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +16,13 @@ def main() -> int:
         Exit code (0 for success, 1 for failure)
     """
     try:
+        # Set up logging infrastructure first
+        setup_logging(
+            log_level="INFO",
+            log_dir="/var/log/github-actions-executor",
+            enable_rotation=True
+        )
+        
         # Load and validate configuration
         logger.info("Loading configuration...")
         config = load_config()
@@ -42,7 +45,7 @@ def main() -> int:
         logger.error(f"Configuration error: {e}")
         return 1
     except Exception as e:
-        logger.error(f"Unexpected error during startup: {e}")
+        logger.error(f"Unexpected error during startup: {e}", exc_info=True)
         return 1
 
 

@@ -1,10 +1,14 @@
 """Execution management for GitHub Actions Remote Executor"""
 import uuid
+import logging
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any, Dict, Optional
 
 from src.models import ExecutionRecord, ExecutionStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionManager:
@@ -64,6 +68,8 @@ class ExecutionManager:
         with self._lock:
             self._executions[execution_id] = record
             self._total_executions += 1
+        
+        logger.debug(f"Created execution record: {execution_id}")
 
         return record
     
@@ -111,12 +117,16 @@ class ExecutionManager:
             # Update timestamps based on status transition
             if status == ExecutionStatus.RUNNING and record.started_at is None:
                 record.started_at = datetime.now(timezone.utc)
+                logger.info(f"Execution started: {execution_id}")
 
             if status in (ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.TIMED_OUT):
                 if record.completed_at is None:
                     record.completed_at = datetime.now(timezone.utc)
                 if exit_code is not None:
                     record.exit_code = exit_code
+                
+                # Log completion with status
+                logger.info(f"Execution completed: {execution_id}, status={status.value}, exit_code={exit_code}")
 
                 # Update metrics
                 if status == ExecutionStatus.COMPLETED:
@@ -128,6 +138,7 @@ class ExecutionManager:
                 if record.started_at and record.completed_at:
                     duration_ms = (record.completed_at - record.started_at).total_seconds() * 1000
                     self._execution_durations.append(duration_ms)
+                    logger.debug(f"Execution duration: {execution_id}, duration={duration_ms:.2f}ms")
 
             return True
     
@@ -162,6 +173,9 @@ class ExecutionManager:
             for execution_id in expired_ids:
                 del self._executions[execution_id]
                 removed_count += 1
+        
+        if removed_count > 0:
+            logger.info(f"Cleaned up {removed_count} expired execution(s)")
         
         return removed_count
     

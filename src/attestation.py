@@ -3,11 +3,15 @@ import json
 import os
 import subprocess
 import tempfile
+import logging
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from typing import Optional, Dict, Any
 
 from src.models import AttestationDocument
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -77,6 +81,9 @@ class AttestationGenerator:
         nonce_path = None
         
         try:
+            # Log attestation generation start
+            logger.info(f"Generating attestation document for {repository_url}@{commit_hash}")
+            
             # Create user_data with execution metadata
             timestamp = datetime.now(UTC)
             user_data = {
@@ -110,6 +117,7 @@ class AttestationGenerator:
             
             # Invoke nitro-tpm-attest with timeout
             try:
+                logger.debug(f"Invoking nitro-tpm-attest: {' '.join(cmd)}")
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
@@ -117,6 +125,7 @@ class AttestationGenerator:
                     check=False,
                 )
             except subprocess.TimeoutExpired as e:
+                logger.error("Attestation generation timed out after 30 seconds")
                 return None, AttestationError(
                     command=" ".join(cmd),
                     exit_code=-1,
@@ -125,6 +134,7 @@ class AttestationGenerator:
                     context="Attestation generation timed out after 30 seconds",
                 )
             except OSError as e:
+                logger.error(f"OS error while invoking nitro-tpm-attest: {e}")
                 return None, AttestationError(
                     command=" ".join(cmd),
                     exit_code=-1,
@@ -135,6 +145,7 @@ class AttestationGenerator:
             
             # Check if command succeeded
             if result.returncode != 0:
+                logger.error(f"nitro-tpm-attest failed with exit code {result.returncode}")
                 return None, AttestationError(
                     command=" ".join(cmd),
                     exit_code=result.returncode,
@@ -145,6 +156,8 @@ class AttestationGenerator:
             
             # Capture binary CBOR-encoded attestation document from stdout
             signature = result.stdout
+            
+            logger.info(f"Attestation document generated successfully ({len(signature)} bytes)")
             
             # Create and return attestation document
             attestation_doc = AttestationDocument(
@@ -159,6 +172,7 @@ class AttestationGenerator:
             
         except Exception as e:
             # Handle unexpected errors
+            logger.error(f"Unexpected error during attestation generation: {type(e).__name__}: {e}", exc_info=True)
             return None, AttestationError(
                 command=self.nsm_device_path,
                 exit_code=-1,
