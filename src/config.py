@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+class ConfigurationError(Exception):
+    """Raised when configuration is invalid or missing"""
+    pass
+
+
 @dataclass
 class ServerConfig:
     """Server configuration loaded from environment variables"""
@@ -131,3 +136,21 @@ class ServerConfig:
         
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")
+
+
+def load_config() -> ServerConfig:
+    """
+    Load and validate server configuration from environment variables.
+    
+    Returns:
+        Validated ServerConfig instance
+    
+    Raises:
+        ConfigurationError: If required configuration is missing or invalid
+    """
+    try:
+        config = ServerConfig.from_env()
+        config.validate()
+        return config
+    except ValueError as e:
+        raise ConfigurationError(str(e)) from e

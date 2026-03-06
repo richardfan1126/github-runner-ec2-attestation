@@ -2,11 +2,27 @@
 
 import sys
 import logging
-from config import load_config, ConfigurationError
+import signal
+import os
+from typing import Optional
+
+from src.config import load_config, ConfigurationError
 from src.logging_config import setup_logging
+from src.attestation import AttestationGenerator
+from src.server import create_app
 
 
 logger = logging.getLogger(__name__)
+
+# Global reference to server for graceful shutdown
+_server_process: Optional[any] = None
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    # FastAPI/uvicorn will handle the actual shutdown
+    sys.exit(0)
 
 
 def main() -> int:
@@ -23,6 +39,8 @@ def main() -> int:
             enable_rotation=True
         )
         
+        logger.info("Starting GitHub Actions Remote Executor...")
+        
         # Load and validate configuration
         logger.info("Loading configuration...")
         config = load_config()
@@ -36,9 +54,47 @@ def main() -> int:
         logger.info(f"Output retention: {config.output_retention_hours} hours")
         logger.info(f"NSM device path: {config.nsm_device_path}")
         
-        # TODO: Initialize and start HTTP server
-        logger.info("Server initialization complete")
+        # Verify NSM device availability
+        logger.info("Verifying NSM device availability...")
+        attestation_generator = AttestationGenerator(config.nsm_device_path)
+        if not attestation_generator.verify_nsm_available():
+            logger.error(
+                f"NSM device not available at {config.nsm_device_path}. "
+                "Attestation functionality will not work."
+            )
+            logger.warning("Continuing startup, but attestation will fail at runtime.")
+        else:
+            logger.info("NSM device verified and available")
         
+        # Ensure temp storage directory exists
+        if not os.path.exists(config.temp_storage_path):
+            logger.info(f"Creating temp storage directory: {config.temp_storage_path}")
+            os.makedirs(config.temp_storage_path, mode=0o700, exist_ok=True)
+        
+        # Initialize all components via create_app
+        logger.info("Initializing application components...")
+        app = create_app(config)
+        logger.info("All components initialized successfully")
+        
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Start HTTP server
+        logger.info(f"Starting HTTP server on 0.0.0.0:{config.port}...")
+        
+        # Import uvicorn here to start the server
+        import uvicorn
+        
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=config.port,
+            log_level="info",
+            access_log=True
+        )
+        
+        logger.info("Server shutdown complete")
         return 0
         
     except ConfigurationError as e:
