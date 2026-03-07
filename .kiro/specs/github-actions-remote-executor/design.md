@@ -4,6 +4,12 @@
 
 The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-based EC2 instance, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts asynchronously while allowing clients to poll for output and status.
 
+This design document covers two major aspects of the system:
+
+1. **Runtime Design**: How the Remote Executor operates when deployed - the HTTP server, request handling, script execution, attestation generation, and output polling mechanisms.
+
+2. **Build Design**: How the attestable AMI containing the Remote Executor is built - the GitHub Actions workflow that builds a KIWI image in a reproducible Docker environment, attests build artifacts using GitHub's attestation service, publishes them to GitHub Container Registry with PCR measurements, and converts the KIWI image to an AWS AMI using a temporary EC2 instance that verifies signatures before AMI creation.
+
 ### Key Design Principles
 
 1. **Asynchronous Execution Model**: Requests return immediately with an execution ID and attestation document, while script execution proceeds in the background
@@ -18,6 +24,10 @@ The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-b
 - Provide verifiable proof of execution environment through attestation
 - Enable reliable output retrieval through polling
 - Maintain execution tracking and monitoring capabilities
+
+---
+
+# PART 1: RUNTIME DESIGN
 
 ## Architecture
 
@@ -997,3 +1007,870 @@ def test_execution_id_uniqueness(requests):
 
 
 ## Error Handling
+
+
+---
+
+# PART 2: BUILD DESIGN
+
+## Build Overview
+
+The build process creates an attestable AMI containing the GitHub Actions Remote Executor. The build is performed in two distinct phases:
+
+1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR).
+
+2. **AMI Conversion Phase**: A Python script provisions a temporary EC2 instance using Terraform, installs required tools, verifies artifact signatures, downloads the KIWI image, uploads it as an EBS snapshot using coldsnap, and registers it as an AMI with TPM 2.0 support.
+
+### Build Design Principles
+
+1. **Reproducible Builds**: KIWI image built in Docker with pinned dependency versions
+2. **Cryptographic Attestation**: Build artifacts signed using GitHub's attestation service with Sigstore
+3. **Signature Verification**: AMI conversion only proceeds after verifying artifact signatures
+4. **Isolated Build Environment**: Temporary EC2 instance provisioned for each AMI build
+5. **Infrastructure as Code**: Terraform manages all build infrastructure
+6. **Automated Cleanup**: All temporary resources destroyed after build completion
+
+## Build Architecture
+
+### Build System Components
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    GitHub Actions Workflow                       │
+│                  (build-attestable-image.yml)                    │
+└────────┬────────────────────────────────────┬───────────────────┘
+         │                                    │
+         │ 1. Build KIWI Image                │ 2. Attest & Publish
+         │                                    │
+┌────────▼────────────────────┐    ┌─────────▼──────────────────┐
+│   KIWI Builder Container    │    │  GitHub Attestation Service │
+│  (Docker + KIWI NG)         │    │     (Sigstore)              │
+└────────┬────────────────────┘    └─────────┬──────────────────┘
+         │                                    │
+         │ Produces                           │ Signs
+         │                                    │
+┌────────▼────────────────────────────────────▼──────────────────┐
+│              GitHub Container Registry (GHCR)                   │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  Artifact Bundle:                                        │  │
+│  │    - KIWI raw disk image (.raw)                         │  │
+│  │    - PCR measurements (pcr_measurements.json)           │  │
+│  │    - Attestation bundle (Sigstore signature)            │  │
+│  │  Annotations: pcr4, pcr7                                │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└────────────────────────────┬───────────────────────────────────┘
+                             │
+                             │ 3. Pull & Verify
+                             │
+┌────────────────────────────▼───────────────────────────────────┐
+│                    AMI Converter Script                         │
+│                     (build-ami.py)                              │
+└────────┬───────────────────────────────────────┬───────────────┘
+         │                                       │
+         │ 4. Provision                          │ 5. Convert
+         │                                       │
+┌────────▼────────────────────┐    ┌────────────▼───────────────┐
+│  Terraform Infrastructure   │    │   Build Instance (EC2)     │
+│  - EC2 Instance             │    │   - Verify Signature       │
+│  - Security Groups          │    │   - Download Artifacts     │
+│  - SSH Key Pair             │    │   - Upload Snapshot        │
+└─────────────────────────────┘    │   - Register AMI           │
+                                   └────────────────────────────┘
+                                              │
+                                              │ 6. Create
+                                              │
+                                   ┌──────────▼─────────────────┐
+                                   │   AWS AMI with TPM 2.0     │
+                                   │   - EBS Snapshot           │
+                                   │   - UEFI Boot Mode         │
+                                   │   - PCR Measurements       │
+                                   └────────────────────────────┘
+```
+
+### Build Component Responsibilities
+
+**Build_Workflow (GitHub Actions)**
+- Orchestrates the entire KIWI image build process
+- Checks out repository with submodules
+- Builds KIWI builder Docker image
+- Configures loop devices for KIWI image building
+- Executes KIWI NG build script inside container
+- Extracts PCR measurements from build output
+- Publishes artifacts to GHCR with ORAS
+- Triggers GitHub attestation service
+- Generates workflow summary with verification instructions
+
+**KIWI_Builder (Docker Container)**
+- Provides reproducible build environment
+- Contains KIWI NG and all build dependencies with pinned versions
+- Executes KIWI image build process
+- Generates raw disk image (.raw file)
+- Calculates PCR4 and PCR7 measurements
+- Outputs pcr_measurements.json file
+
+**Artifact_Publisher (ORAS)**
+- Authenticates to GitHub Container Registry
+- Bundles KIWI image and PCR measurements
+- Annotates artifacts with PCR values
+- Pushes artifacts to GHCR
+- Calculates and returns artifact digest
+
+**Attestation_Service (GitHub + Sigstore)**
+- Generates build provenance attestation
+- Signs attestation using Sigstore
+- Includes artifact digest and repository identity
+- Pushes attestation bundle to registry
+- Provides attestation ID and verification URL
+
+**AMI_Converter (Python Script)**
+- Provisions temporary EC2 build instance using Terraform
+- Detects user's public IP for SSH access configuration
+- Manages SSH connectivity with keepalive
+- Installs required tools (git, gcc, Rust, ORAS, GitHub CLI, coldsnap)
+- Verifies artifact signatures before proceeding
+- Downloads artifacts from GHCR
+- Uploads raw disk image to EBS snapshot
+- Registers AMI with TPM 2.0 and UEFI boot mode
+- Saves build results with PCR measurements
+- Cleans up all temporary infrastructure
+
+**Signature_Verifier (GitHub CLI)**
+- Extracts repository identity from artifact reference
+- Fetches artifact manifest digest using ORAS
+- Downloads GitHub attestation bundle
+- Verifies attestation using GitHub CLI in offline mode
+- Terminates build process if verification fails
+
+**Build_Instance (EC2)**
+- Temporary Amazon Linux 2023 instance
+- Provides environment for artifact verification and AMI conversion
+- Runs coldsnap for snapshot upload
+- Automatically destroyed after build completion
+
+### Build Request Flow
+
+**KIWI Image Build Flow:**
+
+1. GitHub Actions workflow triggered (push to main or manual dispatch)
+2. Repository checked out with submodules
+3. KIWI builder Docker image built from Dockerfile
+4. Build output directory created on host
+5. Loop devices configured on host for KIWI
+6. KIWI NG build script executed inside container
+7. Raw disk image and PCR measurements generated
+8. PCR4 and PCR7 extracted from pcr_measurements.json
+9. Artifacts pushed to GHCR with ORAS (with PCR annotations)
+10. GitHub attestation service signs artifacts
+11. Workflow summary generated with verification instructions
+
+**Artifact Publishing Flow:**
+
+1. Artifact tag generated from branch name and timestamp
+2. ORAS authenticates to GHCR using GitHub token
+3. Artifact bundle created with raw image and PCR measurements
+4. PCR4 and PCR7 added as artifact annotations
+5. Artifact pushed to GHCR
+6. Manifest digest calculated and returned
+7. GitHub attestation action triggered with artifact digest
+8. Attestation bundle pushed to registry
+
+**Signature Verification Flow:**
+
+1. Repository identity extracted from artifact reference
+2. Artifact manifest fetched using ORAS
+3. Manifest digest calculated
+4. Attestation bundle downloaded from GitHub API
+5. GitHub CLI verifies attestation in offline mode
+6. Verification result logged
+7. Build proceeds only if verification succeeds
+
+**AMI Conversion Flow:**
+
+1. User's public IP detected for SSH access
+2. Terraform provisions EC2 instance with security groups
+3. SSH key pair generated and saved
+4. Script waits for instance to be running and pass status checks
+5. SSH connectivity verified with retries
+6. System dependencies installed (git, gcc, Rust)
+7. ORAS CLI installed from GitHub releases
+8. GitHub CLI installed from official repository
+9. Coldsnap cloned and built from AWS Labs repository
+10. Artifact signature verified using GitHub CLI
+11. Artifacts downloaded from GHCR using ORAS
+12. Raw disk image uploaded to EBS snapshot using coldsnap
+13. Snapshot completion awaited
+14. AMI registered with TPM 2.0, UEFI, and ENA support
+15. Build result saved with AMI ID, snapshot ID, and PCR measurements
+16. SSH connection closed
+17. Terraform destroys all infrastructure
+18. Temporary SSH key deleted
+
+### Build Concurrency Model
+
+- GitHub Actions workflow runs on ubuntu-latest runner
+- KIWI build executes inside Docker container with privileged access
+- Loop devices shared between host and container
+- AMI conversion uses single EC2 instance per build
+- Multiple builds can run concurrently (separate instances)
+- Terraform state isolated per build execution
+- Each build creates unique artifact tags with timestamps
+
+## Build Components and Interfaces
+
+### GitHub Actions Workflow Interface
+
+**Workflow Triggers:**
+- Push to main branch
+- Manual workflow dispatch
+
+**Workflow Permissions:**
+- `contents: read` - Read repository contents
+- `packages: write` - Push to GitHub Container Registry
+- `id-token: write` - Generate attestation tokens
+- `attestations: write` - Create attestations
+
+**Workflow Outputs:**
+- Artifact digest (sha256)
+- Artifact path (GHCR URL)
+- Artifact tag (branch-timestamp)
+- PCR4 measurement
+- PCR7 measurement
+- Attestation ID
+- Attestation URL
+
+### KIWI Builder Interface
+
+**Docker Image:**
+- Base: openSUSE or compatible Linux distribution
+- Installed: KIWI NG, Python, system build tools
+- Privileged: Required for loop device access
+
+**Build Script Interface:**
+```bash
+# Executed inside container
+.github/scripts/build-kiwi-image.sh
+
+# Inputs:
+#   - KIWI image description files (from repository)
+#   - Loop devices (from host)
+
+# Outputs:
+#   - build-output/*.raw (raw disk image)
+#   - build-output/pcr_measurements.json (PCR values)
+```
+
+**PCR Measurements Format:**
+```json
+{
+  "Measurements": {
+    "PCR4": "hex-encoded-sha384-hash",
+    "PCR7": "hex-encoded-sha384-hash"
+  }
+}
+```
+
+### ORAS Interface
+
+**Push Command:**
+```bash
+oras push <artifact-path>:<tag> \
+  --annotation "pcr4=<value>" \
+  --annotation "pcr7=<value>" \
+  <file1>:<media-type> \
+  <file2>:<media-type>
+```
+
+**Pull Command:**
+```bash
+oras pull <artifact-path>@<digest>
+```
+
+**Manifest Fetch:**
+```bash
+oras manifest fetch <artifact-path>:<tag>
+```
+
+### GitHub Attestation Interface
+
+**Attestation Action:**
+```yaml
+- uses: actions/attest-build-provenance@v3
+  with:
+    subject-name: <artifact-path>
+    subject-digest: <artifact-digest>
+    push-to-registry: true
+```
+
+**Verification Command:**
+```bash
+gh attestation verify oci://<artifact-path> -R <repository> -b <bundle-file>
+```
+
+### AMI Converter Script Interface
+
+**Command-Line Arguments:**
+```python
+python scripts/build-ami.py \
+  --artifact-ref <ghcr-artifact-reference> \
+  --region <aws-region> \
+  --instance-type <ec2-instance-type> \
+  --output-file <result-json-file>
+```
+
+**Build Result Format:**
+```json
+{
+  "ami_id": "ami-xxxxx",
+  "snapshot_id": "snap-xxxxx",
+  "region": "us-east-1",
+  "build_timestamp": "2024-01-15T10:30:00Z",
+  "pcr_measurements": {
+    "pcr4": "hex-encoded-hash",
+    "pcr7": "hex-encoded-hash"
+  }
+}
+```
+
+### Terraform Interface
+
+**Module Location:**
+```
+terraform/build-ami/
+```
+
+**Input Variables:**
+```hcl
+variable "region" {
+  description = "AWS region for build instance"
+  type        = string
+}
+
+variable "instance_type" {
+  description = "EC2 instance type"
+  type        = string
+}
+
+variable "allowed_ssh_cidr" {
+  description = "CIDR block for SSH access"
+  type        = string
+}
+```
+
+**Outputs:**
+```hcl
+output "instance_id" {
+  description = "EC2 instance ID"
+  value       = aws_instance.build_instance.id
+}
+
+output "instance_public_ip" {
+  description = "Public IP address"
+  value       = aws_instance.build_instance.public_ip
+}
+
+output "ssh_private_key" {
+  description = "SSH private key in PEM format"
+  value       = tls_private_key.ssh_key.private_key_pem
+  sensitive   = true
+}
+```
+
+### SSH Command Execution Interface
+
+```python
+def execute_remote_command(
+    ssh_client: paramiko.SSHClient,
+    command: str,
+    stream_output: bool = True
+) -> tuple[int, str, str]:
+    """
+    Execute command on remote instance.
+    
+    Args:
+        ssh_client: Connected SSH client
+        command: Shell command to execute
+        stream_output: Whether to stream output to logger
+    
+    Returns:
+        Tuple of (exit_code, stdout, stderr)
+    """
+```
+
+### Coldsnap Interface
+
+**Upload Command:**
+```bash
+coldsnap upload <raw-disk-image-path>
+```
+
+**Output Format:**
+```
+Uploading snapshot...
+Progress: 100%
+Snapshot ID: snap-xxxxx
+```
+
+### AWS EC2 AMI Registration Interface
+
+```python
+ec2_client.register_image(
+    Name=ami_name,
+    VirtualizationType='hvm',
+    BootMode='uefi',
+    Architecture='x86_64',
+    RootDeviceName='/dev/xvda',
+    BlockDeviceMappings=[{
+        'DeviceName': '/dev/xvda',
+        'Ebs': {'SnapshotId': snapshot_id}
+    }],
+    TpmSupport='v2.0',
+    EnaSupport=True
+)
+```
+
+## Build Data Models
+
+### ArtifactReference
+
+```python
+@dataclass
+class ArtifactReference:
+    registry: str  # ghcr.io
+    owner: str
+    repository: str
+    tag: str
+    digest: Optional[str]
+```
+
+### PCRMeasurements
+
+```python
+@dataclass
+class PCRMeasurements:
+    pcr4: str  # Hex-encoded SHA-384 hash
+    pcr7: str  # Hex-encoded SHA-384 hash
+```
+
+### BuildResult
+
+```python
+@dataclass
+class BuildResult:
+    ami_id: str
+    snapshot_id: str
+    region: str
+    build_timestamp: datetime
+    pcr_measurements: PCRMeasurements
+```
+
+### BuildInstanceConfig
+
+```python
+@dataclass
+class BuildInstanceConfig:
+    region: str
+    instance_type: str
+    allowed_ssh_cidr: str
+    ssh_username: str = "ec2-user"
+```
+
+### TerraformOutputs
+
+```python
+@dataclass
+class TerraformOutputs:
+    instance_id: str
+    instance_public_ip: str
+    ssh_private_key: str
+```
+
+### AttestationBundle
+
+```python
+@dataclass
+class AttestationBundle:
+    attestation_id: str
+    attestation_url: str
+    subject_name: str
+    subject_digest: str
+    repository: str
+```
+
+## Build Correctness Properties
+
+*A property is a characteristic or behavior that should hold true across all valid executions of a system-essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+
+### Property 61: KIWI Build Reproducibility
+
+*For any* KIWI image build executed with the same source code and Docker image, the build should produce identical PCR measurements.
+
+**Validates: Requirements 11.1, 11.2**
+
+### Property 62: PCR Measurements Presence
+
+*For any* successful KIWI build, the build output should contain both pcr_measurements.json file and a .raw disk image file.
+
+**Validates: Requirements 11.6, 11.7**
+
+### Property 63: PCR Extraction Validation
+
+*For any* pcr_measurements.json file, extracting PCR4 and PCR7 values should succeed and return non-empty hex-encoded strings.
+
+**Validates: Requirements 12.1**
+
+### Property 64: Artifact Annotation Completeness
+
+*For any* artifact pushed to GHCR, the artifact annotations should include both pcr4 and pcr7 values.
+
+**Validates: Requirements 12.5**
+
+### Property 65: Artifact Tag Uniqueness
+
+*For any* two artifact builds from the same branch, the generated tags should be unique due to timestamp inclusion.
+
+**Validates: Requirements 12.3**
+
+### Property 66: Attestation Bundle Completeness
+
+*For any* attested artifact, the attestation bundle should include the artifact digest and repository identity.
+
+**Validates: Requirements 13.3, 13.4**
+
+### Property 67: Signature Verification Requirement
+
+*For any* AMI conversion attempt, the process should verify artifact signatures before downloading artifacts.
+
+**Validates: Requirements 16.5, 16.6**
+
+### Property 68: Untrusted Artifact Rejection
+
+*For any* artifact with invalid or missing attestation, the AMI converter should terminate without creating an AMI.
+
+**Validates: Requirements 16.6, 16.8**
+
+### Property 69: SSH Access Configuration
+
+*For any* build instance provisioning, the security group should allow SSH access only from the user's detected public IP address.
+
+**Validates: Requirements 14.3**
+
+### Property 70: Tool Installation Verification
+
+*For any* tool installation on the build instance, the installation should be verified before proceeding to the next step.
+
+**Validates: Requirements 15.6**
+
+### Property 71: Artifact Download Completeness
+
+*For any* artifact download, both the raw disk image and pcr_measurements.json should be present in the expected directory.
+
+**Validates: Requirements 17.3, 17.4**
+
+### Property 72: PCR Measurements Round-Trip
+
+*For any* artifact with PCR measurements, the PCR values in the artifact annotations should match the values in the downloaded pcr_measurements.json file.
+
+**Validates: Requirements 12.1, 17.5**
+
+### Property 73: Snapshot Upload Success
+
+*For any* successful coldsnap upload, the output should contain a valid snapshot ID starting with "snap-".
+
+**Validates: Requirements 18.3**
+
+### Property 74: AMI Registration Configuration
+
+*For any* registered AMI, it should have TPM 2.0 support, UEFI boot mode, and ENA support enabled.
+
+**Validates: Requirements 18.5, 18.6, 18.7**
+
+### Property 75: Build Result Completeness
+
+*For any* successful AMI build, the build result file should contain ami_id, snapshot_id, region, build_timestamp, and pcr_measurements.
+
+**Validates: Requirements 19.2, 19.3, 19.4, 19.5, 19.6**
+
+### Property 76: Infrastructure Cleanup Guarantee
+
+*For any* AMI build (successful or failed), all temporary infrastructure should be destroyed and SSH keys deleted.
+
+**Validates: Requirements 20.1, 20.2, 20.3, 20.4, 20.5**
+
+### Property 77: Build Failure Cleanup
+
+*For any* build failure at any stage, the cleanup process should still execute and destroy all provisioned resources.
+
+**Validates: Requirements 20.5**
+
+### Property 78: Terraform State Isolation
+
+*For any* concurrent AMI builds, each build should use isolated Terraform state and not interfere with other builds.
+
+**Validates: Build concurrency requirements**
+
+### Property 79: SSH Keepalive Maintenance
+
+*For any* long-running SSH operation, the connection should remain active through keepalive packets.
+
+**Validates: Requirements 14.7**
+
+### Property 80: Coldsnap Output Streaming
+
+*For any* snapshot upload operation, coldsnap output should be streamed to logs in real-time.
+
+**Validates: Requirements 18.2**
+
+## Build Error Handling
+
+### Build Error Categories
+
+1. **KIWI Build Errors**
+   - Missing dependencies in Docker image
+   - Loop device configuration failures
+   - KIWI NG build script failures
+   - Missing PCR measurements file
+   - Invalid PCR measurements format
+
+2. **Artifact Publishing Errors**
+   - GHCR authentication failures
+   - ORAS push failures
+   - Missing artifact files
+   - Invalid PCR values
+   - Network connectivity issues
+
+3. **Attestation Errors**
+   - GitHub attestation service failures
+   - Sigstore signing failures
+   - Attestation bundle creation failures
+
+4. **Infrastructure Provisioning Errors**
+   - Terraform initialization failures
+   - Terraform apply failures
+   - Instance provisioning timeouts
+   - Security group configuration errors
+   - SSH key generation failures
+
+5. **Tool Installation Errors**
+   - Package manager failures
+   - Rust toolchain installation failures
+   - ORAS download failures
+   - GitHub CLI installation failures
+   - Coldsnap build failures
+
+6. **Signature Verification Errors**
+   - Missing attestation bundle
+   - Invalid signature
+   - Repository identity mismatch
+   - GitHub CLI verification failures
+
+7. **Artifact Download Errors**
+   - ORAS pull failures
+   - Missing artifact files
+   - Invalid artifact structure
+   - PCR measurements parsing errors
+
+8. **Snapshot Upload Errors**
+   - Coldsnap upload failures
+   - Snapshot creation timeouts
+   - AWS API errors
+   - Insufficient permissions
+
+9. **AMI Registration Errors**
+   - Invalid snapshot ID
+   - AMI registration API failures
+   - Unsupported configuration
+   - Region-specific errors
+
+10. **Cleanup Errors**
+    - Terraform destroy failures
+    - SSH key deletion failures
+    - Resource leak warnings
+
+### Build Error Handling Strategies
+
+**KIWI Build Errors**
+- Validate Docker image build before KIWI execution
+- Check loop device availability before build
+- Verify PCR measurements file exists and is valid JSON
+- Fail workflow with descriptive error message
+- Log complete KIWI build output for debugging
+
+**Artifact Publishing Errors**
+- Validate GHCR authentication before push
+- Verify artifact files exist before ORAS push
+- Validate PCR values are non-empty hex strings
+- Retry transient network errors with exponential backoff
+- Fail workflow if artifacts cannot be published
+
+**Attestation Errors**
+- Verify GitHub token has attestation permissions
+- Log attestation service responses
+- Fail workflow if attestation cannot be created
+- Include attestation error details in workflow summary
+
+**Signature Verification Errors**
+- Log detailed verification output
+- Terminate AMI build immediately on verification failure
+- Provide clear error message about security implications
+- Do not proceed with untrusted artifacts under any circumstances
+
+**Infrastructure Provisioning Errors**
+- Validate AWS credentials before Terraform execution
+- Check user's public IP detection
+- Retry SSH connectivity with exponential backoff
+- Log Terraform output for debugging
+- Ensure cleanup runs even if provisioning fails
+
+**Tool Installation Errors**
+- Verify each tool installation before proceeding
+- Log installation output for debugging
+- Fail fast if required tools cannot be installed
+- Provide clear error messages about missing tools
+
+**Snapshot Upload Errors**
+- Stream coldsnap output for progress monitoring
+- Parse snapshot ID from output
+- Wait for snapshot completion before AMI registration
+- Retry transient AWS API errors
+- Log detailed error information
+
+**Cleanup Errors**
+- Log cleanup errors but do not fail overall process
+- Attempt to destroy resources even if previous steps failed
+- Warn about potential resource leaks
+- Provide manual cleanup instructions if automated cleanup fails
+
+### Build Logging Strategy
+
+**Log Levels**
+- ERROR: Build failures, verification failures, infrastructure errors
+- WARN: Retries, cleanup issues, approaching timeouts
+- INFO: Build progress, tool installations, artifact operations, AMI creation
+- DEBUG: Terraform output, SSH commands, API responses
+
+**Log Context**
+- Include build timestamp in all logs
+- Include artifact reference in AMI conversion logs
+- Include instance ID in infrastructure logs
+- Include step names for workflow tracking
+
+**Log Retention**
+- GitHub Actions logs retained per repository settings
+- AMI build script logs written to build_ami.log file
+- Terraform logs captured in script output
+
+## Build Testing Strategy
+
+### Dual Testing Approach
+
+The build system requires both unit testing and property-based testing:
+
+**Unit Tests** focus on:
+- Specific error conditions (missing files, invalid formats)
+- Tool installation verification
+- PCR measurement parsing
+- Artifact reference parsing
+- Terraform output parsing
+- SSH command execution
+- Snapshot ID extraction
+
+**Property-Based Tests** focus on:
+- PCR measurement format validation across random inputs
+- Artifact tag generation uniqueness
+- Build result JSON serialization round-trips
+- Infrastructure cleanup completeness
+- Concurrent build isolation
+
+### Property-Based Testing Configuration
+
+**Testing Library**: Use `hypothesis` for Python components
+
+**Test Configuration**:
+- Minimum 100 iterations per property test
+- Each property test must reference its design document property
+- Tag format: `# Feature: github-actions-remote-executor, Property {number}: {property_text}`
+
+### Build Test Coverage Areas
+
+**KIWI Build Testing**
+- Unit tests: Missing PCR file, invalid JSON format, missing .raw file
+- Property tests: PCR measurement format validation, build reproducibility
+
+**Artifact Publishing Testing**
+- Unit tests: GHCR authentication, missing files, invalid PCR values
+- Property tests: Tag uniqueness, annotation completeness
+
+**Signature Verification Testing**
+- Unit tests: Missing attestation, invalid signature, verification failure
+- Property tests: Repository identity extraction, verification determinism
+
+**Infrastructure Provisioning Testing**
+- Unit tests: Terraform failures, SSH connectivity failures
+- Property tests: Security group configuration, cleanup completeness
+
+**Tool Installation Testing**
+- Unit tests: Installation failures, verification failures
+- Property tests: Installation idempotence
+
+**Artifact Download Testing**
+- Unit tests: Missing files, invalid structure
+- Property tests: PCR round-trip consistency
+
+**Snapshot Upload Testing**
+- Unit tests: Coldsnap failures, snapshot ID parsing
+- Property tests: Upload progress tracking
+
+**AMI Registration Testing**
+- Unit tests: Invalid configuration, API failures
+- Property tests: AMI configuration completeness
+
+### Build Integration Testing
+
+**End-to-End Build Scenarios**:
+1. Complete build flow: KIWI build → attestation → publish → verify → convert → AMI
+2. Signature verification failure: Invalid attestation should prevent AMI creation
+3. Tool installation failure: Should fail before artifact download
+4. Snapshot upload failure: Should cleanup infrastructure
+5. Concurrent builds: Multiple builds should not interfere
+
+**External Dependencies**:
+- Mock GitHub Container Registry for artifact operations
+- Mock GitHub attestation service for signing
+- Mock AWS APIs for infrastructure and AMI operations
+- Use test fixtures for PCR measurements and artifacts
+
+### Build Performance Testing
+
+**Build Time Metrics**:
+- KIWI image build duration
+- Docker image build duration
+- Artifact upload duration
+- Signature verification duration
+- Tool installation duration
+- Snapshot upload duration
+- Total end-to-end build time
+
+**Resource Usage**:
+- Docker container memory usage during KIWI build
+- Build instance disk space usage
+- Network bandwidth for artifact transfer
+- Coldsnap memory usage during upload
+
+### Build Security Testing
+
+**Signature Verification Testing**:
+- Verify rejection of unsigned artifacts
+- Verify rejection of artifacts with invalid signatures
+- Verify rejection of artifacts from wrong repository
+- Verify attestation bundle integrity
+
+**Access Control Testing**:
+- Verify SSH access restricted to user's IP
+- Verify GHCR authentication required for private repos
+- Verify AWS credentials required for infrastructure
+- Verify GitHub token permissions sufficient for attestation
+
+**Artifact Integrity Testing**:
+- Verify PCR measurements match between annotations and file
+- Verify artifact digest matches manifest
+- Verify downloaded files match expected checksums

@@ -324,24 +324,316 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test cleanup and retention policies
     - _Requirements: All requirements_
 
-- [ ] 16. Create deployment configuration
-  - Create Dockerfile for containerized deployment
-  - Create example environment variable configuration
-  - Create README with setup and deployment instructions
-  - Document AWS Nitro EC2 instance requirements
-  - Note that scripts execute as root with full privileges
-  - _Requirements: 9.1_
+- [ ] 16. Final checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 17. Final checkpoint - Ensure all tests pass
+- [ ] 17. Set up KIWI image build infrastructure
+  - [ ] 17.1 Create Dockerfile for KIWI builder
+    - Specify exact versions of all build dependencies
+    - Install KIWI NG and required tools
+    - Configure build environment
+    - _Requirements: 11.1, 11.2_
+
+  - [ ] 17.2 Create KIWI image description files
+    - Define disk image configuration
+    - Configure boot loader and partitions
+    - Specify packages and system configuration
+    - _Requirements: 11.4_
+
+  - [ ] 17.3 Create build script (.github/scripts/build-kiwi-image.sh)
+    - Configure loop device setup on host
+    - Execute KIWI NG build in Docker container
+    - Generate PCR measurements file (pcr_measurements.json)
+    - Store outputs in build-output directory
+    - Handle build failures with descriptive errors
+    - _Requirements: 11.4, 11.5, 11.6, 11.7, 11.8_
+
+  - [ ]* 17.4 Write property tests for KIWI build
+    - **Property 61: KIWI Build Reproducibility**
+    - **Property 62: PCR Measurements Presence**
+    - **Validates: Requirements 11.1, 11.2, 11.6, 11.7**
+
+- [ ] 18. Create GitHub Actions workflow for image build
+  - [ ] 18.1 Create .github/workflows/build-attestable-image.yml
+    - Configure workflow triggers (push, workflow_dispatch)
+    - Set up permissions for attestations and packages
+    - Checkout repository with submodules
+    - _Requirements: 11.3, 12.2, 13.1_
+
+  - [ ] 18.2 Implement KIWI build step in workflow
+    - Execute build-kiwi-image.sh script
+    - Upload build artifacts (raw image, PCR measurements)
+    - Handle build failures
+    - _Requirements: 11.1, 11.4, 11.6_
+
+  - [ ] 18.3 Implement artifact publishing step
+    - Extract PCR4 and PCR7 from pcr_measurements.json
+    - Generate artifact tag using branch name and timestamp
+    - Authenticate to GHCR using GitHub token
+    - Push raw disk image and PCR measurements using ORAS
+    - Annotate artifact with pcr4 and pcr7 values
+    - Output artifact digest
+    - Handle missing/invalid PCR measurements
+    - Handle ORAS push failures
+    - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8_
+
+  - [ ] 18.4 Implement GitHub attestation step
+    - Generate build provenance attestation
+    - Sign attestation using Sigstore
+    - Include artifact digest and repository identity
+    - Push attestation to registry
+    - Output attestation ID and URL
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6_
+
+  - [ ] 18.5 Generate workflow summary
+    - Include artifact reference and digest
+    - Include attestation verification instructions
+    - Include PCR measurement values
+    - _Requirements: 13.7_
+
+  - [ ]* 18.6 Write property tests for artifact publishing
+    - **Property 63: PCR Extraction Validation**
+    - **Property 64: Artifact Annotation Completeness**
+    - **Property 65: Artifact Tag Uniqueness**
+    - **Property 66: Attestation Bundle Completeness**
+    - **Validates: Requirements 12.1, 12.3, 12.5, 13.3, 13.4**
+
+- [ ] 19. Checkpoint - Ensure build workflow tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 20. Create AMI converter script structure
+  - [ ] 20.1 Create scripts/build-ami.py entry point
+    - Implement command-line argument parsing (artifact-ref, output-file, region)
+    - Set up structured logging configuration
+    - Implement main execution flow with error handling
+    - _Requirements: 14.1, 19.7, 19.8_
+
+  - [ ] 20.2 Implement configuration and validation
+    - Validate artifact reference format
+    - Validate AWS region
+    - Validate output file path
+    - Detect user's public IP address
+    - _Requirements: 14.2_
+
+- [ ] 21. Create Terraform infrastructure module
+  - [ ] 21.1 Create terraform/build-ami/ module structure
+    - Define variables (region, user_ip, instance_type)
+    - Configure AWS provider
+    - _Requirements: 14.1_
+
+  - [ ] 21.2 Define EC2 instance resource
+    - Use Amazon Linux 2023 AMI
+    - Configure instance type (t3.medium or larger)
+    - Attach SSH key pair
+    - Configure user data for initial setup
+    - Add tags for identification
+    - _Requirements: 14.1, 14.5_
+
+  - [ ] 21.3 Define security group with SSH access
+    - Allow SSH (port 22) only from user's IP
+    - Allow all outbound traffic
+    - _Requirements: 14.3_
+
+  - [ ] 21.4 Define SSH key pair generation
+    - Generate temporary SSH key pair
+    - Store private key securely
+    - _Requirements: 14.4_
+
+  - [ ] 21.5 Define outputs
+    - Output instance_id
+    - Output public_ip
+    - Output ssh_private_key_path
+    - _Requirements: 14.1_
+
+  - [ ]* 21.6 Write property tests for infrastructure provisioning
+    - **Property 69: SSH Access Configuration**
+    - **Property 78: Terraform State Isolation**
+    - **Validates: Requirements 14.3**
+
+- [ ] 22. Implement build instance provisioning
+  - [ ] 22.1 Create provision_instance function
+    - Initialize Terraform in isolated state directory
+    - Apply Terraform configuration
+    - Wait for instance to be running
+    - Wait for status checks to pass
+    - Verify SSH connectivity with retries
+    - Configure SSH keepalive settings
+    - Handle provisioning failures
+    - _Requirements: 14.1, 14.5, 14.6, 14.7, 14.8_
+
+  - [ ]* 22.2 Write property tests for instance provisioning
+    - **Property 79: SSH Keepalive Maintenance**
+    - **Validates: Requirements 14.7**
+
+- [ ] 23. Implement tool installation functions
+  - [ ] 23.1 Create install_system_dependencies function
+    - Install git via yum
+    - Install gcc and development tools
+    - Install Rust toolchain using rustup
+    - Verify each installation
+    - _Requirements: 15.1, 15.2, 15.6_
+
+  - [ ] 23.2 Create install_oras function
+    - Download ORAS CLI from GitHub releases
+    - Verify checksum
+    - Install to /usr/local/bin
+    - Verify installation
+    - _Requirements: 15.3, 15.6_
+
+  - [ ] 23.3 Create install_github_cli function
+    - Add GitHub CLI repository
+    - Install via yum
+    - Verify installation
+    - _Requirements: 15.4, 15.6_
+
+  - [ ] 23.4 Create install_coldsnap function
+    - Clone coldsnap repository from AWS Labs
+    - Build using cargo
+    - Install to /usr/local/bin
+    - Verify installation
+    - _Requirements: 15.5, 15.6_
+
+  - [ ] 23.5 Create install_all_tools orchestration function
+    - Execute all installation functions in sequence
+    - Handle installation failures with descriptive errors
+    - Log installation progress
+    - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7_
+
+  - [ ]* 23.6 Write property tests for tool installation
+    - **Property 70: Tool Installation Verification**
+    - **Validates: Requirements 15.6**
+
+- [ ] 24. Checkpoint - Ensure infrastructure and tool tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 25. Implement signature verification
+  - [ ] 25.1 Create verify_artifact_signature function
+    - Extract repository identity from artifact reference
+    - Fetch artifact manifest digest using ORAS
+    - Download GitHub attestation bundle for artifact
+    - Verify attestation using GitHub CLI in offline mode
+    - Log detailed verification results
+    - Return verification status and details
+    - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.7_
+
+  - [ ] 25.2 Implement verification failure handling
+    - Terminate process if verification fails
+    - Log verification failure details
+    - Do not proceed with untrusted artifacts
+    - Clean up any downloaded files
+    - _Requirements: 16.6, 16.8_
+
+  - [ ] 25.3 Implement verification success path
+    - Log successful verification
+    - Proceed to artifact download
+    - _Requirements: 16.5_
+
+  - [ ]* 25.4 Write property tests for signature verification
+    - **Property 67: Signature Verification Requirement**
+    - **Property 68: Untrusted Artifact Rejection**
+    - **Validates: Requirements 16.5, 16.6, 16.8**
+
+- [ ] 26. Implement artifact download and validation
+  - [ ] 26.1 Create pull_artifact_from_ghcr function
+    - Create artifacts directory on build instance
+    - Pull artifact bundle from GHCR using ORAS
+    - Verify raw disk image file exists in build-output directory
+    - Verify pcr_measurements.json exists in build-output directory
+    - Log all downloaded artifacts and sizes
+    - Handle missing files with descriptive errors
+    - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.6, 17.7_
+
+  - [ ] 26.2 Create validate_pcr_measurements function
+    - Parse pcr_measurements.json
+    - Extract PCR4 and PCR7 values
+    - Validate PCR values are non-empty hex strings
+    - Return PCR measurements
+    - _Requirements: 17.5_
+
+  - [ ]* 26.3 Write property tests for artifact download
+    - **Property 71: Artifact Download Completeness**
+    - **Property 72: PCR Measurements Round-Trip**
+    - **Validates: Requirements 17.3, 17.4, 12.1, 17.5**
+
+- [ ] 27. Implement snapshot upload and AMI registration
+  - [ ] 27.1 Create upload_snapshot function
+    - Execute coldsnap upload with raw disk image
+    - Stream coldsnap output to logs in real-time
+    - Parse snapshot ID from coldsnap output
+    - Validate snapshot ID format (starts with "snap-")
+    - Wait for snapshot to complete
+    - Handle upload failures with descriptive errors
+    - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.10_
+
+  - [ ] 27.2 Create register_ami function
+    - Generate AMI name with timestamp
+    - Register AMI with snapshot ID
+    - Enable TPM 2.0 support
+    - Configure UEFI boot mode
+    - Enable ENA support
+    - Set root device to /dev/xvda
+    - Handle registration failures with descriptive errors
+    - Return AMI ID
+    - _Requirements: 18.5, 18.6, 18.7, 18.8, 18.9, 18.11_
+
+  - [ ]* 27.3 Write property tests for snapshot and AMI
+    - **Property 73: Snapshot Upload Success**
+    - **Property 74: AMI Registration Configuration**
+    - **Property 80: Coldsnap Output Streaming**
+    - **Validates: Requirements 18.3, 18.5, 18.6, 18.7**
+
+- [ ] 28. Implement build result output and cleanup
+  - [ ] 28.1 Create generate_build_result function
+    - Create build result JSON structure
+    - Include AMI ID
+    - Include snapshot ID
+    - Include AWS region
+    - Include build timestamp in ISO 8601 format
+    - Include PCR4 and PCR7 measurements
+    - Write to specified output file
+    - Log complete build result
+    - _Requirements: 19.1, 19.2, 19.3, 19.4, 19.5, 19.6, 19.7, 19.8_
+
+  - [ ] 28.2 Create cleanup_infrastructure function
+    - Close all SSH connections
+    - Execute Terraform destroy
+    - Destroy security groups and networking resources
+    - Delete temporary SSH key file
+    - Log all cleanup operations
+    - Handle cleanup failures gracefully (log but don't fail)
+    - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.6, 20.7_
+
+  - [ ] 28.3 Implement cleanup guarantee in main flow
+    - Use try/finally to ensure cleanup runs
+    - Execute cleanup on both success and failure
+    - _Requirements: 20.5_
+
+  - [ ]* 28.4 Write property tests for build result and cleanup
+    - **Property 75: Build Result Completeness**
+    - **Property 76: Infrastructure Cleanup Guarantee**
+    - **Property 77: Build Failure Cleanup**
+    - **Validates: Requirements 19.2-19.6, 20.1-20.5**
+
+  - [ ]* 28.5 Write integration tests for complete AMI build flow
+    - Test complete build flow with mocked external services
+    - Test signature verification failure handling
+    - Test tool installation failures
+    - Test concurrent build isolation
+    - Test cleanup on various failure scenarios
+    - _Requirements: 11-20_
+
+- [ ] 29. Final checkpoint - Ensure all build tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 57 correctness properties from the design document
-- The implementation uses Python with Flask/FastAPI for the HTTP server
+- Property tests validate the 80 correctness properties from the design document
+- The runtime implementation (tasks 1-16) uses Python with Flask/FastAPI for the HTTP server
+- The build implementation (tasks 17-29) uses GitHub Actions, KIWI NG, ORAS, and Python
 - AWS Nitro attestation requires running on a Nitro-based EC2 instance
 - Scripts execute as root with full system privileges
-- All 57 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 80 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
+- Build tasks (17-29) can be implemented independently from runtime tasks (1-16)
