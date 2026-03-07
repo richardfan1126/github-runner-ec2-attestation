@@ -1,21 +1,22 @@
 # Dockerfile for KIWI NG builder
 # Based on Amazon Linux 2023
+# Pinned versions for reproducible builds
 
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023.6.20241212.0
 
-# Install system dependencies
+# Install system dependencies with exact versions
 # See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/build-sample-ami.html
 RUN dnf install -y \
-    kiwi-cli \
-    python3-kiwi \
-    kiwi-systemdeps-core \
-    python3-poetry-core \
-    qemu-img \
-    veritysetup \
-    erofs-utils \
-    git \
-    cargo \
-    aws-nitro-tpm-tools \
+    kiwi-cli-10.1.21-1.amzn2023.0.1 \
+    python3-kiwi-10.1.21-1.amzn2023.0.1 \
+    kiwi-systemdeps-core-10.1.21-1.amzn2023.0.1 \
+    python3-poetry-core-1.9.0-1.amzn2023.0.3 \
+    qemu-img-8.2.0-2.amzn2023.0.10 \
+    veritysetup-2.6.1-1.amzn2023.0.3 \
+    erofs-utils-1.6-1.amzn2023.0.3 \
+    git-2.40.1-1.amzn2023.0.3 \
+    cargo-1.79.0-1.amzn2023.0.1 \
+    aws-nitro-tpm-tools-1.0.0-1.amzn2023 \
     && dnf clean all
 
 # Create output directory for build artifacts

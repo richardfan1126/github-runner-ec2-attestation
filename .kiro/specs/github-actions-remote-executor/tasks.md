@@ -324,23 +324,23 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test cleanup and retention policies
     - _Requirements: All requirements_
 
-- [ ] 16. Final checkpoint - Ensure all tests pass
+- [x] 16. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 17. Set up KIWI image build infrastructure
-  - [ ] 17.1 Create Dockerfile for KIWI builder
+- [x] 17. Set up KIWI image build infrastructure
+  - [x] 17.1 Create Dockerfile for KIWI builder
     - Specify exact versions of all build dependencies
     - Install KIWI NG and required tools
     - Configure build environment
     - _Requirements: 11.1, 11.2_
 
-  - [ ] 17.2 Create KIWI image description files
+  - [x] 17.2 Create KIWI image description files
     - Define disk image configuration
     - Configure boot loader and partitions
     - Specify packages and system configuration
     - _Requirements: 11.4_
 
-  - [ ] 17.3 Create build script (.github/scripts/build-kiwi-image.sh)
+  - [x] 17.3 Create build script (.github/scripts/build-kiwi-image.sh)
     - Configure loop device setup on host
     - Execute KIWI NG build in Docker container
     - Generate PCR measurements file (pcr_measurements.json)
@@ -348,7 +348,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle build failures with descriptive errors
     - _Requirements: 11.4, 11.5, 11.6, 11.7, 11.8_
 
-  - [ ]* 17.4 Write property tests for KIWI build
+  - [x] 17.4 Write property tests for KIWI build
     - **Property 61: KIWI Build Reproducibility**
     - **Property 62: PCR Measurements Presence**
     - **Validates: Requirements 11.1, 11.2, 11.6, 11.7**
