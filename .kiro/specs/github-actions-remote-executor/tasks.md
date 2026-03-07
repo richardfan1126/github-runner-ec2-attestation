@@ -353,20 +353,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 62: PCR Measurements Presence**
     - **Validates: Requirements 11.1, 11.2, 11.6, 11.7**
 
-- [ ] 18. Create GitHub Actions workflow for image build
-  - [ ] 18.1 Create .github/workflows/build-attestable-image.yml
+- [x] 18. Create GitHub Actions workflow for image build
+  - [x] 18.1 Create .github/workflows/build-attestable-image.yml
     - Configure workflow triggers (push, workflow_dispatch)
     - Set up permissions for attestations and packages
     - Checkout repository with submodules
     - _Requirements: 11.3, 12.2, 13.1_
 
-  - [ ] 18.2 Implement KIWI build step in workflow
+  - [x] 18.2 Implement KIWI build step in workflow
     - Execute build-kiwi-image.sh script
     - Upload build artifacts (raw image, PCR measurements)
     - Handle build failures
     - _Requirements: 11.1, 11.4, 11.6_
 
-  - [ ] 18.3 Implement artifact publishing step
+  - [x] 18.3 Implement artifact publishing step
     - Extract PCR4 and PCR7 from pcr_measurements.json
     - Generate artifact tag using branch name and timestamp
     - Authenticate to GHCR using GitHub token
@@ -377,7 +377,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle ORAS push failures
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8_
 
-  - [ ] 18.4 Implement GitHub attestation step
+  - [x] 18.4 Implement GitHub attestation step
     - Generate build provenance attestation
     - Sign attestation using Sigstore
     - Include artifact digest and repository identity
@@ -385,13 +385,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Output attestation ID and URL
     - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6_
 
-  - [ ] 18.5 Generate workflow summary
+  - [x] 18.5 Generate workflow summary
     - Include artifact reference and digest
     - Include attestation verification instructions
     - Include PCR measurement values
     - _Requirements: 13.7_
 
-  - [ ]* 18.6 Write property tests for artifact publishing
+  - [x] 18.6 Write property tests for artifact publishing
     - **Property 63: PCR Extraction Validation**
     - **Property 64: Artifact Annotation Completeness**
     - **Property 65: Artifact Tag Uniqueness**

@@ -1,0 +1,169 @@
+name: Build Attestable Image
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build KIWI builder Docker image
+        run: |
+          docker build -t kiwi-builder:latest -f .github/docker/Dockerfile.kiwi-builder .
+      
+      - name: Configure loop devices
+        run: |
+          sudo modprobe loop
+          sudo losetup -f || true
+      
+      - name: Build KIWI image
+        run: |
+          chmod +x .github/scripts/build-kiwi-image.sh
+          .github/scripts/build-kiwi-image.sh
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiwi-build-output
+          path: |
+            build-output/*.raw
+            build-output/pcr_measurements.json
+          retention-days: 30
+      
+      - name: Extract PCR measurements
+        id: pcr
+        run: |
+          PCR4=$(jq -r '.Measurements.PCR4' build-output/pcr_measurements.json)
+          PCR7=$(jq -r '.Measurements.PCR7' build-output/pcr_measurements.json)
+          
+          if [ -z "$PCR4" ] || [ "$PCR4" = "null" ]; then
+            echo "::error::PCR4 measurement is missing or invalid"
+            exit 1
+          fi
+          
+          if [ -z "$PCR7" ] || [ "$PCR7" = "null" ]; then
+            echo "::error::PCR7 measurement is missing or invalid"
+            exit 1
+          fi
+          
+          echo "pcr4=$PCR4" >> $GITHUB_OUTPUT
+          echo "pcr7=$PCR7" >> $GITHUB_OUTPUT
+          
+          echo "### PCR Measurements" >> $GITHUB_STEP_SUMMARY
+          echo "- **PCR4**: \`$PCR4\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **PCR7**: \`$PCR7\`" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Generate artifact tag
+        id: tag
+        run: |
+          BRANCH_NAME=$(echo "${GITHUB_REF#refs/heads/}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
+          TAG="${BRANCH_NAME}-${TIMESTAMP}-${GITHUB_SHA::8}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Artifact tag: $TAG"
+      
+      - name: Install ORAS
+        run: |
+          VERSION="1.1.0"
+          curl -LO "https://github.com/oras-project/oras/releases/download/v${VERSION}/oras_${VERSION}_linux_amd64.tar.gz"
+          mkdir -p oras-install/
+          tar -zxf oras_*.tar.gz -C oras-install/
+          sudo mv oras-install/oras /usr/local/bin/
+          rm -rf oras_*.tar.gz oras-install/
+          oras version
+      
+      - name: Authenticate to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+      
+      - name: Push artifact to GHCR
+        id: push
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          ARTIFACT_REF="ghcr.io/${REPO_LOWER}/attestable-image:${{ steps.tag.outputs.tag }}"
+          
+          RAW_IMAGE=$(find build-output -name "*.raw" -type f | head -n 1)
+          if [ -z "$RAW_IMAGE" ]; then
+            echo "::error::Raw disk image not found in build-output directory"
+            exit 1
+          fi
+          
+          echo "Pushing artifact to: $ARTIFACT_REF"
+          
+          if ! oras push "$ARTIFACT_REF" \
+            --annotation "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --annotation "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
+            --annotation "com.github.attestable-image.pcr4=${{ steps.pcr.outputs.pcr4 }}" \
+            --annotation "com.github.attestable-image.pcr7=${{ steps.pcr.outputs.pcr7 }}" \
+            "$RAW_IMAGE:application/octet-stream" \
+            build-output/pcr_measurements.json:application/json; then
+            echo "::error::Failed to push artifact to GHCR"
+            exit 1
+          fi
+          
+          # Get the digest
+          DIGEST=$(oras manifest fetch "$ARTIFACT_REF" --descriptor | jq -r '.digest')
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "artifact_ref=$ARTIFACT_REF" >> $GITHUB_OUTPUT
+          
+          echo "### Artifact Published" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reference**: \`$ARTIFACT_REF\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: \`$DIGEST\`" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Generate build provenance attestation
+        id: attest
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ steps.push.outputs.artifact_ref }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      
+      - name: Generate workflow summary
+        run: |
+          echo "## Build Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifact Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reference**: \`${{ steps.push.outputs.artifact_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: \`${{ steps.push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: \`${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### PCR Measurements" >> $GITHUB_STEP_SUMMARY
+          echo "- **PCR4**: \`${{ steps.pcr.outputs.pcr4 }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **PCR7**: \`${{ steps.pcr.outputs.pcr7 }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Attestation" >> $GITHUB_STEP_SUMMARY
+          echo "- **Attestation ID**: \`${{ steps.attest.outputs.attestation-id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Attestation URL**: ${{ steps.attest.outputs.attestation-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Verification Instructions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To verify the attestation:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "gh attestation verify oci://${{ steps.push.outputs.artifact_ref }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --owner ${{ github.repository_owner }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To pull the artifact:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "oras pull ${{ steps.push.outputs.artifact_ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
