@@ -470,8 +470,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 78: Terraform State Isolation**
     - **Validates: Requirements 14.3, 14.6**
 
-- [ ] 22. Implement build instance provisioning
-  - [ ] 22.1 Create provision_instance function
+- [x] 22. Implement build instance provisioning
+  - [x] 22.1 Create provision_instance function
     - Initialize Terraform in terraform/build-ami working directory
     - Apply Terraform configuration with variables (region, instance_type, allowed_ssh_cidr)
     - Parse Terraform outputs JSON to extract instance_id, instance_public_ip, ssh_private_key
@@ -481,7 +481,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle provisioning failures with descriptive errors
     - _Requirements: 14.1, 14.11, 14.12, 14.13_
 
-  - [ ] 22.2 Create verify_ssh_connectivity function
+  - [x] 22.2 Create verify_ssh_connectivity function
     - Connect to instance using paramiko with ec2-user and SSH private key
     - Configure SSH keepalive with 30-second intervals
     - Set connection timeout to 10 seconds and banner timeout to 10 seconds
@@ -489,7 +489,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Return connected SSH client
     - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7_
 
-  - [ ] 22.3 Write property tests for instance provisioning
+  - [x] 22.3 Write property tests for instance provisioning
     - **Property 79: SSH Keepalive Maintenance**
     - **Validates: Requirements 15.4**
 

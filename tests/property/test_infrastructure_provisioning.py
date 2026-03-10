@@ -274,3 +274,60 @@ def test_variables_configuration():
     # Verify instance_type default
     assert 'default     = "c5.9xlarge"' in variables_content, \
         "Instance type must default to c5.9xlarge"
+
+
+# Property 79: SSH Keepalive Maintenance
+def test_property_79_ssh_keepalive_maintenance():
+    """
+    Property 79: SSH Keepalive Maintenance
+
+    For any long-running SSH operation, the connection should remain active
+    through keepalive packets.
+
+    This test verifies that the verify_ssh_connectivity function configures
+    SSH keepalive with 30-second intervals to prevent connection timeouts
+    during long operations like tool installation and snapshot uploads.
+
+    Validates: Requirements 15.4
+    """
+    import sys
+    from pathlib import Path
+
+    # Add scripts directory to path to import build-ami functions
+    scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+
+    # Read the verify_ssh_connectivity function source
+    build_ami_file = scripts_dir / "build-ami.py"
+    assert build_ami_file.exists(), "build-ami.py must exist"
+
+    build_ami_content = build_ami_file.read_text()
+
+    # Verify SSH keepalive is configured
+    assert "set_keepalive" in build_ami_content, \
+        "SSH client must configure keepalive"
+
+    # Verify keepalive interval is 30 seconds
+    assert "set_keepalive(30)" in build_ami_content, \
+        "SSH keepalive interval must be 30 seconds"
+
+    # Verify keepalive is set after connection establishment
+    assert "get_transport().set_keepalive" in build_ami_content, \
+        "Keepalive must be set on the transport after connection"
+
+    # Verify connection timeout is configured
+    assert "timeout=10" in build_ami_content, \
+        "SSH connection timeout must be configured"
+
+    # Verify banner timeout is configured
+    assert "banner_timeout=10" in build_ami_content, \
+        "SSH banner timeout must be configured"
+
+    # Verify retry mechanism exists
+    assert "max_attempts" in build_ami_content, \
+        "SSH connection must have retry mechanism"
+
+    # Verify delay between retries
+    assert "time.sleep(delay)" in build_ami_content or "time.sleep(30)" in build_ami_content, \
+        "SSH connection retries must have delay between attempts"
+
