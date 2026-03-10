@@ -212,7 +212,34 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. THE KIWI_Builder SHALL generate PCR measurements file (pcr_measurements.json) containing PCR4 and PCR7 values
 8. IF the KIWI build fails, THEN THE Build_Workflow SHALL fail with a descriptive error message
 
-### Requirement 12: Artifact Publishing with PCR Annotations
+### Requirement 12: Separate Python Dependency Configurations
+
+**User Story:** As a DevOps engineer, I want Python dependencies separated into scripts configuration and remote executor configuration, so that the KIWI image only contains libraries needed for the remote executor service
+
+#### Acceptance Criteria
+
+1. THE Build_Workflow SHALL maintain a scripts configuration file at scripts/pyproject.toml for script dependencies
+2. THE scripts configuration SHALL include boto3 for AWS SDK operations
+3. THE scripts configuration SHALL include paramiko for SSH connectivity
+4. THE Build_Workflow SHALL maintain a remote executor configuration file at pyproject.toml for service dependencies
+5. THE remote executor configuration SHALL include fastapi for the HTTP server framework
+6. THE remote executor configuration SHALL include uvicorn for the ASGI server
+7. THE remote executor configuration SHALL include requests for HTTP client operations
+8. WHERE development or testing is performed, THE remote executor configuration SHALL include hypothesis for property-based testing
+9. WHERE development or testing is performed, THE remote executor configuration SHALL include pytest for test execution
+10. WHERE development or testing is performed, THE remote executor configuration SHALL include pytest-asyncio for async test support
+11. WHERE development or testing is performed, THE remote executor configuration SHALL include httpx for async HTTP client testing
+12. WHEN building the KIWI image, THE KIWI_Builder SHALL install only the remote executor dependencies from pyproject.toml
+13. THE KIWI_Builder SHALL NOT install script dependencies from scripts/pyproject.toml into the KIWI image
+14. WHEN executing build scripts, THE Build_Workflow SHALL use dependencies from scripts/pyproject.toml
+15. THE scripts configuration and remote executor configuration SHALL be managed independently using uv
+16. THE KIWI_Builder SHALL copy pyproject.toml and uv.lock files into the KIWI image build context
+17. THE KIWI_Builder SHALL install uv package manager in the KIWI image
+18. THE KIWI_Builder SHALL use uv to install Python dependencies from pyproject.toml into the KIWI image
+19. THE KIWI_Builder SHALL install dependencies to the system Python environment in the KIWI image
+20. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
+
+### Requirement 13: Artifact Publishing with PCR Annotations
 
 **User Story:** As a DevOps engineer, I want build artifacts published to GHCR with PCR measurements as annotations, so that consumers can verify expected attestation values
 
@@ -227,7 +254,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. IF PCR measurements are missing or invalid, THEN THE Artifact_Publisher SHALL fail with an error
 8. IF ORAS push fails, THEN THE Artifact_Publisher SHALL fail with registry connectivity error
 
-### Requirement 13: Build Provenance Attestation
+### Requirement 14: Build Provenance Attestation
 
 **User Story:** As a security engineer, I want build artifacts attested using GitHub's attestation service, so that artifact provenance can be cryptographically verified
 
@@ -241,7 +268,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. THE Build_Workflow SHALL output the attestation ID and URL
 7. THE Build_Workflow SHALL provide verification instructions in the workflow summary
 
-### Requirement 14: AMI Build Instance Provisioning
+### Requirement 15: AMI Build Instance Provisioning
 
 **User Story:** As a DevOps engineer, I want the AMI conversion to use a temporary EC2 instance provisioned with Terraform, so that the conversion process is isolated and reproducible
 
@@ -262,7 +289,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 13. THE AMI_Converter SHALL save the SSH private key to a temporary file with 600 permissions
 14. IF instance provisioning fails, THEN THE AMI_Converter SHALL fail with a descriptive error
 
-### Requirement 15: SSH Connectivity Verification
+### Requirement 16: SSH Connectivity Verification
 
 **User Story:** As a DevOps engineer, I want SSH connectivity verified before proceeding with tool installation, so that connection issues are detected early
 
@@ -276,7 +303,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. THE AMI_Converter SHALL set SSH banner timeout to 10 seconds
 7. IF SSH connection fails after all retries, THEN THE AMI_Converter SHALL fail with connection error
 
-### Requirement 16: Build Tool Installation
+### Requirement 17: Build Tool Installation
 
 **User Story:** As a DevOps engineer, I want required tools installed on the build instance, so that artifact verification and AMI creation can proceed
 
@@ -295,7 +322,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. THE AMI_Converter SHALL stream installation output to logs during each installation step
 12. IF any tool installation fails, THEN THE AMI_Converter SHALL fail with installation error
 
-### Requirement 17: Artifact Signature Verification
+### Requirement 18: Artifact Signature Verification
 
 **User Story:** As a security engineer, I want artifact signatures verified using GitHub attestation before AMI creation, so that only trusted artifacts are converted to AMIs
 
@@ -314,7 +341,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. THE AMI_Converter SHALL log detailed verification results including stdout and stderr
 12. THE AMI_Converter SHALL not proceed with untrusted artifacts under any circumstances
 
-### Requirement 18: Artifact Download and Validation
+### Requirement 19: Artifact Download and Validation
 
 **User Story:** As a DevOps engineer, I want artifacts downloaded and validated on the build instance, so that AMI creation uses correct files
 
@@ -333,7 +360,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. IF pcr_measurements.json is not found, THEN THE AMI_Converter SHALL fail with file not found error
 12. IF pcr_measurements.json parsing fails, THEN THE AMI_Converter SHALL fail with parsing error
 
-### Requirement 19: Snapshot Upload and AMI Registration
+### Requirement 20: Snapshot Upload and AMI Registration
 
 **User Story:** As a DevOps engineer, I want the raw disk image converted to an EBS snapshot and registered as an AMI, so that the image can be launched as EC2 instances
 
@@ -357,7 +384,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 16. IF snapshot waiter times out, THEN THE AMI_Converter SHALL fail with waiter error
 17. IF AMI registration fails, THEN THE AMI_Converter SHALL fail with ClientError
 
-### Requirement 20: Build Result Output and Infrastructure Cleanup
+### Requirement 21: Build Result Output and Infrastructure Cleanup
 
 **User Story:** As a DevOps engineer, I want build results saved to a file and infrastructure cleaned up, so that I can reference the AMI and no resources are left running
 

@@ -25,6 +25,15 @@ This design document covers two major aspects of the system:
 - Enable reliable output retrieval through polling
 - Maintain execution tracking and monitoring capabilities
 
+### Python Dependency Management
+
+The project maintains separate Python dependency configurations:
+
+- **Remote Executor (pyproject.toml)**: Contains dependencies for the HTTP service (fastapi, uvicorn, requests) that runs in the KIWI image. The remote executor does NOT use boto3.
+- **Build Scripts (scripts/pyproject.toml)**: Contains dependencies for build and deployment scripts (boto3, paramiko) used during AMI creation. These are NOT installed in the KIWI image.
+
+This separation ensures the KIWI image only contains libraries needed for the remote executor service, keeping it minimal and focused.
+
 ---
 
 # PART 1: RUNTIME DESIGN
@@ -1125,7 +1134,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 **AMI_Converter (Python Script)**
 - Provisions temporary EC2 build instance using Terraform
 - Detects user's public IP for SSH access configuration (via checkip.amazonaws.com)
-- Manages SSH connectivity with keepalive (30-second intervals)
+- Manages SSH connectivity with keepalive (30-second intervals) using paramiko
 - Installs required tools:
   - System dependencies: git, gcc via dnf
   - Rust toolchain via rustup from sh.rustup.rs
@@ -1135,10 +1144,11 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Verifies artifact signatures before proceeding
 - Downloads artifacts from GHCR to ~/artifacts/build-output
 - Uploads raw disk image to EBS snapshot using coldsnap
-- Waits for snapshot completion (15s delay, 40 attempts)
-- Registers AMI with TPM 2.0, UEFI boot mode, and ENA support
+- Waits for snapshot completion (15s delay, 40 attempts) using boto3
+- Registers AMI with TPM 2.0, UEFI boot mode, and ENA support using boto3
 - Saves build results with PCR measurements to JSON file
 - Cleans up all temporary infrastructure in finally block
+- Dependencies: boto3 (AWS SDK), paramiko (SSH connectivity)
 
 **Signature_Verifier (GitHub CLI)**
 - Extracts repository identity from artifact reference (owner/repo format)
@@ -1249,6 +1259,99 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Multiple builds can run concurrently (separate instances)
 - Terraform state isolated per build execution
 - Each build creates unique artifact tags with timestamps
+
+### Python Dependency Configuration
+
+The project maintains two separate Python dependency configurations to ensure the KIWI image only contains libraries needed for the remote executor service:
+
+**Scripts Configuration (scripts/pyproject.toml):**
+- Purpose: Dependencies for build and deployment scripts
+- Used by: build-ami.py, cleanup.py, deploy.py
+- Key dependencies:
+  - boto3: AWS SDK for EC2, EBS, and AMI operations
+  - paramiko: SSH connectivity to build instances
+- Installation: Managed independently using uv
+- Scope: NOT installed in the KIWI image
+
+**Remote Executor Configuration (pyproject.toml):**
+- Purpose: Dependencies for the remote executor HTTP service
+- Used by: Remote executor service running in the KIWI image
+- Key dependencies:
+  - fastapi: HTTP server framework
+  - uvicorn: ASGI server for running FastAPI
+  - requests: HTTP client for GitHub API calls
+- Development/testing dependencies:
+  - hypothesis: Property-based testing library
+  - pytest: Test execution framework
+  - pytest-asyncio: Async test support
+  - httpx: Async HTTP client for testing
+- Installation: Only these dependencies are installed in the KIWI image
+- Scope: Installed during KIWI image build process
+
+**Key Separation:**
+- The remote executor does NOT use boto3 (verified by source code inspection)
+- boto3 is only used by scripts in the scripts/ directory for AWS operations
+- When building the KIWI image, only dependencies from pyproject.toml are installed
+- The two configurations are managed independently using uv
+- This separation keeps the KIWI image minimal and focused on service dependencies
+
+### KIWI Image Build Process with Python Dependencies
+
+The KIWI image build process includes installing Python dependencies from pyproject.toml into the system Python environment. This ensures the remote executor service has all required libraries available at runtime.
+
+**Build Phase Integration:**
+
+The Python dependency installation is integrated into the KIWI image build workflow through the following steps:
+
+1. **Dependency File Preparation:**
+   - The build workflow ensures pyproject.toml and uv.lock are present in the repository
+   - These files are included in the KIWI image description directory
+   - KIWI NG copies these files into the image build context automatically
+
+2. **KIWI Configuration Script (config.sh):**
+   - The KIWI image description includes a config.sh script that executes during image preparation
+   - This script runs inside the image being built (chroot environment)
+   - The script has access to pyproject.toml and uv.lock from the image context
+
+3. **uv Package Manager Installation:**
+   - The config.sh script installs the uv package manager
+   - Installation methods:
+     - Via pip: `pip install uv`
+     - Via curl: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+   - uv is installed to a location accessible in the system PATH
+
+4. **Python Dependency Installation:**
+   - After uv is installed, the script runs dependency installation
+   - Command: `uv sync --frozen` (uses uv.lock for exact versions)
+   - Alternative: `uv pip install -r pyproject.toml` (if sync not used)
+   - Dependencies are installed to the system Python environment (e.g., /usr/lib/python3.x/site-packages)
+   - No virtual environment is created - system-wide installation for service access
+
+5. **Installation Verification:**
+   - The config.sh script verifies critical packages are importable
+   - Example: `python3 -c "import fastapi, uvicorn, requests"`
+   - If verification fails, the KIWI build fails with an error
+   - Successful verification is logged for build audit trail
+
+6. **Image Finalization:**
+   - After dependency installation and verification, KIWI continues with image finalization
+   - The resulting .raw disk image contains the system Python with all installed dependencies
+   - The remote executor service can import and use these libraries when the AMI is launched
+
+**Build Script Location:**
+
+The dependency installation logic is typically located in:
+- `kiwi-image-description/config.sh` - Main configuration script executed during KIWI build
+- Or in a custom script called from config.sh
+- The script executes in the chroot environment of the image being built
+
+**Dependency Isolation:**
+
+This process ensures:
+- Only remote executor dependencies (from pyproject.toml) are installed in the image
+- Script dependencies (from scripts/pyproject.toml) remain outside the image
+- The KIWI image stays minimal with only runtime dependencies
+- Build reproducibility through uv.lock pinned versions
 
 ## Infrastructure Provisioning Architecture
 
@@ -2148,6 +2251,63 @@ If automated cleanup fails:
 #   - build-output/*.raw (raw disk image)
 #   - build-output/pcr_measurements.json (PCR values)
 ```
+
+**Python Dependencies Installed in KIWI Image:**
+- Only dependencies from pyproject.toml (remote executor configuration)
+- fastapi: HTTP server framework
+- uvicorn: ASGI server
+- requests: HTTP client for GitHub API
+- Development/test dependencies (hypothesis, pytest, pytest-asyncio, httpx) if included
+- Script dependencies from scripts/pyproject.toml (boto3, paramiko) are NOT installed in the image
+
+**Python Dependency Installation Process:**
+
+The KIWI image build process installs Python dependencies during the image build phase using the following steps:
+
+1. **Copy Dependency Files:**
+   - pyproject.toml is copied into the KIWI image build context
+   - uv.lock is copied into the KIWI image build context
+   - These files are placed in the appropriate location for the KIWI build system to access
+
+2. **Install uv Package Manager:**
+   - The uv package manager is installed in the KIWI image
+   - Installation typically occurs via pip or from source
+   - uv provides fast, reliable Python package installation
+
+3. **Install Dependencies:**
+   - uv is used to install dependencies from pyproject.toml
+   - Command: `uv sync` or `uv pip install` depending on configuration
+   - Dependencies are installed to the system Python environment
+   - The uv.lock file ensures reproducible dependency versions
+
+4. **Installation Timing:**
+   - Dependency installation occurs during the KIWI image build phase
+   - This happens in the KIWI configuration script (typically config.sh or similar)
+   - Installation completes before the image is finalized
+   - The remote executor service can access installed libraries at runtime
+
+5. **System Python Environment:**
+   - Dependencies are installed to the system Python environment (not a virtual environment)
+   - This ensures the remote executor service can import libraries without activation
+   - System-wide installation simplifies service startup and configuration
+
+**KIWI Configuration Script Integration:**
+
+The dependency installation is integrated into the KIWI image build process through configuration scripts:
+
+- **config.sh** (or equivalent KIWI configuration script):
+  - Executes during the image preparation phase
+  - Copies pyproject.toml and uv.lock to appropriate locations
+  - Installs uv package manager
+  - Runs uv to install all dependencies from pyproject.toml
+  - Verifies installation success before proceeding
+
+- **Installation Verification:**
+  - After installation, the script verifies that key packages are importable
+  - Checks that fastapi, uvicorn, and requests are available
+  - Logs installation results for debugging
+
+This approach ensures that the remote executor service has all required dependencies available when the AMI is launched, without including unnecessary build-time dependencies from scripts/pyproject.toml.
 
 **PCR Measurements Format:**
 ```json
