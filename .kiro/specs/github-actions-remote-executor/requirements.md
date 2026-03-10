@@ -243,105 +243,137 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 ### Requirement 14: AMI Build Instance Provisioning
 
-**User Story:** As a DevOps engineer, I want the AMI conversion to use a temporary EC2 instance, so that the conversion process is isolated and reproducible
+**User Story:** As a DevOps engineer, I want the AMI conversion to use a temporary EC2 instance provisioned with Terraform, so that the conversion process is isolated and reproducible
 
 #### Acceptance Criteria
 
-1. THE AMI_Converter SHALL provision a Build_Instance using Terraform
-2. THE AMI_Converter SHALL detect the user's public IP address for SSH access configuration
-3. THE AMI_Converter SHALL configure security groups to allow SSH only from the user's IP
-4. THE AMI_Converter SHALL generate an SSH key pair for instance access
-5. THE AMI_Converter SHALL wait for the instance to be running and pass status checks
-6. THE AMI_Converter SHALL verify SSH connectivity before proceeding
-7. THE AMI_Converter SHALL configure SSH keepalive to prevent connection timeouts
-8. IF instance provisioning fails, THEN THE AMI_Converter SHALL fail with a descriptive error
+1. THE AMI_Converter SHALL provision a Build_Instance using Terraform in the specified AWS region
+2. THE AMI_Converter SHALL detect the user's public IP address using checkip.amazonaws.com
+3. THE AMI_Converter SHALL create a VPC with CIDR block 10.2.0.0/16 for the Build_Instance
+4. THE AMI_Converter SHALL create a public subnet with CIDR block 10.2.1.0/24 in the first availability zone
+5. THE AMI_Converter SHALL create an Internet Gateway and route table for internet access
+6. THE AMI_Converter SHALL configure security groups to allow SSH only from the user's IP address as /32 CIDR
+7. THE AMI_Converter SHALL generate a 4096-bit RSA SSH key pair using Terraform tls_private_key resource
+8. THE AMI_Converter SHALL provision the Build_Instance using Amazon Linux 2023 AMI
+9. THE AMI_Converter SHALL configure the Build_Instance with IMDSv2 required for metadata access
+10. THE AMI_Converter SHALL attach an IAM instance profile with permissions for EC2 and EBS snapshot operations
+11. THE AMI_Converter SHALL wait for the instance to be running using EC2 waiter
+12. THE AMI_Converter SHALL wait for instance status checks to pass using EC2 waiter
+13. THE AMI_Converter SHALL save the SSH private key to a temporary file with 600 permissions
+14. IF instance provisioning fails, THEN THE AMI_Converter SHALL fail with a descriptive error
 
-### Requirement 15: Build Tool Installation
+### Requirement 15: SSH Connectivity Verification
+
+**User Story:** As a DevOps engineer, I want SSH connectivity verified before proceeding with tool installation, so that connection issues are detected early
+
+#### Acceptance Criteria
+
+1. THE AMI_Converter SHALL verify SSH connectivity to the Build_Instance using paramiko
+2. THE AMI_Converter SHALL connect as ec2-user with the generated SSH private key
+3. THE AMI_Converter SHALL retry SSH connection up to 10 times with 30 second delays
+4. THE AMI_Converter SHALL configure SSH keepalive with 30 second intervals to prevent connection timeouts
+5. THE AMI_Converter SHALL set SSH connection timeout to 10 seconds
+6. THE AMI_Converter SHALL set SSH banner timeout to 10 seconds
+7. IF SSH connection fails after all retries, THEN THE AMI_Converter SHALL fail with connection error
+
+### Requirement 16: Build Tool Installation
 
 **User Story:** As a DevOps engineer, I want required tools installed on the build instance, so that artifact verification and AMI creation can proceed
 
 #### Acceptance Criteria
 
-1. THE AMI_Converter SHALL install git and gcc on the Build_Instance
-2. THE AMI_Converter SHALL install Rust toolchain using rustup
-3. THE AMI_Converter SHALL install ORAS CLI from GitHub releases
-4. THE AMI_Converter SHALL install GitHub CLI from official repository
-5. THE AMI_Converter SHALL clone and build coldsnap from AWS Labs repository
-6. THE AMI_Converter SHALL verify each tool installation before proceeding
-7. IF any tool installation fails, THEN THE AMI_Converter SHALL fail with installation error
+1. THE AMI_Converter SHALL install git and gcc on the Build_Instance using dnf package manager
+2. THE AMI_Converter SHALL install Rust toolchain by downloading and executing rustup installer from sh.rustup.rs
+3. THE AMI_Converter SHALL install ORAS CLI version 1.3.0 from GitHub releases for linux_amd64
+4. THE AMI_Converter SHALL extract ORAS binary to /usr/local/bin
+5. THE AMI_Converter SHALL install GitHub CLI by adding gh-cli.repo and installing gh package via dnf
+6. THE AMI_Converter SHALL clone coldsnap from https://github.com/awslabs/coldsnap.git
+7. THE AMI_Converter SHALL build and install coldsnap using cargo install --locked
+8. THE AMI_Converter SHALL verify ORAS installation by executing oras version command
+9. THE AMI_Converter SHALL verify GitHub CLI installation by executing gh version command
+10. THE AMI_Converter SHALL verify coldsnap installation by executing coldsnap --help command
+11. THE AMI_Converter SHALL stream installation output to logs during each installation step
+12. IF any tool installation fails, THEN THE AMI_Converter SHALL fail with installation error
 
-### Requirement 16: Artifact Signature Verification
+### Requirement 17: Artifact Signature Verification
 
-**User Story:** As a security engineer, I want artifact signatures verified before AMI creation, so that only trusted artifacts are converted to AMIs
+**User Story:** As a security engineer, I want artifact signatures verified using GitHub attestation before AMI creation, so that only trusted artifacts are converted to AMIs
 
 #### Acceptance Criteria
 
-1. WHEN tools are installed, THE Signature_Verifier SHALL extract repository identity from artifact reference
-2. THE Signature_Verifier SHALL fetch the artifact manifest digest using ORAS
-3. THE Signature_Verifier SHALL download the GitHub attestation bundle for the artifact
-4. THE Signature_Verifier SHALL verify the attestation using GitHub CLI in offline mode
-5. IF signature verification succeeds, THEN THE AMI_Converter SHALL proceed with artifact download
-6. IF signature verification fails, THEN THE AMI_Converter SHALL terminate without creating AMI
-7. THE AMI_Converter SHALL log detailed verification results
-8. THE AMI_Converter SHALL not proceed with untrusted artifacts under any circumstances
+1. WHEN tools are installed, THE Signature_Verifier SHALL extract repository owner and name from artifact reference
+2. THE Signature_Verifier SHALL fetch the artifact manifest digest using oras manifest fetch command
+3. THE Signature_Verifier SHALL calculate the SHA256 digest of the manifest
+4. THE Signature_Verifier SHALL download the GitHub attestation bundle from api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest}
+5. THE Signature_Verifier SHALL extract the first attestation bundle using jq and save to bundle.json
+6. THE Signature_Verifier SHALL verify the attestation using gh attestation verify oci:// command with -R flag for repository identity
+7. THE Signature_Verifier SHALL verify the attestation in offline mode using -b bundle.json flag
+8. THE Signature_Verifier SHALL set GH_FORCE_TTY=1 to force gh to output verification results
+9. IF signature verification succeeds with exit code 0, THEN THE AMI_Converter SHALL proceed with artifact download
+10. IF signature verification fails with non-zero exit code, THEN THE AMI_Converter SHALL terminate without creating AMI
+11. THE AMI_Converter SHALL log detailed verification results including stdout and stderr
+12. THE AMI_Converter SHALL not proceed with untrusted artifacts under any circumstances
 
-### Requirement 17: Artifact Download and Validation
+### Requirement 18: Artifact Download and Validation
 
 **User Story:** As a DevOps engineer, I want artifacts downloaded and validated on the build instance, so that AMI creation uses correct files
 
 #### Acceptance Criteria
 
-1. WHEN signature verification succeeds, THE AMI_Converter SHALL create an artifacts directory on the Build_Instance
-2. THE AMI_Converter SHALL pull the artifact bundle from GHCR using ORAS
-3. THE AMI_Converter SHALL verify the raw disk image file exists in build-output directory
-4. THE AMI_Converter SHALL verify pcr_measurements.json exists in build-output directory
-5. THE AMI_Converter SHALL parse and extract PCR4 and PCR7 values from pcr_measurements.json
-6. THE AMI_Converter SHALL log all downloaded artifacts and their sizes
-7. IF any required file is missing, THEN THE AMI_Converter SHALL fail with file not found error
+1. WHEN signature verification succeeds, THE AMI_Converter SHALL create ~/artifacts directory on the Build_Instance
+2. THE AMI_Converter SHALL pull the artifact bundle from GHCR using oras pull command
+3. THE AMI_Converter SHALL execute oras pull in the ~/artifacts directory
+4. THE AMI_Converter SHALL verify the raw disk image file exists in ~/artifacts/build-output directory using ls *.raw
+5. THE AMI_Converter SHALL verify pcr_measurements.json exists in ~/artifacts/build-output directory using test -f
+6. THE AMI_Converter SHALL read pcr_measurements.json content using cat command
+7. THE AMI_Converter SHALL parse pcr_measurements.json as JSON to extract PCR4 and PCR7 values
+8. THE AMI_Converter SHALL log all downloaded artifacts and their sizes using ls -lh
+9. THE AMI_Converter SHALL stream ORAS pull output to logs during download
+10. IF the raw disk image file is not found, THEN THE AMI_Converter SHALL fail with file not found error
+11. IF pcr_measurements.json is not found, THEN THE AMI_Converter SHALL fail with file not found error
+12. IF pcr_measurements.json parsing fails, THEN THE AMI_Converter SHALL fail with parsing error
 
-### Requirement 18: Snapshot Upload and AMI Registration
+### Requirement 19: Snapshot Upload and AMI Registration
 
 **User Story:** As a DevOps engineer, I want the raw disk image converted to an EBS snapshot and registered as an AMI, so that the image can be launched as EC2 instances
 
 #### Acceptance Criteria
 
-1. WHEN artifacts are validated, THE AMI_Converter SHALL upload the raw disk image using coldsnap
-2. THE AMI_Converter SHALL stream coldsnap output to logs during upload
-3. THE AMI_Converter SHALL parse the snapshot ID from coldsnap output
-4. THE AMI_Converter SHALL wait for the snapshot to complete before registering AMI
-5. THE AMI_Converter SHALL register the AMI with TPM 2.0 support enabled
-6. THE AMI_Converter SHALL register the AMI with UEFI boot mode
-7. THE AMI_Converter SHALL configure the AMI with ENA support enabled
-8. THE AMI_Converter SHALL set the root device to /dev/xvda
-9. THE AMI_Converter SHALL generate an AMI name with timestamp
-10. IF snapshot upload fails, THEN THE AMI_Converter SHALL fail with upload error
-11. IF AMI registration fails, THEN THE AMI_Converter SHALL fail with registration error
+1. WHEN artifacts are validated, THE AMI_Converter SHALL find the raw disk image filename in ~/artifacts/build-output directory
+2. THE AMI_Converter SHALL upload the raw disk image using /home/ec2-user/.cargo/bin/coldsnap upload command
+3. THE AMI_Converter SHALL stream coldsnap output to logs during upload
+4. THE AMI_Converter SHALL parse the snapshot ID starting with snap- from coldsnap stdout
+5. THE AMI_Converter SHALL wait for the snapshot to complete using EC2 snapshot_completed waiter
+6. THE AMI_Converter SHALL configure the waiter with 15 second delay and 40 max attempts
+7. THE AMI_Converter SHALL register the AMI with VirtualizationType set to hvm
+8. THE AMI_Converter SHALL register the AMI with BootMode set to uefi
+9. THE AMI_Converter SHALL register the AMI with Architecture set to x86_64
+10. THE AMI_Converter SHALL register the AMI with TpmSupport set to v2.0
+11. THE AMI_Converter SHALL register the AMI with EnaSupport set to True
+12. THE AMI_Converter SHALL register the AMI with RootDeviceName set to /dev/xvda
+13. THE AMI_Converter SHALL configure BlockDeviceMappings with the snapshot ID for /dev/xvda
+14. THE AMI_Converter SHALL generate an AMI name with format attestable-ami-import-{timestamp}
+15. IF snapshot upload fails, THEN THE AMI_Converter SHALL fail with upload error
+16. IF snapshot waiter times out, THEN THE AMI_Converter SHALL fail with waiter error
+17. IF AMI registration fails, THEN THE AMI_Converter SHALL fail with ClientError
 
-### Requirement 19: Build Result Output
+### Requirement 20: Build Result Output and Infrastructure Cleanup
 
-**User Story:** As a DevOps engineer, I want build results saved to a file, so that I can reference the AMI ID and PCR measurements
-
-#### Acceptance Criteria
-
-1. WHEN AMI registration succeeds, THE AMI_Converter SHALL create a build result JSON file
-2. THE build result SHALL include the AMI ID
-3. THE build result SHALL include the snapshot ID
-4. THE build result SHALL include the AWS region
-5. THE build result SHALL include the build timestamp in ISO 8601 format
-6. THE build result SHALL include PCR4 and PCR7 measurements
-7. THE AMI_Converter SHALL write the build result to the specified output file
-8. THE AMI_Converter SHALL log the complete build result
-
-### Requirement 20: Infrastructure Cleanup
-
-**User Story:** As a DevOps engineer, I want build infrastructure cleaned up after AMI creation, so that no resources are left running
+**User Story:** As a DevOps engineer, I want build results saved to a file and infrastructure cleaned up, so that I can reference the AMI and no resources are left running
 
 #### Acceptance Criteria
 
-1. WHEN AMI creation completes or fails, THE AMI_Converter SHALL close SSH connections
-2. THE AMI_Converter SHALL destroy the Build_Instance using Terraform
-3. THE AMI_Converter SHALL destroy all associated security groups and networking resources
-4. THE AMI_Converter SHALL delete the temporary SSH key file
-5. THE AMI_Converter SHALL perform cleanup even if AMI creation fails
-6. IF cleanup fails, THEN THE AMI_Converter SHALL log cleanup errors but not fail the overall process
-7. THE AMI_Converter SHALL log all cleanup operations
+1. WHEN AMI registration succeeds, THE AMI_Converter SHALL create a build result dictionary with ami_id, snapshot_id, region, build_timestamp, and pcr_measurements
+2. THE build result SHALL include PCR4 value from pcr_measurements.json Measurements.PCR4 field
+3. THE build result SHALL include PCR7 value from pcr_measurements.json Measurements.PCR7 field
+4. THE build result SHALL include build_timestamp in ISO 8601 format using datetime.now(timezone.utc).isoformat()
+5. THE AMI_Converter SHALL write the build result to the output file specified by --output-file argument
+6. THE AMI_Converter SHALL format the JSON output with 2-space indentation
+7. THE AMI_Converter SHALL close SSH connections before destroying infrastructure
+8. THE AMI_Converter SHALL destroy the Build_Instance using terraform destroy -auto-approve command
+9. THE AMI_Converter SHALL pass the same Terraform variables used during apply to the destroy command
+10. THE AMI_Converter SHALL execute Terraform destroy in the terraform/build-ami working directory
+11. THE AMI_Converter SHALL delete the temporary SSH key file using os.unlink
+12. THE AMI_Converter SHALL perform cleanup in a finally block to ensure execution even if AMI creation fails
+13. IF cleanup fails, THEN THE AMI_Converter SHALL log cleanup errors but not fail the overall process
+14. THE AMI_Converter SHALL log all cleanup operations including infrastructure destruction and key deletion

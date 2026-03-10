@@ -1124,28 +1124,37 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 
 **AMI_Converter (Python Script)**
 - Provisions temporary EC2 build instance using Terraform
-- Detects user's public IP for SSH access configuration
-- Manages SSH connectivity with keepalive
-- Installs required tools (git, gcc, Rust, ORAS, GitHub CLI, coldsnap)
+- Detects user's public IP for SSH access configuration (via checkip.amazonaws.com)
+- Manages SSH connectivity with keepalive (30-second intervals)
+- Installs required tools:
+  - System dependencies: git, gcc via dnf
+  - Rust toolchain via rustup from sh.rustup.rs
+  - ORAS CLI 1.3.0 from GitHub releases
+  - GitHub CLI via dnf repository
+  - Coldsnap built from source using cargo
 - Verifies artifact signatures before proceeding
-- Downloads artifacts from GHCR
-- Uploads raw disk image to EBS snapshot
-- Registers AMI with TPM 2.0 and UEFI boot mode
-- Saves build results with PCR measurements
-- Cleans up all temporary infrastructure
+- Downloads artifacts from GHCR to ~/artifacts/build-output
+- Uploads raw disk image to EBS snapshot using coldsnap
+- Waits for snapshot completion (15s delay, 40 attempts)
+- Registers AMI with TPM 2.0, UEFI boot mode, and ENA support
+- Saves build results with PCR measurements to JSON file
+- Cleans up all temporary infrastructure in finally block
 
 **Signature_Verifier (GitHub CLI)**
-- Extracts repository identity from artifact reference
-- Fetches artifact manifest digest using ORAS
-- Downloads GitHub attestation bundle
-- Verifies attestation using GitHub CLI in offline mode
+- Extracts repository identity from artifact reference (owner/repo format)
+- Fetches artifact manifest digest using ORAS manifest fetch
+- Downloads GitHub attestation bundle from GitHub API
+- Verifies attestation using gh attestation verify in offline mode with bundle.json
+- Sets GH_FORCE_TTY=1 environment variable to force output
 - Terminates build process if verification fails
+- Logs detailed verification output for debugging
 
 **Build_Instance (EC2)**
 - Temporary Amazon Linux 2023 instance
-- Provides environment for artifact verification and AMI conversion
-- Runs coldsnap for snapshot upload
-- Automatically destroyed after build completion
+- Provides isolated environment for artifact verification and AMI conversion
+- Runs coldsnap from /home/ec2-user/.cargo/bin/coldsnap
+- Configured with IMDSv2 enforcement (http_tokens = "required")
+- Automatically destroyed after build completion via Terraform destroy
 
 ### Build Request Flow
 
@@ -1176,34 +1185,60 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 
 **Signature Verification Flow:**
 
-1. Repository identity extracted from artifact reference
-2. Artifact manifest fetched using ORAS
-3. Manifest digest calculated
-4. Attestation bundle downloaded from GitHub API
-5. GitHub CLI verifies attestation in offline mode
-6. Verification result logged
-7. Build proceeds only if verification succeeds
+1. Repository identity extracted from artifact reference (format: owner/repo from ghcr.io/owner/repo:tag)
+2. Artifact manifest fetched using `oras manifest fetch`
+3. Manifest digest calculated using sha256sum
+4. Attestation bundle downloaded from GitHub API: `https://api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest}`
+5. Attestation bundle extracted using jq: `.attestations[0].bundle > bundle.json`
+6. GitHub CLI verifies attestation in offline mode with GH_FORCE_TTY=1: `gh attestation verify oci://{artifact_ref} -R {identity} -b bundle.json`
+7. Verification result logged with detailed output
+8. Build terminates immediately if verification fails (no AMI creation)
+9. Build proceeds to artifact download only if verification succeeds
 
 **AMI Conversion Flow:**
 
-1. User's public IP detected for SSH access
-2. Terraform provisions EC2 instance with security groups
-3. SSH key pair generated and saved
-4. Script waits for instance to be running and pass status checks
-5. SSH connectivity verified with retries
-6. System dependencies installed (git, gcc, Rust)
-7. ORAS CLI installed from GitHub releases
-8. GitHub CLI installed from official repository
-9. Coldsnap cloned and built from AWS Labs repository
-10. Artifact signature verified using GitHub CLI
-11. Artifacts downloaded from GHCR using ORAS
-12. Raw disk image uploaded to EBS snapshot using coldsnap
-13. Snapshot completion awaited
-14. AMI registered with TPM 2.0, UEFI, and ENA support
-15. Build result saved with AMI ID, snapshot ID, and PCR measurements
-16. SSH connection closed
-17. Terraform destroys all infrastructure
-18. Temporary SSH key deleted
+1. User's public IP detected via checkip.amazonaws.com for SSH access configuration
+2. Terraform provisions EC2 instance with complete networking infrastructure:
+   - VPC with CIDR 10.2.0.0/16
+   - Public subnet with CIDR 10.2.1.0/24
+   - Internet Gateway for outbound connectivity
+   - Route table with 0.0.0.0/0 route to IGW
+   - Security group allowing SSH only from user's IP (/32 CIDR)
+   - IAM role with EC2/EBS permissions for snapshot operations
+   - Amazon Linux 2023 AMI as base image
+   - IMDSv2 enforcement (http_tokens = "required")
+3. SSH key pair generated by Terraform (RSA 4096-bit) and saved to temporary file with 0600 permissions
+4. Script waits for instance to be running and pass status checks using EC2 waiters
+5. SSH connectivity verified with retries (10 attempts, 30s delay) and keepalive enabled (30s intervals)
+6. System dependencies installed via dnf: git, gcc
+7. Rust toolchain installed via rustup: `curl https://sh.rustup.rs | sh -s -- -y`
+8. ORAS CLI 1.3.0 installed from GitHub releases (linux_amd64.tar.gz)
+9. GitHub CLI installed via dnf repository configuration
+10. Coldsnap cloned from https://github.com/awslabs/coldsnap.git and built using `cargo install --locked coldsnap`
+11. Artifact signature verified using multi-step process:
+    - Extract manifest digest: `oras manifest fetch | sha256sum`
+    - Download attestation: `curl https://api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest}`
+    - Extract bundle: `jq -cr '.attestations[0].bundle' > bundle.json`
+    - Verify offline: `GH_FORCE_TTY=1 gh attestation verify oci://{ref} -R {identity} -b bundle.json`
+12. Artifacts downloaded from GHCR using ORAS to ~/artifacts/build-output directory
+13. Artifact files validated: *.raw image and pcr_measurements.json must exist
+14. PCR measurements parsed from JSON (PCR4 and PCR7 values extracted)
+15. Raw disk image uploaded to EBS snapshot using `/home/ec2-user/.cargo/bin/coldsnap upload`
+16. Snapshot ID parsed from coldsnap stdout (searches for "snap-" prefix)
+17. Snapshot completion awaited using EC2 waiter (15s delay, 40 attempts = up to 10 minutes)
+18. AMI registered with configuration:
+    - Name: `attestable-ami-imported-{architecture}-{timestamp}`
+    - VirtualizationType: hvm
+    - BootMode: uefi
+    - Architecture: x86_64
+    - RootDeviceName: /dev/xvda
+    - TpmSupport: v2.0
+    - EnaSupport: True
+19. Build result saved to JSON file with ami_id, snapshot_id, region, build_timestamp, and pcr_measurements
+20. SSH connection closed
+21. Terraform destroy executed with same variables (region, instance_type, allowed_ssh_cidr)
+22. Temporary SSH key file deleted
+23. Cleanup guaranteed via finally block (executes even on failure, logs errors without failing)
 
 ### Build Concurrency Model
 
@@ -1215,7 +1250,862 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Terraform state isolated per build execution
 - Each build creates unique artifact tags with timestamps
 
+## Infrastructure Provisioning Architecture
+
+The AMI build process provisions temporary AWS infrastructure using Terraform. This infrastructure is created for each build and destroyed after completion.
+
+### Network Architecture
+
+**VPC Configuration:**
+- CIDR Block: 10.2.0.0/16
+- DNS Hostnames: Enabled
+- DNS Support: Enabled
+- Name: build-attestable-ami-vpc
+
+**Subnet Configuration:**
+- CIDR Block: 10.2.1.0/24
+- Type: Public subnet
+- Availability Zone: First available zone in region
+- Auto-assign Public IP: Enabled
+- Name: build-attestable-ami-subnet
+
+**Internet Gateway:**
+- Attached to VPC
+- Provides outbound internet connectivity
+- Name: build-attestable-ami-igw
+
+**Route Table:**
+- Default route: 0.0.0.0/0 → Internet Gateway
+- Associated with public subnet
+- Name: build-attestable-ami-rt
+
+### Security Configuration
+
+**Security Group:**
+- Name: build-attestable-ami-sg
+- VPC: build-attestable-ami-vpc
+- Ingress Rules:
+  - Protocol: TCP
+  - Port: 22 (SSH)
+  - Source: User's public IP address /32 CIDR
+  - Description: "SSH access from allowed CIDR"
+- Egress Rules:
+  - Protocol: All (-1)
+  - Port: All (0)
+  - Destination: 0.0.0.0/0
+  - Description: "Allow all outbound traffic"
+
+**SSH Key Pair:**
+- Algorithm: RSA
+- Key Size: 4096 bits
+- Generated by Terraform using tls_private_key resource
+- Public key uploaded to AWS as aws_key_pair
+- Private key returned as Terraform output (sensitive)
+- Name: build-attestable-ami-key
+
+### IAM Configuration
+
+**IAM Role:**
+- Name: build-attestable-ami-instance-role
+- Trust Policy: Allows EC2 service to assume role
+- Attached to instance via instance profile
+
+**IAM Policy Permissions:**
+- EC2 Operations:
+  - ec2:CreateSnapshot
+  - ec2:DescribeSnapshots
+  - ec2:ModifySnapshotAttribute
+  - ec2:CreateTags
+  - ec2:RegisterImage
+  - ec2:DescribeImages
+- EBS Direct APIs:
+  - ebs:StartSnapshot
+  - ebs:PutSnapshotBlock
+  - ebs:CompleteSnapshot
+- Resource Scope: All resources (*)
+
+**Instance Profile:**
+- Name: build-attestable-ami-instance-profile
+- Links IAM role to EC2 instance
+
+### Compute Configuration
+
+**EC2 Instance:**
+- AMI: Amazon Linux 2023 (latest, x86_64, hvm)
+- Instance Type: Configurable (default: c5.9xlarge)
+- Subnet: Public subnet (10.2.1.0/24)
+- Security Group: build-attestable-ami-sg
+- IAM Instance Profile: build-attestable-ami-instance-profile
+- SSH Key: build-attestable-ami-key
+- Name: build-attestable-ami-instance
+
+**Metadata Configuration:**
+- IMDSv2: Required (http_tokens = "required")
+- IMDS Endpoint: Enabled (http_endpoint = "enabled")
+
+**Root Volume:**
+- Volume Type: gp3
+- Volume Size: 30 GB
+- Encryption: Enabled
+
+### Terraform Outputs
+
+The Terraform configuration exposes the following outputs:
+
+1. **instance_id**: EC2 instance ID for tracking and operations
+2. **instance_public_ip**: Public IP address for SSH connectivity
+3. **ssh_private_key**: Private key in PEM format (marked sensitive)
+4. **vpc_id**: VPC ID for reference
+5. **security_group_id**: Security group ID for reference
+
+### Infrastructure Lifecycle
+
+**Provisioning:**
+1. Terraform init executed in terraform/build-ami directory
+2. Variables passed: region, instance_type, allowed_ssh_cidr
+3. Terraform apply with -auto-approve flag
+4. Outputs retrieved via `terraform output -json`
+5. Instance ID, public IP, and SSH key extracted from outputs
+
+**Destruction:**
+1. Executed in finally block to guarantee cleanup
+2. Same variables passed as during provisioning
+3. Terraform destroy with -auto-approve flag
+4. Errors logged but do not fail overall process
+5. SSH key file deleted from local filesystem
+
+### Infrastructure Security Features
+
+**Network Isolation:**
+- Dedicated VPC per build (10.2.0.0/16)
+- No VPC peering or VPN connections
+- Isolated from other AWS resources
+
+**Access Control:**
+- SSH restricted to single IP address (/32 CIDR)
+- No public services exposed except SSH
+- IMDSv2 prevents SSRF attacks
+
+**Credential Management:**
+- IAM role provides temporary credentials
+- No long-lived credentials stored on instance
+- Permissions scoped to snapshot/AMI operations only
+
+**Encryption:**
+- Root volume encrypted at rest
+- SSH key generated per build (not reused)
+- Private key stored temporarily with 0600 permissions
+
+### Infrastructure Cost Optimization
+
+**Resource Cleanup:**
+- All resources destroyed after build completion
+- No persistent infrastructure costs
+- Temporary resources billed only during build
+
+**Instance Selection:**
+- Default c5.9xlarge for fast coldsnap uploads
+- Configurable via --instance-type parameter
+- Can use smaller instances for testing
+
+**Network Costs:**
+- Minimal data transfer (artifacts downloaded once)
+- Snapshot upload uses AWS internal network
+- No cross-region transfer costs
+
 ## Build Components and Interfaces
+
+## Tool Installation Process
+
+The AMI build process requires several tools to be installed on the temporary EC2 instance. Each tool is installed and verified before proceeding to the next step.
+
+### Installation Order and Dependencies
+
+1. **System Dependencies** (git, gcc)
+2. **Rust Toolchain** (required for coldsnap)
+3. **ORAS CLI** (required for artifact download)
+4. **GitHub CLI** (required for signature verification)
+5. **Coldsnap** (requires Rust, used for snapshot upload)
+
+### System Dependencies Installation
+
+**Tools:** git, gcc
+
+**Installation Method:**
+```bash
+sudo dnf install -y git gcc
+```
+
+**Purpose:**
+- git: Required for cloning coldsnap repository
+- gcc: Required for building Rust dependencies
+
+**Verification:**
+- Installation exit code checked (must be 0)
+- Errors logged and build fails if installation fails
+
+**Output:** Streamed to logger in real-time
+
+### Rust Toolchain Installation
+
+**Tool:** Rust (rustc, cargo, rustup)
+
+**Installation Method:**
+```bash
+curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+```
+
+**Installation Details:**
+- Source: https://sh.rustup.rs (official Rust installer)
+- Protocol: HTTPS with TLS 1.2 minimum
+- Mode: Non-interactive (-y flag)
+- Installation Path: /home/ec2-user/.cargo/bin/
+- Components: rustc, cargo, rustup
+
+**Purpose:**
+- Required to build coldsnap from source
+- Provides cargo package manager
+
+**Verification:**
+- Installation exit code checked (must be 0)
+- Errors logged and build fails if installation fails
+
+**Output:** Streamed to logger in real-time
+
+### ORAS CLI Installation
+
+**Tool:** ORAS (OCI Registry As Storage)
+
+**Version:** 1.3.0
+
+**Installation Method:**
+```bash
+cd /tmp
+curl -LO "https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz"
+tar -xzf oras_1.3.0_linux_amd64.tar.gz
+sudo mv oras /usr/local/bin/
+rm oras_1.3.0_linux_amd64.tar.gz
+```
+
+**Installation Details:**
+- Source: GitHub releases (oras-project/oras)
+- Architecture: linux_amd64
+- Installation Path: /usr/local/bin/oras
+- Cleanup: Temporary tar.gz file removed
+
+**Purpose:**
+- Download artifacts from GitHub Container Registry
+- Fetch artifact manifests for signature verification
+
+**Verification:**
+```bash
+oras version
+```
+- Version command executed after installation
+- Output logged to confirm successful installation
+- Build fails if verification fails
+
+**Output:** Version information logged
+
+### GitHub CLI Installation
+
+**Tool:** GitHub CLI (gh)
+
+**Installation Method:**
+```bash
+sudo dnf install dnf-utils -y
+sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+sudo dnf install gh -y
+```
+
+**Installation Details:**
+- Source: Official GitHub CLI repository
+- Package Manager: dnf (Amazon Linux 2023)
+- Repository: https://cli.github.com/packages/rpm/gh-cli.repo
+- Installation Path: /usr/bin/gh
+
+**Purpose:**
+- Verify artifact attestations using `gh attestation verify`
+- Offline verification with attestation bundles
+
+**Verification:**
+```bash
+gh version
+```
+- Version command executed after installation
+- Output logged to confirm successful installation
+- Build fails if verification fails
+
+**Output:** Version information logged
+
+### Coldsnap Installation
+
+**Tool:** Coldsnap (AWS EBS snapshot upload utility)
+
+**Installation Method:**
+```bash
+git clone https://github.com/awslabs/coldsnap.git
+cd coldsnap
+cargo install --locked coldsnap
+```
+
+**Installation Details:**
+- Source: https://github.com/awslabs/coldsnap.git (AWS Labs)
+- Build Method: Cargo (Rust package manager)
+- Flags: --locked (use exact dependency versions from Cargo.lock)
+- Installation Path: /home/ec2-user/.cargo/bin/coldsnap
+- Build Time: Several minutes (compiles from source)
+
+**Purpose:**
+- Upload raw disk images to EBS snapshots
+- Handles chunked upload and progress tracking
+
+**Verification:**
+```bash
+/home/ec2-user/.cargo/bin/coldsnap --help
+```
+- Help command executed after installation
+- Output checked for successful execution
+- Build fails if verification fails
+
+**Output:** Help text confirms installation
+
+### SSH Command Execution
+
+All tool installations are executed via SSH using the `execute_remote_command` function:
+
+**Function Signature:**
+```python
+def execute_remote_command(
+    ssh_client: paramiko.SSHClient,
+    command: str,
+    stream_output: bool = True
+) -> tuple[int, str, str]
+```
+
+**Execution Details:**
+- Non-blocking channel mode to prevent deadlock
+- Concurrent stdout/stderr reading (4096-byte chunks)
+- Real-time output streaming to logger (optional)
+- Exit status captured after command completion
+- Remaining output read after command finishes
+
+**Return Values:**
+- exit_code: Command exit status (0 = success)
+- stdout: Complete stdout as string
+- stderr: Complete stderr as string
+
+**Error Handling:**
+- Non-zero exit codes raise RuntimeError
+- Error messages include stderr output
+- Build terminates immediately on tool installation failure
+
+### Installation Verification Strategy
+
+**Per-Tool Verification:**
+- Each tool verified immediately after installation
+- Verification commands: `--version`, `--help`, or similar
+- Exit code must be 0 for verification to pass
+- Output logged for debugging
+
+**Fail-Fast Approach:**
+- Build fails immediately if any tool installation fails
+- No attempt to proceed with missing tools
+- Clear error messages indicate which tool failed
+
+**Logging:**
+- Installation progress logged at INFO level
+- Installation output streamed in real-time
+- Verification results logged with tool version
+- Errors logged at ERROR level with full context
+
+### GitHub Actions Workflow Interface
+
+## Artifact Download and Validation
+
+After signature verification succeeds, the build process downloads artifacts from GitHub Container Registry and validates their contents.
+
+### Download Process
+
+**Working Directory:**
+- Base: ~/artifacts
+- Output: ~/artifacts/build-output
+- Created with: `mkdir -p ~/artifacts`
+
+**ORAS Pull Command:**
+```bash
+cd ~/artifacts
+oras pull {artifact_ref}
+```
+
+**Execution Details:**
+- No authentication required for public repositories
+- Artifacts extracted to build-output subdirectory
+- Command output streamed to logger
+- Exit code checked (must be 0)
+
+**Downloaded Files:**
+- *.raw: Raw disk image file (KIWI build output)
+- pcr_measurements.json: PCR measurements file
+
+### File Validation
+
+**Validation Steps:**
+
+1. **Verify build-output directory exists:**
+```bash
+cd ~/artifacts/build-output && ls -lh
+```
+- Lists all downloaded files
+- Output logged for debugging
+
+2. **Verify pcr_measurements.json exists:**
+```bash
+test -f ~/artifacts/build-output/pcr_measurements.json
+```
+- Exit code 0 = file exists
+- Build fails if file missing
+
+3. **Verify raw disk image exists:**
+```bash
+cd ~/artifacts/build-output && ls *.raw
+```
+- Finds any .raw file in directory
+- Exit code 0 = at least one .raw file found
+- Build fails if no .raw file found
+
+4. **Read PCR measurements:**
+```bash
+cat ~/artifacts/build-output/pcr_measurements.json
+```
+- File contents read via SSH
+- JSON parsed in Python script
+- Build fails if JSON parsing fails
+
+### PCR Measurements Format
+
+**Expected JSON Structure:**
+```json
+{
+  "Measurements": {
+    "PCR4": "hex-encoded-sha384-hash",
+    "PCR7": "hex-encoded-sha384-hash"
+  }
+}
+```
+
+**Extraction:**
+```python
+pcr_measurements = json.loads(stdout)
+pcr4 = pcr_measurements['Measurements']['PCR4']
+pcr7 = pcr_measurements['Measurements']['PCR7']
+```
+
+**Validation:**
+- JSON must be valid
+- "Measurements" key must exist
+- "PCR4" and "PCR7" keys must exist
+- Values must be non-empty strings
+- Build fails if any validation fails
+
+### Error Handling
+
+**ORAS Pull Failures:**
+- Network connectivity issues
+- Invalid artifact reference
+- Missing artifacts in registry
+- Authentication failures (private repos)
+
+**File Validation Failures:**
+- Missing pcr_measurements.json
+- Missing .raw disk image
+- Invalid directory structure
+- Corrupted files
+
+**PCR Parsing Failures:**
+- Invalid JSON syntax
+- Missing required keys
+- Empty or null values
+- Incorrect data types
+
+**Error Response:**
+- RuntimeError raised with descriptive message
+- Stderr output included in error message
+- Build terminates immediately
+- Cleanup process still executes
+
+## Snapshot Upload and AMI Creation
+
+After artifacts are downloaded and validated, the build process uploads the raw disk image to an EBS snapshot and registers it as an AMI.
+
+### Snapshot Upload Process
+
+**Coldsnap Execution:**
+
+**Command:**
+```bash
+/home/ec2-user/.cargo/bin/coldsnap upload ~/artifacts/build-output/{image}.raw
+```
+
+**Execution Details:**
+- Full path to coldsnap binary required
+- Raw image path determined from ls *.raw output
+- Command output streamed to logger in real-time
+- Progress updates visible during upload
+- Upload duration: Several minutes depending on image size
+
+**Output Parsing:**
+
+The snapshot ID is extracted from coldsnap stdout:
+
+```python
+snapshot_id = None
+for line in stdout.split('\n'):
+    if 'snap-' in line:
+        parts = line.split()
+        for part in parts:
+            if part.startswith('snap-'):
+                snapshot_id = part
+                break
+        if snapshot_id:
+            break
+
+# Fallback: check last line
+if not snapshot_id:
+    last_line = stdout.strip().split('\n')[-1]
+    if last_line.startswith('snap-'):
+        snapshot_id = last_line.strip()
+```
+
+**Snapshot ID Format:**
+- Prefix: snap-
+- Example: snap-0123456789abcdef0
+- Must be extracted from coldsnap output
+- Build fails if snapshot ID cannot be parsed
+
+### Snapshot Completion Wait
+
+**AWS Waiter Configuration:**
+
+```python
+waiter = ec2_client.get_waiter('snapshot_completed')
+waiter.wait(
+    SnapshotIds=[snapshot_id],
+    WaiterConfig={
+        'Delay': 15,        # 15 seconds between checks
+        'MaxAttempts': 40   # Up to 10 minutes total
+    }
+)
+```
+
+**Wait Behavior:**
+- Polls snapshot status every 15 seconds
+- Maximum 40 attempts (10 minutes total)
+- Waits for snapshot state to become "completed"
+- Raises WaiterError if timeout exceeded
+- Logs progress during wait
+
+**Error Handling:**
+- WaiterError logged with full context
+- Build fails if snapshot doesn't complete
+- Cleanup process still executes
+
+### AMI Registration
+
+**Registration Parameters:**
+
+```python
+response = ec2_client.register_image(
+    Name=ami_name,
+    VirtualizationType='hvm',
+    BootMode='uefi',
+    Architecture='x86_64',
+    RootDeviceName='/dev/xvda',
+    BlockDeviceMappings=[
+        {
+            'DeviceName': '/dev/xvda',
+            'Ebs': {
+                'SnapshotId': snapshot_id
+            }
+        }
+    ],
+    TpmSupport='v2.0',
+    EnaSupport=True
+)
+```
+
+**Parameter Details:**
+
+- **Name:** `attestable-ami-imported-{architecture}-{timestamp}`
+  - Architecture: x86_64 (hardcoded)
+  - Timestamp: ISO 8601 format with UTC timezone
+  - Example: attestable-ami-imported-x86_64-2024-01-15T10:30:00+00:00
+
+- **VirtualizationType:** hvm
+  - Hardware Virtual Machine
+  - Required for modern EC2 instances
+
+- **BootMode:** uefi
+  - UEFI boot mode (not legacy BIOS)
+  - Required for TPM 2.0 support
+
+- **Architecture:** x86_64
+  - CPU architecture
+  - Currently hardcoded (not arm64)
+
+- **RootDeviceName:** /dev/xvda
+  - Root device path
+  - Standard for EBS-backed instances
+
+- **BlockDeviceMappings:**
+  - Single device: /dev/xvda
+  - EBS volume from snapshot
+  - No additional volumes
+
+- **TpmSupport:** v2.0
+  - Enables TPM 2.0 virtual device
+  - Required for attestation capabilities
+
+- **EnaSupport:** True
+  - Enhanced Networking Adapter
+  - Improves network performance
+
+**Response:**
+```python
+ami_id = response['ImageId']
+```
+
+**AMI ID Format:**
+- Prefix: ami-
+- Example: ami-0123456789abcdef0
+- Returned immediately after registration
+- AMI may not be immediately available (background processing)
+
+### Build Result Output
+
+**Result Structure:**
+
+```json
+{
+  "ami_id": "ami-0123456789abcdef0",
+  "snapshot_id": "snap-0123456789abcdef0",
+  "region": "us-east-1",
+  "build_timestamp": "2024-01-15T10:30:00+00:00",
+  "pcr_measurements": {
+    "pcr4": "hex-encoded-sha384-hash",
+    "pcr7": "hex-encoded-sha384-hash"
+  }
+}
+```
+
+**File Output:**
+- Default filename: ami_build_result.json
+- Configurable via --output-file parameter
+- Written to current working directory
+- Formatted with 2-space indentation
+
+**PCR Measurements:**
+- Extracted from downloaded pcr_measurements.json
+- Included in build result for reference
+- Used for attestation verification at runtime
+
+### Error Handling
+
+**Coldsnap Upload Failures:**
+- Network connectivity issues
+- AWS API errors
+- Insufficient IAM permissions
+- Invalid raw disk image format
+- Disk space issues
+
+**Snapshot Completion Failures:**
+- Timeout after 10 minutes
+- Snapshot enters error state
+- AWS service issues
+
+**AMI Registration Failures:**
+- Invalid snapshot ID
+- Unsupported configuration
+- Region-specific limitations
+- AWS API errors
+- Insufficient IAM permissions
+
+**Error Response:**
+- ClientError or RuntimeError raised
+- Full error message logged
+- Build terminates immediately
+- Cleanup process still executes
+
+### Success Logging
+
+**Snapshot Upload:**
+```
+Snapshot created successfully: snap-0123456789abcdef0
+```
+
+**Snapshot Completion:**
+```
+Snapshot completed successfully
+```
+
+**AMI Registration:**
+```
+AMI registered successfully: ami-0123456789abcdef0
+```
+
+All success messages logged at INFO level with resource IDs for tracking.
+
+## Cleanup Process
+
+The build process guarantees cleanup of all temporary resources, even if the build fails.
+
+### Cleanup Guarantee
+
+**Implementation:**
+```python
+try:
+    # Build process
+    ...
+except Exception as e:
+    logger.error("AMI BUILD FAILED")
+    logger.error(f"Error: {e}")
+    return 1
+finally:
+    # Cleanup infrastructure
+    logger.warning("Cleaning up infrastructure...")
+    try:
+        cleanup_infrastructure(...)
+    except Exception as cleanup_error:
+        logger.error(f"Failed to cleanup infrastructure: {cleanup_error}")
+```
+
+**Guarantee:**
+- Finally block always executes
+- Cleanup runs even if build fails
+- Cleanup runs even if exception raised
+- Cleanup errors logged but don't fail overall process
+
+### SSH Connection Cleanup
+
+**Process:**
+```python
+if ssh_client:
+    ssh_client.close()
+    ssh_client = None
+```
+
+**Timing:**
+- Executed before Terraform destroy
+- Prevents SSH connection from blocking destroy
+- Ensures clean connection termination
+
+### Terraform Infrastructure Destroy
+
+**Command:**
+```bash
+terraform destroy -auto-approve \
+  -var region={region} \
+  -var instance_type={instance_type} \
+  -var allowed_ssh_cidr={allowed_ssh_cidr}
+```
+
+**Execution Details:**
+- Working directory: terraform/build-ami
+- Same variables as terraform apply
+- Auto-approve flag (no confirmation prompt)
+- Stdout/stderr captured
+- Exit code checked
+
+**Resources Destroyed:**
+- EC2 instance
+- Security group
+- SSH key pair
+- IAM role and instance profile
+- IAM policy
+- Subnet
+- Route table and association
+- Internet gateway
+- VPC
+
+**Destruction Order:**
+- Terraform handles dependency order automatically
+- Dependent resources destroyed first
+- VPC destroyed last
+
+### SSH Key File Deletion
+
+**Process:**
+```python
+if ssh_key_path and os.path.exists(ssh_key_path):
+    try:
+        os.unlink(ssh_key_path)
+    except Exception:
+        pass
+```
+
+**Details:**
+- Temporary file created with mkstemp
+- Permissions: 0600 (owner read/write only)
+- Deleted after Terraform destroy
+- Deletion errors silently ignored
+
+### Error Handling During Cleanup
+
+**Terraform Destroy Failures:**
+- Errors logged at ERROR level
+- Full stderr output included
+- Process continues (doesn't raise exception)
+- Manual cleanup may be required
+
+**SSH Key Deletion Failures:**
+- Exceptions caught and ignored
+- File may remain on filesystem
+- No security risk (temporary file, unique per build)
+
+**Logging:**
+```
+logger.warning("Cleaning up infrastructure...")
+logger.info("Infrastructure destroyed successfully")
+# OR
+logger.error(f"Terraform destroy failed: {result.stderr}")
+```
+
+### Cleanup Verification
+
+**Success Indicators:**
+- Terraform destroy exit code 0
+- No AWS resources remain
+- SSH key file deleted
+- No error messages in logs
+
+**Failure Indicators:**
+- Terraform destroy exit code non-zero
+- Error messages in logs
+- Resources may still exist in AWS
+
+**Manual Cleanup:**
+If automated cleanup fails:
+1. Navigate to terraform/build-ami directory
+2. Run `terraform destroy` manually with same variables
+3. Verify all resources destroyed in AWS console
+4. Delete SSH key file if it still exists
+
+### Cleanup Timing
+
+**Normal Build:**
+- Cleanup after AMI registration succeeds
+- Cleanup after build result saved
+- Total cleanup time: 1-2 minutes
+
+**Failed Build:**
+- Cleanup after exception caught
+- Cleanup before script exits
+- Total cleanup time: 1-2 minutes
+
+**Interrupted Build:**
+- Cleanup may not run if process killed
+- Manual cleanup required
+- Check AWS console for orphaned resources
 
 ### GitHub Actions Workflow Interface
 
@@ -1306,6 +2196,241 @@ oras manifest fetch <artifact-path>:<tag>
 gh attestation verify oci://<artifact-path> -R <repository> -b <bundle-file>
 ```
 
+## Signature Verification Process
+
+The signature verification process ensures that artifacts are authentic and have not been tampered with before AMI creation proceeds.
+
+### Verification Steps
+
+**Step 1: Extract Repository Identity**
+
+```python
+# Parse artifact reference: ghcr.io/owner/repo:tag or ghcr.io/owner/repo:tag@sha256:digest
+parts = artifact_ref.replace('ghcr.io/', '').split(':')[0].split('/')
+if len(parts) >= 2:
+    owner = parts[0]
+    repo = parts[1]
+    identity = f"{owner}/{repo}"
+```
+
+**Example:**
+- Input: `ghcr.io/myorg/myrepo:main-20240115@sha256:abc123`
+- Owner: `myorg`
+- Repo: `myrepo`
+- Identity: `myorg/myrepo`
+
+**Error Handling:**
+- If identity cannot be determined, verification fails
+- Build terminates immediately
+- Error logged with artifact reference
+
+**Step 2: Fetch Manifest Digest**
+
+```bash
+DIGEST=$(oras manifest fetch {artifact_ref} | sha256sum | cut -d ' ' -f 1)
+```
+
+**Process:**
+- ORAS fetches artifact manifest from GHCR
+- Manifest piped to sha256sum for digest calculation
+- Digest extracted (first field from sha256sum output)
+- Digest format: 64 hex characters (sha256)
+
+**Example Output:**
+```
+abc123def456789...
+```
+
+**Error Handling:**
+- ORAS fetch failure terminates verification
+- Invalid manifest format fails verification
+- Network errors logged and verification fails
+
+**Step 3: Download Attestation Bundle**
+
+```bash
+curl -sL "https://api.github.com/repos/{owner}/{repo}/attestations/sha256:${DIGEST}" \
+    | jq -cr '.attestations[0].bundle' > bundle.json
+```
+
+**API Details:**
+- Endpoint: `https://api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest}`
+- Method: GET
+- Authentication: Not required for public repositories
+- Response: JSON array of attestations
+
+**Response Structure:**
+```json
+{
+  "attestations": [
+    {
+      "bundle": {
+        "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.1",
+        "verificationMaterial": {...},
+        "dsseEnvelope": {...}
+      }
+    }
+  ]
+}
+```
+
+**Extraction:**
+- jq extracts first attestation's bundle
+- Bundle written to bundle.json file
+- Compact output (-c flag)
+- Raw output (-r flag, no quotes)
+
+**Error Handling:**
+- curl failure (network, 404, etc.) fails verification
+- jq parsing failure fails verification
+- Empty attestations array fails verification
+- Missing bundle field fails verification
+
+**Step 4: Verify Attestation Offline**
+
+```bash
+GH_FORCE_TTY=1 gh attestation verify oci://{artifact_ref} \
+    -R {identity} \
+    -b bundle.json
+```
+
+**Command Details:**
+- **GH_FORCE_TTY=1**: Forces gh to output results (even without TTY)
+- **oci://{artifact_ref}**: Full artifact reference with oci:// prefix
+- **-R {identity}**: Repository identity (owner/repo format)
+- **-b bundle.json**: Attestation bundle file (offline verification)
+
+**Verification Process:**
+- GitHub CLI verifies Sigstore signature
+- Checks certificate chain
+- Validates artifact digest matches
+- Confirms repository identity matches
+- Verifies timestamp and expiration
+
+**Success Output:**
+```
+Loaded digest sha256:abc123... for oci://ghcr.io/owner/repo:tag
+Loaded 1 attestation from GitHub API
+✓ Verification succeeded!
+```
+
+**Failure Output:**
+```
+Error: verification failed: ...
+```
+
+**Error Handling:**
+- Non-zero exit code indicates verification failure
+- Stdout and stderr captured and logged
+- Detailed error message logged
+- Build terminates immediately
+
+### Verification Result Handling
+
+**Success:**
+```python
+if exit_code == 0:
+    logger.info("✓ Artifact attestation verification SUCCEEDED")
+    return True
+```
+
+**Failure:**
+```python
+else:
+    logger.error("✗ Artifact signature verification FAILED")
+    logger.error(f"command output: {stderr}")
+    return False
+```
+
+**Build Termination on Failure:**
+
+```python
+if not signature_valid:
+    logger.error("")
+    logger.error("=" * 80)
+    logger.error("SIGNATURE VERIFICATION FAILED")
+    logger.error("=" * 80)
+    logger.error("The artifact signature could not be verified.")
+    logger.error("This could indicate:")
+    logger.error("  - The artifact was not attested")
+    logger.error("  - The signature does not match the expected GitHub identity")
+    logger.error("  - The artifact has been tampered with")
+    logger.error("")
+    logger.error("AMI creation will NOT proceed.")
+    logger.error("Please verify the artifact reference and try again.")
+    logger.error("=" * 80)
+    raise RuntimeError("SIGNATURE VERIFICATION FAILED")
+```
+
+**Security Implications:**
+- No AMI created from unverified artifacts
+- Build fails immediately on verification failure
+- Clear error messages explain security implications
+- No bypass mechanism (verification always required)
+
+### Verification Logging
+
+**Info Level:**
+- Repository identity extracted
+- Verification process started
+- Verification succeeded
+
+**Error Level:**
+- Identity extraction failed
+- Verification command failed
+- Detailed error output
+
+**Output Streaming:**
+- Verification command output streamed to logger
+- Real-time visibility into verification process
+- Both stdout and stderr captured
+
+### Offline Verification Benefits
+
+**Security:**
+- No network calls during verification (bundle pre-downloaded)
+- Prevents MITM attacks during verification
+- Reproducible verification (same bundle, same result)
+
+**Reliability:**
+- Works without internet connectivity (after bundle download)
+- No dependency on GitHub API availability during verification
+- Faster verification (no network latency)
+
+**Auditability:**
+- Bundle file can be saved for audit trail
+- Verification can be repeated offline
+- Bundle contains complete verification material
+
+### Verification Error Scenarios
+
+**Missing Attestation:**
+- Artifact was not attested during build
+- Attestation deleted or expired
+- Wrong repository identity
+
+**Invalid Signature:**
+- Artifact modified after attestation
+- Signature verification fails
+- Certificate chain invalid
+
+**Repository Mismatch:**
+- Artifact from different repository
+- Identity doesn't match expected value
+- Forked repository with different identity
+
+**Network Errors:**
+- Cannot fetch manifest from GHCR
+- Cannot download attestation bundle from GitHub API
+- Timeout during API calls
+
+**Tool Errors:**
+- ORAS not installed or not in PATH
+- GitHub CLI not installed or not in PATH
+- jq not available (should be pre-installed on AL2023)
+
+All error scenarios result in verification failure and build termination.
+
 ### AMI Converter Script Interface
 
 **Command-Line Arguments:**
@@ -1338,42 +2463,125 @@ python scripts/build-ami.py \
 terraform/build-ami/
 ```
 
+**Files:**
+- main.tf: Resource definitions
+- variables.tf: Input variable declarations
+- outputs.tf: Output value definitions
+
 **Input Variables:**
 ```hcl
 variable "region" {
-  description = "AWS region for build instance"
-  type        = string
-}
-
-variable "instance_type" {
-  description = "EC2 instance type"
+  description = "AWS region for infrastructure"
   type        = string
 }
 
 variable "allowed_ssh_cidr" {
-  description = "CIDR block for SSH access"
+  description = "CIDR block allowed to SSH to AMI build instance"
   type        = string
+}
+
+variable "instance_type" {
+  description = "Instance type for AMI build instance"
+  type        = string
+  default     = "c5.9xlarge"
 }
 ```
 
 **Outputs:**
 ```hcl
 output "instance_id" {
-  description = "EC2 instance ID"
-  value       = aws_instance.build_instance.id
+  description = "AMI build instance ID"
+  value       = aws_instance.this.id
 }
 
 output "instance_public_ip" {
-  description = "Public IP address"
-  value       = aws_instance.build_instance.public_ip
+  description = "AMI build instance public IP"
+  value       = aws_instance.this.public_ip
 }
 
 output "ssh_private_key" {
-  description = "SSH private key in PEM format"
-  value       = tls_private_key.ssh_key.private_key_pem
+  description = "SSH private key for AMI build instance"
+  value       = tls_private_key.this.private_key_pem
   sensitive   = true
 }
+
+output "vpc_id" {
+  description = "VPC ID"
+  value       = aws_vpc.this.id
+}
+
+output "security_group_id" {
+  description = "Security group ID for AMI build instance"
+  value       = aws_security_group.this.id
+}
 ```
+
+**Resources Created:**
+
+1. **aws_vpc.this**
+   - CIDR: 10.2.0.0/16
+   - DNS hostnames: enabled
+   - DNS support: enabled
+
+2. **aws_subnet.this**
+   - CIDR: 10.2.1.0/24
+   - Public IP on launch: enabled
+   - AZ: First available in region
+
+3. **aws_internet_gateway.this**
+   - Attached to VPC
+
+4. **aws_route_table.this**
+   - Route: 0.0.0.0/0 → IGW
+
+5. **aws_route_table_association.this**
+   - Associates route table with subnet
+
+6. **aws_security_group.this**
+   - Ingress: SSH (22) from allowed_ssh_cidr
+   - Egress: All traffic to 0.0.0.0/0
+
+7. **tls_private_key.this**
+   - Algorithm: RSA
+   - Bits: 4096
+
+8. **aws_key_pair.this**
+   - Public key from tls_private_key
+
+9. **aws_iam_role.this**
+   - Assume role policy for EC2
+
+10. **aws_iam_role_policy.this**
+    - EC2 snapshot/image permissions
+    - EBS direct API permissions
+
+11. **aws_iam_instance_profile.this**
+    - Links role to instance
+
+12. **aws_instance.this**
+    - AMI: Amazon Linux 2023 (latest)
+    - Instance type: from variable
+    - Subnet: public subnet
+    - Security group: build security group
+    - IAM instance profile: build instance profile
+    - Key pair: generated key
+    - Metadata options: IMDSv2 required
+    - Root volume: 30GB gp3, encrypted
+
+**Data Sources:**
+
+1. **data.aws_availability_zones.available**
+   - Lists available AZs in region
+
+2. **data.aws_ami.amazon_linux_2023**
+   - Finds latest AL2023 AMI
+   - Filters: x86_64, hvm, kernel-*
+
+3. **data.aws_iam_policy_document.assume_role**
+   - EC2 assume role policy
+
+4. **data.aws_iam_policy_document.this**
+   - Snapshot/image permissions policy
 
 ### SSH Command Execution Interface
 
@@ -1384,10 +2592,10 @@ def execute_remote_command(
     stream_output: bool = True
 ) -> tuple[int, str, str]:
     """
-    Execute command on remote instance.
+    Execute command on remote instance via SSH.
     
     Args:
-        ssh_client: Connected SSH client
+        ssh_client: Connected paramiko SSHClient
         command: Shell command to execute
         stream_output: Whether to stream output to logger
     
@@ -1396,37 +2604,283 @@ def execute_remote_command(
     """
 ```
 
+**Implementation Details:**
+
+**Channel Configuration:**
+- PTY: Disabled (get_pty=False)
+- Non-blocking mode: Enabled to prevent deadlock
+- Concurrent stdout/stderr reading
+
+**Output Handling:**
+```python
+# Set channels to non-blocking
+stdout.channel.setblocking(0)
+stderr.channel.setblocking(0)
+
+# Read concurrently while command runs
+while not stdout.channel.exit_status_ready():
+    if stdout.channel.recv_ready():
+        data = stdout.channel.recv(4096).decode('utf-8', errors='replace')
+        # Process stdout
+    
+    if stderr.channel.recv_stderr_ready():
+        data = stderr.channel.recv_stderr(4096).decode('utf-8', errors='replace')
+        # Process stderr
+    
+    time.sleep(0.1)
+
+# Read remaining data after command completes
+while stdout.channel.recv_ready():
+    # Read remaining stdout
+
+while stderr.channel.recv_stderr_ready():
+    # Read remaining stderr
+```
+
+**Output Streaming:**
+- If stream_output=True: Log each line to logger
+- Stdout lines: INFO level with "  " prefix
+- Stderr lines: WARNING level with "  " prefix
+- Lines stripped of trailing whitespace
+- Empty lines skipped
+
+**Exit Code:**
+```python
+exit_code = stdout.channel.recv_exit_status()
+```
+
+**Return Values:**
+- exit_code: Integer (0 = success)
+- stdout: Complete stdout as single string (lines joined with \n)
+- stderr: Complete stderr as single string (lines joined with \n)
+
+**Error Handling:**
+- Decoding errors: 'replace' mode (invalid UTF-8 replaced with �)
+- No automatic exception on non-zero exit code
+- Caller responsible for checking exit code
+
+**Usage Examples:**
+
+**With output streaming:**
+```python
+exit_code, stdout, stderr = execute_remote_command(
+    ssh_client,
+    "sudo dnf install -y git gcc",
+    stream_output=True
+)
+if exit_code != 0:
+    raise RuntimeError(f"Installation failed: {stderr}")
+```
+
+**Without output streaming:**
+```python
+exit_code, stdout, stderr = execute_remote_command(
+    ssh_client,
+    "oras version",
+    stream_output=False
+)
+if exit_code == 0:
+    logger.info(f"ORAS installed: {stdout.strip()}")
+```
+
+**Multi-line commands:**
+```python
+command = """
+cd /tmp && \
+curl -LO "https://example.com/file.tar.gz" && \
+tar -xzf file.tar.gz && \
+sudo mv binary /usr/local/bin/
+"""
+exit_code, stdout, stderr = execute_remote_command(ssh_client, command)
+```
+
 ### Coldsnap Interface
+
+**Installation:**
+```bash
+git clone https://github.com/awslabs/coldsnap.git
+cd coldsnap
+cargo install --locked coldsnap
+```
+
+**Binary Location:**
+```
+/home/ec2-user/.cargo/bin/coldsnap
+```
 
 **Upload Command:**
 ```bash
-coldsnap upload <raw-disk-image-path>
+/home/ec2-user/.cargo/bin/coldsnap upload <raw-disk-image-path>
 ```
+
+**Command Details:**
+- Full path required (not in default PATH)
+- Input: Raw disk image file (.raw)
+- Output: Snapshot ID to stdout
+- Progress: Streamed to stdout during upload
+- Duration: Several minutes depending on image size
 
 **Output Format:**
 ```
 Uploading snapshot...
-Progress: 100%
-Snapshot ID: snap-xxxxx
+[Progress indicators]
+snap-0123456789abcdef0
 ```
+
+**Snapshot ID Extraction:**
+
+The snapshot ID is parsed from stdout using multiple strategies:
+
+1. **Search all lines for snap- prefix:**
+```python
+for line in stdout.split('\n'):
+    if 'snap-' in line:
+        parts = line.split()
+        for part in parts:
+            if part.startswith('snap-'):
+                snapshot_id = part
+                break
+```
+
+2. **Fallback to last line:**
+```python
+if not snapshot_id:
+    last_line = stdout.strip().split('\n')[-1]
+    if last_line.startswith('snap-'):
+        snapshot_id = last_line.strip()
+```
+
+**Error Handling:**
+- Non-zero exit code: Upload failed
+- Cannot parse snapshot ID: RuntimeError raised
+- Stderr logged for debugging
+
+**AWS Credentials:**
+- Obtained from instance IAM role
+- No explicit credentials required
+- Permissions: ebs:StartSnapshot, ebs:PutSnapshotBlock, ebs:CompleteSnapshot
+
+**Upload Process:**
+- Reads raw disk image in chunks
+- Uploads blocks to EBS Direct APIs
+- Creates snapshot from uploaded blocks
+- Returns snapshot ID when complete
 
 ### AWS EC2 AMI Registration Interface
 
+**Registration Function:**
 ```python
-ec2_client.register_image(
+def register_ami(
+    ec2_client: Any,
+    snapshot_id: str,
+    architecture: str,
+    ami_name: str
+) -> str:
+    """
+    Register an AMI with TPM 2.0 and UEFI boot mode.
+    
+    Args:
+        ec2_client: Boto3 EC2 client
+        snapshot_id: EBS snapshot ID
+        architecture: CPU architecture (x86_64 or arm64)
+        ami_name: Name for the AMI
+    
+    Returns:
+        AMI ID string
+    """
+```
+
+**Wait for Snapshot Completion:**
+```python
+waiter = ec2_client.get_waiter('snapshot_completed')
+waiter.wait(
+    SnapshotIds=[snapshot_id],
+    WaiterConfig={
+        'Delay': 15,        # 15 seconds between checks
+        'MaxAttempts': 40   # Up to 10 minutes total
+    }
+)
+```
+
+**Registration Call:**
+```python
+response = ec2_client.register_image(
     Name=ami_name,
     VirtualizationType='hvm',
     BootMode='uefi',
-    Architecture='x86_64',
+    Architecture=architecture,
     RootDeviceName='/dev/xvda',
-    BlockDeviceMappings=[{
-        'DeviceName': '/dev/xvda',
-        'Ebs': {'SnapshotId': snapshot_id}
-    }],
+    BlockDeviceMappings=[
+        {
+            'DeviceName': '/dev/xvda',
+            'Ebs': {
+                'SnapshotId': snapshot_id
+            }
+        }
+    ],
     TpmSupport='v2.0',
     EnaSupport=True
 )
+
+ami_id = response['ImageId']
 ```
+
+**Parameter Details:**
+
+- **Name:** AMI name (must be unique in region)
+  - Format: `attestable-ami-imported-{architecture}-{timestamp}`
+  - Example: `attestable-ami-imported-x86_64-2024-01-15T10:30:00+00:00`
+
+- **VirtualizationType:** `hvm`
+  - Hardware Virtual Machine (not paravirtual)
+  - Required for modern instance types
+
+- **BootMode:** `uefi`
+  - UEFI firmware (not legacy BIOS)
+  - Required for TPM 2.0 support
+  - Supports Secure Boot
+
+- **Architecture:** `x86_64` or `arm64`
+  - Currently hardcoded to `x86_64` in implementation
+  - Determines compatible instance types
+
+- **RootDeviceName:** `/dev/xvda`
+  - Root device path in instance
+  - Standard for EBS-backed AMIs
+
+- **BlockDeviceMappings:** Array of device mappings
+  - Single device: `/dev/xvda`
+  - EBS volume from snapshot
+  - No additional volumes configured
+
+- **TpmSupport:** `v2.0`
+  - Enables TPM 2.0 virtual device
+  - Required for attestation capabilities
+  - Provides PCR measurements at runtime
+
+- **EnaSupport:** `True`
+  - Enhanced Networking Adapter
+  - Improves network performance
+  - Required for many instance types
+
+**Response:**
+```python
+{
+    'ImageId': 'ami-0123456789abcdef0'
+}
+```
+
+**Error Handling:**
+- ClientError: AWS API errors (permissions, invalid parameters, etc.)
+- WaiterError: Snapshot completion timeout or failure
+- Errors logged with full context
+- Build terminates on registration failure
+
+**AMI Availability:**
+- AMI ID returned immediately
+- AMI may not be immediately available for launch
+- Background processing required (image registration)
+- Check AMI state before launching instances
 
 ## Build Data Models
 
