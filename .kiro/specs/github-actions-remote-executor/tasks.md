@@ -401,14 +401,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 19. Checkpoint - Ensure build workflow tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 20. Create AMI converter script structure
-  - [ ] 20.1 Create scripts/build-ami.py entry point
+- [x] 20. Create AMI converter script structure
+  - [x] 20.1 Create scripts/build-ami.py entry point
     - Implement command-line argument parsing (artifact-ref, output-file, region, instance-type)
     - Set up structured logging configuration
     - Implement main execution flow with error handling and finally block for cleanup
     - _Requirements: 14.1, 19.7, 19.8, 20.5_
 
-  - [ ] 20.2 Implement configuration and validation
+  - [x] 20.2 Implement configuration and validation
     - Validate artifact reference format (ghcr.io/owner/repo:tag format)
     - Validate AWS region
     - Validate output file path

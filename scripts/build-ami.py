@@ -46,6 +46,100 @@ def get_user_public_ip() -> str:
         logger.info(f"Detected my public IP: {my_ip}")
         return my_ip
 
+def validate_artifact_reference(artifact_ref: str) -> None:
+    """
+    Validate artifact reference format.
+
+    Expected format: ghcr.io/owner/repo:tag or ghcr.io/owner/repo:tag@sha256:digest
+
+    Args:
+        artifact_ref: GitHub Container Registry artifact reference
+
+    Raises:
+        ValueError: If artifact reference format is invalid
+    """
+    if not artifact_ref.startswith('ghcr.io/'):
+        raise ValueError(
+            f"Invalid artifact reference format: {artifact_ref}. "
+            "Expected format: ghcr.io/owner/repo:tag"
+        )
+
+    # Remove ghcr.io/ prefix and check for owner/repo structure
+    path = artifact_ref.replace('ghcr.io/', '')
+
+    # Split by : to separate path from tag/digest
+    if ':' not in path:
+        raise ValueError(
+            f"Invalid artifact reference format: {artifact_ref}. "
+            "Missing tag. Expected format: ghcr.io/owner/repo:tag"
+        )
+
+    repo_path = path.split(':')[0]
+    parts = repo_path.split('/')
+
+    if len(parts) < 2:
+        raise ValueError(
+            f"Invalid artifact reference format: {artifact_ref}. "
+            "Expected format: ghcr.io/owner/repo:tag"
+        )
+
+    logger.info(f"Artifact reference validated: {artifact_ref}")
+
+
+def validate_aws_region(region: str) -> None:
+    """
+    Validate AWS region format.
+
+    Args:
+        region: AWS region name
+
+    Raises:
+        ValueError: If region format is invalid
+    """
+    # Basic validation - AWS regions follow pattern: us-east-1, eu-west-2, etc.
+    import re
+    region_pattern = r'^[a-z]{2}-[a-z]+-\d+$'
+
+    if not re.match(region_pattern, region):
+        raise ValueError(
+            f"Invalid AWS region format: {region}. "
+            "Expected format: us-east-1, eu-west-2, etc."
+        )
+
+    logger.info(f"AWS region validated: {region}")
+
+
+def validate_output_file_path(output_file: str) -> None:
+    """
+    Validate output file path.
+
+    Args:
+        output_file: Path to output file
+
+    Raises:
+        ValueError: If output file path is invalid
+    """
+    # Check if parent directory exists or can be created
+    output_path = Path(output_file)
+    parent_dir = output_path.parent
+
+    if parent_dir != Path('.') and not parent_dir.exists():
+        try:
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created output directory: {parent_dir}")
+        except Exception as e:
+            raise ValueError(
+                f"Cannot create output directory {parent_dir}: {e}"
+            )
+
+    # Check if we can write to the location
+    if output_path.exists() and not os.access(output_path, os.W_OK):
+        raise ValueError(
+            f"Output file is not writable: {output_file}"
+        )
+
+    logger.info(f"Output file path validated: {output_file}")
+
 def provision_ami_build_instance(
     region: str,
     instance_type: str,
@@ -847,6 +941,17 @@ def main() -> int:
     logger.info(f"Artifact Reference: {args.artifact_ref}")
     logger.info(f"Region: {args.region}")
     logger.info(f"Instance Type: {args.instance_type}")
+    
+    # Validate configuration (Requirement 14.2)
+    logger.info("")
+    logger.info("Validating configuration...")
+    try:
+        validate_artifact_reference(args.artifact_ref)
+        validate_aws_region(args.region)
+        validate_output_file_path(args.output_file)
+    except ValueError as e:
+        logger.error(f"Configuration validation failed: {e}")
+        return 1
 
     # Initialize AWS clients
     ec2_client = boto3.client('ec2', region_name=args.region)
