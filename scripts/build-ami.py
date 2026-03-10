@@ -423,16 +423,19 @@ def execute_remote_command(
 
 def install_system_dependencies(ssh_client: paramiko.SSHClient) -> None:
     """
-    Install system dependencies on the instance via SSH.
+    Install system dependencies (git and gcc) on the instance via SSH.
     
-    Installs git, gcc, and Rust toolchain (cargo) required for building coldsnap.
+    Requirements: 16.1
     
     Args:
         ssh_client: Connected paramiko SSHClient
+        
+    Raises:
+        RuntimeError: If installation fails
     """
-    logger.info("Installing system dependencies...")
+    logger.info("Installing system dependencies (git, gcc)...")
     
-    # Install git and gcc
+    # Install git and gcc via dnf package manager
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
         "sudo dnf install -y git gcc",
@@ -442,9 +445,25 @@ def install_system_dependencies(ssh_client: paramiko.SSHClient) -> None:
         raise RuntimeError(f"Failed to install system packages: {stderr}")
     
     logger.info("  ✓ git and gcc installed")
+
+def install_rust(ssh_client: paramiko.SSHClient) -> None:
+    """
+    Install Rust toolchain on the instance via SSH.
     
-    # Install Rust toolchain
+    Downloads and executes rustup installer from sh.rustup.rs with -y flag.
+    Installation path: /home/ec2-user/.cargo/bin/
+    
+    Requirements: 16.2
+    
+    Args:
+        ssh_client: Connected paramiko SSHClient
+        
+    Raises:
+        RuntimeError: If installation fails
+    """
     logger.info("Installing Rust toolchain...")
+    
+    # Download and execute rustup installer
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
         'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y',
@@ -453,23 +472,30 @@ def install_system_dependencies(ssh_client: paramiko.SSHClient) -> None:
     if exit_code != 0:
         raise RuntimeError(f"Failed to install Rust: {stderr}")
     
-    logger.info("  ✓ Rust toolchain installed")
+    logger.info("  ✓ Rust toolchain installed at /home/ec2-user/.cargo/bin/")
 
 def install_oras(ssh_client: paramiko.SSHClient) -> None:
     """
-    Install ORAS CLI on the EC2 instance via SSH.
+    Install ORAS CLI version 1.3.0 on the EC2 instance via SSH.
     
-    Downloads and installs ORAS from GitHub releases.
+    Downloads ORAS CLI from GitHub releases (linux_amd64.tar.gz), extracts to /tmp,
+    moves binary to /usr/local/bin/oras, and removes temporary tar.gz file.
+    Verifies installation by executing oras version command.
+    
+    Requirements: 16.3, 16.4, 16.8
     
     Args:
         ssh_client: Connected paramiko SSHClient
+        
+    Raises:
+        RuntimeError: If installation or verification fails
     """
     logger.info("Installing ORAS CLI...")
     
     # ORAS version to install
     oras_version = "1.3.0"
     
-    # Download ORAS
+    # Download ORAS from GitHub releases, extract, and install
     download_cmd = f"""
     cd /tmp && \
     curl -LO "https://github.com/oras-project/oras/releases/download/v{oras_version}/oras_{oras_version}_linux_amd64.tar.gz" && \
@@ -478,12 +504,12 @@ def install_oras(ssh_client: paramiko.SSHClient) -> None:
     rm oras_{oras_version}_linux_amd64.tar.gz
     """
     
-    exit_code, stdout, stderr = execute_remote_command(ssh_client, download_cmd)
+    exit_code, stdout, stderr = execute_remote_command(ssh_client, download_cmd, stream_output=True)
     
     if exit_code != 0:
         raise RuntimeError(f"Failed to install ORAS: {stderr}")
     
-    # Verify installation
+    # Verify installation by executing oras version command
     exit_code, stdout, _ = execute_remote_command(
         ssh_client,
         "oras version",
@@ -499,24 +525,32 @@ def install_github_cli(ssh_client: paramiko.SSHClient) -> None:
     """
     Install GitHub CLI on the instance via SSH.
     
+    Adds gh-cli.repo repository configuration via dnf config-manager,
+    installs gh package via dnf, and verifies installation by executing gh version command.
+    
+    Requirements: 16.5, 16.9
+    
     Args:
         ssh_client: Connected paramiko SSHClient
+        
+    Raises:
+        RuntimeError: If installation or verification fails
     """
     logger.info("Installing GitHub CLI...")
     
-    # Install GitHub cli using yun
+    # Add gh-cli.repo repository and install gh package via dnf
     install_cmd = f"""
     sudo dnf install dnf-utils -y && \
     sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && \
     sudo dnf install gh -y
     """
     
-    exit_code, stdout, stderr = execute_remote_command(ssh_client, install_cmd)
+    exit_code, stdout, stderr = execute_remote_command(ssh_client, install_cmd, stream_output=True)
     
     if exit_code != 0:
         raise RuntimeError(f"Failed to install GitHub CLI: {stderr}")
     
-    # Verify installation
+    # Verify installation by executing gh version command
     exit_code, stdout, _ = execute_remote_command(
         ssh_client,
         "gh version",
@@ -532,33 +566,42 @@ def install_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     """
     Install coldsnap on the instance via SSH.
     
-    Builds and installs coldsnap from the AWS Labs GitHub repository using Cargo.
+    Clones coldsnap from https://github.com/awslabs/coldsnap.git,
+    builds and installs using cargo install --locked coldsnap.
+    Installation path: /home/ec2-user/.cargo/bin/coldsnap
+    Verifies installation by executing coldsnap --help command.
 
     See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/build-sample-ami.html
     
+    Requirements: 16.6, 16.7, 16.10
+    
     Args:
         ssh_client: Connected paramiko SSHClient
+        
+    Raises:
+        RuntimeError: If installation or verification fails
     """
     logger.info("Installing coldsnap...")
     
-    # Clone coldsnap repository
+    # Clone coldsnap repository from GitHub
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        "git clone https://github.com/awslabs/coldsnap.git"
+        "git clone https://github.com/awslabs/coldsnap.git",
+        stream_output=True
     )
     if exit_code != 0:
         raise RuntimeError(f"Failed to clone coldsnap repository: {stderr}")
     
-    # Build and install coldsnap using Cargo
+    # Build and install coldsnap using cargo install --locked
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        "cd coldsnap && cargo install --locked coldsnap",
+        "cd coldsnap && /home/ec2-user/.cargo/bin/cargo install --locked coldsnap",
         stream_output=True
     )
     if exit_code != 0:
         raise RuntimeError(f"Failed to install coldsnap: {stderr}")
     
-    # Verify installation
+    # Verify installation by executing coldsnap --help command
     exit_code, stdout, _ = execute_remote_command(
         ssh_client,
         "/home/ec2-user/.cargo/bin/coldsnap --help",
@@ -566,9 +609,56 @@ def install_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     )
     
     if exit_code == 0:
-        logger.info(f"  ✓ coldsnap installed successfully")
+        logger.info(f"  ✓ coldsnap installed at /home/ec2-user/.cargo/bin/coldsnap")
     else:
         raise RuntimeError("Failed to verify coldsnap installation")
+
+def install_all_tools(ssh_client: paramiko.SSHClient) -> None:
+    """
+    Install all required tools on the build instance in sequence.
+    
+    Executes installation functions in order: system dependencies, Rust, ORAS,
+    GitHub CLI, and coldsnap. Logs installation progress at INFO level.
+    Terminates build immediately if any tool installation fails.
+    
+    Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8, 16.9, 16.10, 16.11, 16.12
+    
+    Args:
+        ssh_client: Connected paramiko SSHClient
+        
+    Raises:
+        RuntimeError: If any tool installation fails with descriptive error
+    """
+    logger.info("Installing all required tools...")
+    logger.info("")
+    
+    try:
+        # Install system dependencies (git, gcc)
+        install_system_dependencies(ssh_client)
+        logger.info("")
+        
+        # Install Rust toolchain
+        install_rust(ssh_client)
+        logger.info("")
+        
+        # Install ORAS CLI
+        install_oras(ssh_client)
+        logger.info("")
+        
+        # Install GitHub CLI
+        install_github_cli(ssh_client)
+        logger.info("")
+        
+        # Install coldsnap
+        install_coldsnap(ssh_client)
+        logger.info("")
+        
+        logger.info("✓ All tools installed successfully")
+        
+    except RuntimeError as e:
+        logger.error(f"Tool installation failed: {e}")
+        logger.error("Build process will terminate immediately")
+        raise
 
 def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -> dict:
     """
@@ -997,10 +1087,7 @@ def main() -> int:
         logger.info("Installing Tools on AMI build Instance")
         logger.info("=" * 80)
         
-        install_system_dependencies(ssh_client)
-        install_oras(ssh_client)
-        install_github_cli(ssh_client)
-        install_coldsnap(ssh_client)
+        install_all_tools(ssh_client)
 
         # Verify artifact signature
         logger.info("")

@@ -493,8 +493,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 79: SSH Keepalive Maintenance**
     - **Validates: Requirements 15.4**
 
-- [ ] 23. Implement SSH command execution utility
-  - [ ] 23.1 Create execute_remote_command function
+- [x] 23. Implement SSH command execution utility
+  - [x] 23.1 Create execute_remote_command function
     - Accept ssh_client, command, and stream_output parameters
     - Set channel to non-blocking mode to prevent deadlock
     - Read stdout and stderr concurrently in 4096-byte chunks
@@ -504,15 +504,15 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle UTF-8 decoding errors with 'replace' mode
     - _Requirements: 16.1, 16.2, 16.11_
 
-- [ ] 24. Implement tool installation functions
-  - [ ] 24.1 Create install_system_dependencies function
+- [x] 24. Implement tool installation functions
+  - [x] 24.1 Create install_system_dependencies function
     - Install git and gcc via dnf package manager
     - Stream installation output to logger
     - Verify installation exit code (must be 0)
     - Raise RuntimeError on installation failure
     - _Requirements: 16.1_
 
-  - [ ] 24.2 Create install_rust function
+  - [x] 24.2 Create install_rust function
     - Download and execute rustup installer from sh.rustup.rs with -y flag
     - Installation path: /home/ec2-user/.cargo/bin/
     - Stream installation output to logger
@@ -520,7 +520,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise RuntimeError on installation failure
     - _Requirements: 16.2_
 
-  - [ ] 24.3 Create install_oras function
+  - [x] 24.3 Create install_oras function
     - Download ORAS CLI version 1.3.0 from GitHub releases (linux_amd64.tar.gz)
     - Extract to /tmp and move binary to /usr/local/bin/oras
     - Remove temporary tar.gz file
@@ -529,7 +529,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise RuntimeError on installation or verification failure
     - _Requirements: 16.3, 16.4, 16.8_
 
-  - [ ] 24.4 Create install_github_cli function
+  - [x] 24.4 Create install_github_cli function
     - Add gh-cli.repo repository configuration via dnf config-manager
     - Install gh package via dnf
     - Verify installation by executing gh version command
@@ -537,7 +537,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise RuntimeError on installation or verification failure
     - _Requirements: 16.5, 16.9_
 
-  - [ ] 24.5 Create install_coldsnap function
+  - [x] 24.5 Create install_coldsnap function
     - Clone coldsnap from https://github.com/awslabs/coldsnap.git
     - Build and install using cargo install --locked coldsnap
     - Installation path: /home/ec2-user/.cargo/bin/coldsnap
@@ -546,14 +546,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise RuntimeError on installation or verification failure
     - _Requirements: 16.6, 16.7, 16.10_
 
-  - [ ] 24.6 Create install_all_tools orchestration function
+  - [x] 24.6 Create install_all_tools orchestration function
     - Execute installation functions in sequence: system deps, Rust, ORAS, GitHub CLI, coldsnap
     - Handle installation failures with descriptive errors
     - Log installation progress at INFO level
     - Terminate build immediately if any tool installation fails
     - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8, 16.9, 16.10, 16.11, 16.12_
 
-  - [ ] 24.7 Write property tests for tool installation
+  - [x] 24.7 Write property tests for tool installation
     - **Property 70: Tool Installation Verification**
     - **Validates: Requirements 16.8, 16.9, 16.10**
 
