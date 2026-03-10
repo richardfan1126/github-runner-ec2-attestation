@@ -415,14 +415,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Detect user's public IP address using checkip.amazonaws.com
     - _Requirements: 14.2_
 
-- [ ] 21. Create Terraform infrastructure module
-  - [ ] 21.1 Create terraform/build-ami/ module structure
+- [x] 21. Create Terraform infrastructure module
+  - [x] 21.1 Create terraform/build-ami/ module structure
     - Define variables (region, allowed_ssh_cidr, instance_type with default c5.9xlarge)
     - Configure AWS provider with region variable
     - Create data sources for availability zones and Amazon Linux 2023 AMI
     - _Requirements: 14.1_
 
-  - [ ] 21.2 Define VPC and networking resources
+  - [x] 21.2 Define VPC and networking resources
     - Create VPC with CIDR 10.2.0.0/16, DNS hostnames and support enabled
     - Create public subnet with CIDR 10.2.1.0/24 in first availability zone
     - Create Internet Gateway attached to VPC
@@ -430,24 +430,24 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Create route table association with public subnet
     - _Requirements: 14.3, 14.4, 14.5_
 
-  - [ ] 21.3 Define security group with SSH access
+  - [x] 21.3 Define security group with SSH access
     - Allow SSH (port 22) ingress only from allowed_ssh_cidr variable
     - Allow all outbound traffic (0.0.0.0/0)
     - Attach to VPC
     - _Requirements: 14.6_
 
-  - [ ] 21.4 Define SSH key pair generation
+  - [x] 21.4 Define SSH key pair generation
     - Generate 4096-bit RSA key pair using tls_private_key resource
     - Create aws_key_pair with public key
     - _Requirements: 14.7_
 
-  - [ ] 21.5 Define IAM role and instance profile
+  - [x] 21.5 Define IAM role and instance profile
     - Create IAM role with EC2 assume role policy
     - Create IAM policy with EC2 snapshot/image and EBS direct API permissions
     - Create IAM instance profile linking role to instance
     - _Requirements: 14.10_
 
-  - [ ] 21.6 Define EC2 instance resource
+  - [x] 21.6 Define EC2 instance resource
     - Use Amazon Linux 2023 AMI (latest, x86_64, hvm)
     - Configure instance type from variable
     - Attach to public subnet with auto-assign public IP
@@ -457,7 +457,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Configure root volume (30GB gp3, encrypted)
     - _Requirements: 14.1, 14.8, 14.9_
 
-  - [ ] 21.7 Define outputs
+  - [x] 21.7 Define outputs
     - Output instance_id
     - Output instance_public_ip
     - Output ssh_private_key (sensitive)
@@ -465,7 +465,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Output security_group_id
     - _Requirements: 14.1_
 
-  - [ ] 21.8 Write property tests for infrastructure provisioning
+  - [x] 21.8 Write property tests for infrastructure provisioning
     - **Property 69: SSH Access Configuration**
     - **Property 78: Terraform State Isolation**
     - **Validates: Requirements 14.3, 14.6**

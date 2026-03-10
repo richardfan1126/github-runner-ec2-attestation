@@ -1,15 +1,15 @@
 variable "region" {
-  description = "AWS region for infrastructure"
+  description = "AWS region for the build instance"
   type        = string
 }
 
 variable "allowed_ssh_cidr" {
-  description = "CIDR block allowed to SSH to AMI build instance"
+  description = "CIDR block allowed to SSH to the build instance"
   type        = string
 }
 
 variable "instance_type" {
-  description = "Instance type for AMI build instance"
+  description = "EC2 instance type for the build instance"
   type        = string
   default     = "c5.9xlarge"
 }
