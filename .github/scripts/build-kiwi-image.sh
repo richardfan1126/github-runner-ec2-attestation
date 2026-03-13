@@ -49,6 +49,25 @@ trap "rm -rf ${TEMP_IMAGE_DIR}" EXIT
 echo "Copying image description files to temporary directory..."
 cp -r "${IMAGE_DESCRIPTION_DIR}"/* "${TEMP_IMAGE_DIR}/"
 
+# Copy pyproject.toml and uv.lock to the image description directory
+echo "Copying pyproject.toml and uv.lock..."
+if [ ! -f "${GITHUB_WORKSPACE}/pyproject.toml" ]; then
+    echo "::error::pyproject.toml not found in workspace root"
+    exit 1
+fi
+
+if [ ! -f "${GITHUB_WORKSPACE}/uv.lock" ]; then
+    echo "::error::uv.lock not found in workspace root"
+    exit 1
+fi
+
+# Create a directory for build dependencies
+mkdir -p "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build"
+cp "${GITHUB_WORKSPACE}/pyproject.toml" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
+cp "${GITHUB_WORKSPACE}/uv.lock" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
+
+echo "✓ pyproject.toml and uv.lock copied to image description directory"
+
 # Make scripts executable
 chmod +x "${TEMP_IMAGE_DIR}/config.sh"
 chmod +x "${TEMP_IMAGE_DIR}/edit_boot_install.sh"

@@ -335,14 +335,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Configure build environment
     - _Requirements: 11.1, 11.2_
 
-  - [ ] 17.2 Create KIWI image description files
+  - [x] 17.2 Create KIWI image description files
     - Define disk image configuration
     - Configure boot loader and partitions
     - Specify packages and system configuration
     - Include pyproject.toml and uv.lock in image description directory
     - _Requirements: 11.4_
   
-  - [ ] 17.2.1 Create KIWI configuration script (config.sh) for Python dependencies
+  - [x] 17.2.1 Create KIWI configuration script (config.sh) for Python dependencies
     - Create config.sh script that executes during KIWI image preparation phase
     - Install uv package manager (via pip or curl from astral.sh/uv/install.sh)
     - Run uv sync --frozen to install dependencies from pyproject.toml to system Python
@@ -351,7 +351,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Fail KIWI build if dependency installation or verification fails
     - _Requirements: 12.9, 12.10, 12.11, 12.12, 12.13, 12.14, 12.15_
 
-  - [ ] 17.3 Create build script (.github/scripts/build-kiwi-image.sh)
+  - [x] 17.3 Create build script (.github/scripts/build-kiwi-image.sh)
     - Configure loop device setup on host
     - Ensure pyproject.toml and uv.lock are in KIWI image description directory
     - Execute KIWI NG build in Docker container
