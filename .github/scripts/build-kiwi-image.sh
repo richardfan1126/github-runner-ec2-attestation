@@ -67,10 +67,21 @@ cp "${GITHUB_WORKSPACE}/pyproject.toml" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 cp "${GITHUB_WORKSPACE}/uv.lock" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 
 # Pre-download Python dependency wheels (config.sh has no network access)
+# Detect the Python version inside the KIWI builder image so we download
+# wheels that are compatible with the target image (AL2023 ships Python 3.9,
+# while the GitHub Actions runner may have a newer version).
+TARGET_PYTHON_VERSION=$(docker run --rm kiwi-builder:latest python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+echo "Target Python version inside builder image: ${TARGET_PYTHON_VERSION}"
+
 echo "Pre-downloading Python dependency wheels..."
 mkdir -p "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels"
 pip3 download \
     --dest "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels" \
+    --python-version "${TARGET_PYTHON_VERSION}" \
+    --only-binary=:all: \
+    --platform manylinux2014_x86_64 \
+    --platform manylinux_2_17_x86_64 \
+    --platform linux_x86_64 \
     fastapi">=0.115.0" uvicorn">=0.32.0" requests">=2.32.0"
 
 echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
