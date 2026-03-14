@@ -30,11 +30,6 @@ jobs:
         run: |
           docker build -t kiwi-builder:latest -f .github/docker/Dockerfile.kiwi-builder .
       
-      - name: Configure loop devices
-        run: |
-          sudo modprobe loop
-          sudo losetup -f || true
-      
       - name: Build KIWI image
         run: |
           chmod +x .github/scripts/build-kiwi-image.sh
