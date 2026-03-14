@@ -66,7 +66,14 @@ mkdir -p "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build"
 cp "${GITHUB_WORKSPACE}/pyproject.toml" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 cp "${GITHUB_WORKSPACE}/uv.lock" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 
-echo "✓ pyproject.toml and uv.lock copied to image description directory"
+# Pre-download Python dependency wheels (config.sh has no network access)
+echo "Pre-downloading Python dependency wheels..."
+mkdir -p "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels"
+pip3 download \
+    --dest "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels" \
+    fastapi">=0.115.0" uvicorn">=0.32.0" requests">=2.32.0"
+
+echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
 
 # Make scripts executable
 chmod +x "${TEMP_IMAGE_DIR}/config.sh"

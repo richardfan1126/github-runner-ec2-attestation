@@ -1297,53 +1297,42 @@ The project maintains two separate Python dependency configurations to ensure th
 
 ### KIWI Image Build Process with Python Dependencies
 
-The KIWI image build process includes installing Python dependencies from pyproject.toml into the system Python environment. This ensures the remote executor service has all required libraries available at runtime.
+The KIWI image build process includes installing Python dependencies into the system Python environment. This ensures the remote executor service has all required libraries available at runtime.
+
+**Key Constraint:** The KIWI `config.sh` script runs inside a Docker container with no network access (no DNS, no pip index, no curl). All package downloads must happen before the KIWI build phase.
 
 **Build Phase Integration:**
 
-The Python dependency installation is integrated into the KIWI image build workflow through the following steps:
+The Python dependency installation is split across two phases:
 
-1. **Dependency File Preparation:**
-   - The build workflow ensures pyproject.toml and uv.lock are present in the repository
-   - These files are included in the KIWI image description directory
-   - KIWI NG copies these files into the image build context automatically
+1. **Pre-Download Phase (build-kiwi-image.sh — has network access):**
+   - The build script runs on the GitHub Actions runner with full network access
+   - It uses `pip3 download` to fetch all wheel files for the project dependencies (fastapi, uvicorn, requests and their transitive dependencies)
+   - Wheels are saved to `${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels/`
+   - pyproject.toml and uv.lock are also copied to the build context for reference
 
-2. **KIWI Configuration Script (config.sh):**
-   - The KIWI image description includes a config.sh script that executes during image preparation
-   - This script runs inside the image being built (chroot environment)
-   - The script has access to pyproject.toml and uv.lock from the image context
+2. **Offline Installation Phase (config.sh — no network access):**
+   - The KIWI config.sh script runs inside the image being built (chroot environment)
+   - It installs dependencies from the pre-downloaded wheels using `pip3 install --no-index --find-links /tmp/kiwi-build/wheels /tmp/kiwi-build/wheels/*.whl`
+   - No network access is required — all packages come from the local wheel cache
+   - No `uv` package manager is needed inside the image
 
-3. **uv Package Manager Installation:**
-   - The config.sh script installs the uv package manager
-   - Installation methods:
-     - Via pip: `pip install uv`
-     - Via curl: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-   - uv is installed to a location accessible in the system PATH
-
-4. **Python Dependency Installation:**
-   - After uv is installed, the script runs dependency installation
-   - Command: `uv sync --frozen` (uses uv.lock for exact versions)
-   - Alternative: `uv pip install -r pyproject.toml` (if sync not used)
-   - Dependencies are installed to the system Python environment (e.g., /usr/lib/python3.x/site-packages)
-   - No virtual environment is created - system-wide installation for service access
-
-5. **Installation Verification:**
+3. **Installation Verification:**
    - The config.sh script verifies critical packages are importable
-   - Example: `python3 -c "import fastapi, uvicorn, requests"`
+   - Example: `python3 -c "import fastapi"`, `python3 -c "import uvicorn"`, `python3 -c "import requests"`
    - If verification fails, the KIWI build fails with an error
    - Successful verification is logged for build audit trail
 
-6. **Image Finalization:**
+4. **Image Finalization:**
    - After dependency installation and verification, KIWI continues with image finalization
    - The resulting .raw disk image contains the system Python with all installed dependencies
    - The remote executor service can import and use these libraries when the AMI is launched
 
 **Build Script Location:**
 
-The dependency installation logic is typically located in:
-- `kiwi-image-description/config.sh` - Main configuration script executed during KIWI build
-- Or in a custom script called from config.sh
-- The script executes in the chroot environment of the image being built
+The dependency installation logic is split across:
+- `.github/scripts/build-kiwi-image.sh` — Pre-downloads wheels (network phase)
+- `kiwi-descriptions/config.sh` — Installs from local wheels (offline phase)
 
 **Dependency Isolation:**
 
@@ -1351,7 +1340,7 @@ This process ensures:
 - Only remote executor dependencies (from pyproject.toml) are installed in the image
 - Script dependencies (from scripts/pyproject.toml) remain outside the image
 - The KIWI image stays minimal with only runtime dependencies
-- Build reproducibility through uv.lock pinned versions
+- The config.sh phase works reliably without any network dependency
 
 ## Infrastructure Provisioning Architecture
 
@@ -2262,52 +2251,41 @@ If automated cleanup fails:
 
 **Python Dependency Installation Process:**
 
-The KIWI image build process installs Python dependencies during the image build phase using the following steps:
+The KIWI image build process installs Python dependencies using a two-phase approach to work around the lack of network access during the KIWI config.sh phase:
 
-1. **Copy Dependency Files:**
-   - pyproject.toml is copied into the KIWI image build context
-   - uv.lock is copied into the KIWI image build context
-   - These files are placed in the appropriate location for the KIWI build system to access
+1. **Pre-Download Wheels (build-kiwi-image.sh — network available):**
+   - The build script uses `pip3 download` to fetch all dependency wheels
+   - Wheels are saved to the KIWI image overlay at /tmp/kiwi-build/wheels/
+   - pyproject.toml and uv.lock are also copied for reference
 
-2. **Install uv Package Manager:**
-   - The uv package manager is installed in the KIWI image
-   - Installation typically occurs via pip or from source
-   - uv provides fast, reliable Python package installation
+2. **Offline Installation (config.sh — no network):**
+   - config.sh installs from pre-downloaded wheels: `pip3 install --no-index --find-links /tmp/kiwi-build/wheels /tmp/kiwi-build/wheels/*.whl`
+   - No uv or network access required
 
-3. **Install Dependencies:**
-   - uv is used to install dependencies from pyproject.toml
-   - Command: `uv sync` or `uv pip install` depending on configuration
-   - Dependencies are installed to the system Python environment
-   - The uv.lock file ensures reproducible dependency versions
+3. **Installation Verification:**
+   - After installation, the script verifies that key packages are importable
+   - Checks that fastapi, uvicorn, and requests are available
+   - Logs installation results for debugging
 
-4. **Installation Timing:**
-   - Dependency installation occurs during the KIWI image build phase
-   - This happens in the KIWI configuration script (typically config.sh or similar)
-   - Installation completes before the image is finalized
-   - The remote executor service can access installed libraries at runtime
-
-5. **System Python Environment:**
+4. **System Python Environment:**
    - Dependencies are installed to the system Python environment (not a virtual environment)
    - This ensures the remote executor service can import libraries without activation
    - System-wide installation simplifies service startup and configuration
 
 **KIWI Configuration Script Integration:**
 
-The dependency installation is integrated into the KIWI image build process through configuration scripts:
+The dependency installation is split across two scripts:
 
-- **config.sh** (or equivalent KIWI configuration script):
-  - Executes during the image preparation phase
-  - Copies pyproject.toml and uv.lock to appropriate locations
-  - Installs uv package manager
-  - Runs uv to install all dependencies from pyproject.toml
-  - Verifies installation success before proceeding
+- **build-kiwi-image.sh** (runs on GitHub Actions runner with network):
+  - Pre-downloads all dependency wheels using `pip3 download`
+  - Copies wheels into the KIWI image overlay directory
 
-- **Installation Verification:**
-  - After installation, the script verifies that key packages are importable
-  - Checks that fastapi, uvicorn, and requests are available
-  - Logs installation results for debugging
+- **config.sh** (runs inside KIWI chroot with no network):
+  - Verifies pre-downloaded wheels exist at /tmp/kiwi-build/wheels/
+  - Installs from local wheels using `pip3 install --no-index --find-links`
+  - Verifies critical packages are importable (fastapi, uvicorn, requests)
 
-This approach ensures that the remote executor service has all required dependencies available when the AMI is launched, without including unnecessary build-time dependencies from scripts/pyproject.toml.
+This approach ensures that the remote executor service has all required dependencies available when the AMI is launched, without requiring network access during the KIWI image build phase.
 
 **PCR Measurements Format:**
 ```json

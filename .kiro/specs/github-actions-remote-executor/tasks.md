@@ -344,21 +344,23 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   
   - [x] 17.2.1 Create KIWI configuration script (config.sh) for Python dependencies
     - Create config.sh script that executes during KIWI image preparation phase
-    - Install uv package manager (via pip or curl from astral.sh/uv/install.sh)
-    - Run uv sync --frozen to install dependencies from pyproject.toml to system Python
+    - Install Python dependencies from pre-downloaded wheels using pip3 install --no-index --find-links (fully offline, no network required)
+    - Verify pre-downloaded wheels exist at /tmp/kiwi-build/wheels/
     - Verify critical packages are importable (fastapi, uvicorn, requests)
     - Log installation success for build audit trail
     - Fail KIWI build if dependency installation or verification fails
-    - _Requirements: 12.9, 12.10, 12.11, 12.12, 12.13, 12.14, 12.15_
+    - _Requirements: 12.17, 12.18, 12.19, 12.20, 12.21_
 
   - [x] 17.3 Create build script (.github/scripts/build-kiwi-image.sh)
     - Configure loop device setup on host
     - Ensure pyproject.toml and uv.lock are in KIWI image description directory
+    - Pre-download Python dependency wheels using pip3 download (network available in this phase)
+    - Copy pre-downloaded wheels into KIWI image overlay at /tmp/kiwi-build/wheels/
     - Execute KIWI NG build in Docker container
     - Generate PCR measurements file (pcr_measurements.json)
     - Store outputs in build-output directory
     - Handle build failures with descriptive errors
-    - _Requirements: 11.4, 11.5, 11.6, 11.7, 11.8, 12.16_
+    - _Requirements: 11.4, 11.5, 11.6, 11.7, 11.8, 12.16, 12.17, 12.18_
 
   - [x] 17.4 Write property tests for KIWI build
     - **Property 61: KIWI Build Reproducibility**
@@ -729,13 +731,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Property tests validate the 80 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-30) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
-- Python dependencies are separated into two uv configurations:
+- Python dependencies are separated into two configurations:
   - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, hypothesis, pytest, pytest-asyncio, httpx)
   - scripts/pyproject.toml: Build/deployment script dependencies (boto3, paramiko)
   - The remote executor does NOT use boto3 - it only runs on the EC2 instance and doesn't interact with AWS APIs
   - boto3 is ONLY used by build/deployment scripts (build-ami.py, cleanup.py, deploy.py) that run outside the KIWI image
   - When building the KIWI image, only dependencies from pyproject.toml are installed via config.sh script
-  - The config.sh script installs uv and runs uv sync to install dependencies to system Python (no virtual environment)
+  - The KIWI config.sh phase has no network access; dependency wheels are pre-downloaded by build-kiwi-image.sh (which has network) and installed offline using pip3 install --no-index --find-links
+  - No uv package manager is needed inside the KIWI image
   - Dependency installation occurs during KIWI image build phase, before image finalization
 - AWS Nitro attestation requires running on a Nitro-based EC2 instance
 - Scripts execute as root with full system privileges

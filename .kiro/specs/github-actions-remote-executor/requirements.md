@@ -234,10 +234,11 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 14. WHEN executing build scripts, THE Build_Workflow SHALL use dependencies from scripts/pyproject.toml
 15. THE scripts configuration and remote executor configuration SHALL be managed independently using uv
 16. THE KIWI_Builder SHALL copy pyproject.toml and uv.lock files into the KIWI image build context
-17. THE KIWI_Builder SHALL install uv package manager in the KIWI image
-18. THE KIWI_Builder SHALL use uv to install Python dependencies from pyproject.toml into the KIWI image
-19. THE KIWI_Builder SHALL install dependencies to the system Python environment in the KIWI image
-20. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
+17. THE Build_Workflow SHALL pre-download Python dependency wheels using pip3 download in the build script (which has network access)
+18. THE Build_Workflow SHALL copy the pre-downloaded wheels into the KIWI image build context at /tmp/kiwi-build/wheels/
+19. THE KIWI_Builder SHALL install Python dependencies from pre-downloaded wheels using pip3 install --no-index --find-links (fully offline, no network required)
+20. THE KIWI_Builder SHALL install dependencies to the system Python environment in the KIWI image
+21. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
 
 ### Requirement 13: Artifact Publishing with PCR Annotations
 
