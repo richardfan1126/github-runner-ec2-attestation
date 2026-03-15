@@ -571,11 +571,11 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 70: Tool Installation Verification**
     - **Validates: Requirements 16.8, 16.9, 16.10**
 
-- [ ] 25. Checkpoint - Ensure infrastructure and tool tests pass
+- [x] 25. Checkpoint - Ensure infrastructure and tool tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 26. Implement signature verification
-  - [ ] 26.1 Create verify_artifact_signature function
+- [x] 26. Implement signature verification
+  - [x] 26.1 Create verify_artifact_signature function
     - Extract repository owner and name from artifact reference (ghcr.io/owner/repo format)
     - Fetch artifact manifest using oras manifest fetch command
     - Calculate manifest digest using sha256sum
@@ -587,7 +587,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Return verification status (True if exit code 0, False otherwise)
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7, 17.8, 17.11_
 
-  - [ ] 26.2 Implement verification failure handling
+  - [x] 26.2 Implement verification failure handling
     - Log detailed error message with security implications
     - Explain possible causes: not attested, signature mismatch, tampering
     - Raise RuntimeError with "SIGNATURE VERIFICATION FAILED" message
@@ -595,12 +595,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Cleanup process will still execute via finally block
     - _Requirements: 17.9, 17.10, 17.12_
 
-  - [ ] 26.3 Implement verification success path
+  - [x] 26.3 Implement verification success path
     - Log successful verification with checkmark
     - Proceed to artifact download
     - _Requirements: 17.9_
 
-  - [ ] 26.4 Write property tests for signature verification
+  - [x] 26.4 Write property tests for signature verification
     - **Property 67: Signature Verification Requirement**
     - **Property 68: Untrusted Artifact Rejection**
     - **Validates: Requirements 17.9, 17.10, 17.12**
