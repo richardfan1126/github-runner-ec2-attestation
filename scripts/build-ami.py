@@ -660,26 +660,29 @@ def install_all_tools(ssh_client: paramiko.SSHClient) -> None:
         logger.error("Build process will terminate immediately")
         raise
 
-def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -> dict:
+def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -> None:
     """
     Pull artifact bundle from GitHub Container Registry using ORAS.
     
-    Executes ORAS pull command on the instance to download the artifact bundle
-    containing the KIWI image and PCR measurements.
+    Creates ~/artifacts directory on the build instance, executes oras pull
+    to download the artifact bundle, streams output to logger, verifies
+    exit code is 0, and lists downloaded files with sizes.
     
     Args:
         ssh_client: Connected paramiko SSHClient
         artifact_ref: GitHub Container Registry artifact reference
     
-    Returns:
-        Dictionray of PCR measurements of the image
+    Raises:
+        RuntimeError: If directory creation, ORAS pull, or file listing fails
+    
+    Requirements: 18.1, 18.2, 18.3, 18.8, 18.9
     """
     logger.info(f"Pulling artifact from GHCR: {artifact_ref}")
     
     # Create working directory for artifacts
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        "mkdir -p ~/artifacts && cd ~/artifacts",
+        "mkdir -p ~/artifacts",
         stream_output=False
     )
     
@@ -697,11 +700,11 @@ def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -
     
     logger.info("Artifacts downloaded successfully")
     
-    # Verify artifacts are present in build-output directory
-    logger.info("Verifying downloaded artifacts...")
+    # List downloaded files in ~/artifacts/build-output using ls -lh
+    logger.info("Listing downloaded artifacts...")
     exit_code, stdout, stderr = execute_remote_command(
         ssh_client,
-        "cd ~/artifacts/build-output && ls -lh",
+        "ls -lh ~/artifacts/build-output",
         stream_output=False
     )
     
@@ -709,8 +712,36 @@ def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -
         raise RuntimeError(f"Failed to list artifacts in build-output: {stderr}")
     
     logger.info(f"Downloaded artifacts:\n{stdout}")
+
+
+def validate_artifact_files(ssh_client: paramiko.SSHClient) -> None:
+    """
+    Validate that required artifact files exist after download.
     
-    # Check for required files in build-output directory
+    Verifies the raw disk image exists using ls ~/artifacts/build-output/*.raw
+    and pcr_measurements.json exists using test -f command.
+    
+    Args:
+        ssh_client: Connected paramiko SSHClient
+    
+    Raises:
+        RuntimeError: If raw disk image or pcr_measurements.json is missing
+    
+    Requirements: 18.4, 18.5, 18.10, 18.11
+    """
+    logger.info("Validating downloaded artifact files...")
+    
+    # Verify raw disk image exists
+    exit_code, stdout, _ = execute_remote_command(
+        ssh_client,
+        "ls ~/artifacts/build-output/*.raw",
+        stream_output=False
+    )
+    
+    if exit_code != 0:
+        raise RuntimeError("Raw disk image (.raw file) not found in build-output directory")
+    
+    # Verify pcr_measurements.json exists
     exit_code, _, _ = execute_remote_command(
         ssh_client,
         "test -f ~/artifacts/build-output/pcr_measurements.json",
@@ -720,17 +751,31 @@ def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -
     if exit_code != 0:
         raise RuntimeError("pcr_measurements.json not found in build-output directory")
     
-    exit_code, stdout, _ = execute_remote_command(
-        ssh_client,
-        "cd ~/artifacts/build-output && ls *.raw",
-        stream_output=False
-    )
-    
-    if exit_code != 0:
-        raise RuntimeError("Raw disk image (.raw file) not found in build-output directory")
-    
-    logger.info("All required artifacts verified successfully")
+    logger.info("All required artifact files verified successfully")
 
+
+def validate_pcr_measurements(ssh_client: paramiko.SSHClient) -> dict:
+    """
+    Read and validate PCR measurements from pcr_measurements.json.
+    
+    Reads pcr_measurements.json content using cat command, parses JSON,
+    extracts PCR4 and PCR7 from Measurements field, validates they are
+    non-empty hex strings, and returns a dict with pcr4 and pcr7.
+    
+    Args:
+        ssh_client: Connected paramiko SSHClient
+    
+    Returns:
+        Dict with structure: {"Measurements": {"PCR4": "...", "PCR7": "..."}}
+    
+    Raises:
+        RuntimeError: If reading, parsing, or validation fails
+    
+    Requirements: 18.6, 18.7, 18.12
+    """
+    logger.info("Reading and validating PCR measurements...")
+    
+    # Read pcr_measurements.json content using cat command
     exit_code, stdout, _ = execute_remote_command(
         ssh_client,
         "cat ~/artifacts/build-output/pcr_measurements.json",
@@ -740,11 +785,34 @@ def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -
     if exit_code != 0:
         raise RuntimeError("Failed getting pcr_measurements.json content")
     
+    # Parse JSON in Python
     try:
         pcr_measurements = json.loads(stdout)
     except Exception as e:
         raise RuntimeError(f"Failed parsing pcr_measurements.json content: {e}")
-
+    
+    # Extract PCR4 and PCR7 from Measurements field
+    try:
+        measurements = pcr_measurements['Measurements']
+        pcr4 = measurements['PCR4']
+        pcr7 = measurements['PCR7']
+    except (KeyError, TypeError) as e:
+        raise RuntimeError(f"Failed extracting PCR values from measurements: {e}")
+    
+    # Validate PCR values are non-empty hex strings
+    import re
+    hex_pattern = re.compile(r'^[0-9a-fA-F]+$')
+    
+    if not pcr4 or not hex_pattern.match(pcr4):
+        raise RuntimeError(f"Invalid PCR4 value: must be a non-empty hex string, got '{pcr4}'")
+    
+    if not pcr7 or not hex_pattern.match(pcr7):
+        raise RuntimeError(f"Invalid PCR7 value: must be a non-empty hex string, got '{pcr7}'")
+    
+    logger.info(f"PCR4: {pcr4}")
+    logger.info(f"PCR7: {pcr7}")
+    logger.info("PCR measurements validated successfully")
+    
     return pcr_measurements
 
 def verify_artifact_signature(
@@ -1119,13 +1187,22 @@ def main() -> int:
             raise RuntimeError("SIGNATURE VERIFICATION FAILED")
 
         # Pull artifact from GHCR
-        # Get PCR measurements from artifact
         logger.info("")
         logger.info("=" * 80)
         logger.info("Pulling Artifact from GitHub Container Registry")
         logger.info("=" * 80)
         
-        pcr_measurement = pull_artifact_from_ghcr(ssh_client, args.artifact_ref)
+        pull_artifact_from_ghcr(ssh_client, args.artifact_ref)
+
+        # Validate artifact files
+        logger.info("")
+        logger.info("Validating artifact files...")
+        validate_artifact_files(ssh_client)
+
+        # Validate and extract PCR measurements
+        logger.info("")
+        logger.info("Validating PCR measurements...")
+        pcr_measurement = validate_pcr_measurements(ssh_client)
 
         # Upload snapshot and register AMI
         logger.info("")

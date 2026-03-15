@@ -606,8 +606,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 68: Untrusted Artifact Rejection**
     - **Validates: Requirements 17.9, 17.10, 17.12**
 
-- [ ] 27. Implement artifact download and validation
-  - [ ] 27.1 Create pull_artifact_from_ghcr function
+- [x] 27. Implement artifact download and validation
+  - [x] 27.1 Create pull_artifact_from_ghcr function
     - Create ~/artifacts directory on build instance using mkdir -p
     - Execute oras pull command in ~/artifacts directory with artifact reference
     - Stream ORAS pull output to logger
@@ -616,13 +616,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Log all downloaded artifacts and their sizes
     - _Requirements: 18.1, 18.2, 18.3, 18.8, 18.9_
 
-  - [ ] 27.2 Create validate_artifact_files function
+  - [x] 27.2 Create validate_artifact_files function
     - Verify raw disk image exists using ls ~/artifacts/build-output/*.raw
     - Verify pcr_measurements.json exists using test -f command
     - Raise RuntimeError with descriptive error if files missing
     - _Requirements: 18.4, 18.5, 18.10, 18.11_
 
-  - [ ] 27.3 Create validate_pcr_measurements function
+  - [x] 27.3 Create validate_pcr_measurements function
     - Read pcr_measurements.json content using cat command
     - Parse JSON in Python script
     - Extract PCR4 from Measurements.PCR4 field
@@ -632,7 +632,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise RuntimeError if parsing fails or values invalid
     - _Requirements: 18.6, 18.7, 18.12_
 
-  - [ ] 27.4 Write property tests for artifact download
+  - [x] 27.4 Write property tests for artifact download
     - **Property 71: Artifact Download Completeness**
     - **Property 72: PCR Measurements Round-Trip**
     - **Validates: Requirements 18.4, 18.5, 18.7**
