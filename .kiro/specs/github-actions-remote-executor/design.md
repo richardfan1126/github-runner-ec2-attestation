@@ -1307,7 +1307,8 @@ The Python dependency installation is split across two phases:
 
 1. **Pre-Download Phase (build-kiwi-image.sh — has network access):**
    - The build script runs on the GitHub Actions runner with full network access
-   - It uses `pip3 download` to fetch all wheel files for the project dependencies (fastapi, uvicorn, requests and their transitive dependencies)
+   - It extracts the dependency list dynamically from pyproject.toml using Python's `tomllib` module — package names are never hardcoded in the build script
+   - It uses `pip3 download` to fetch all wheel files for the extracted dependencies and their transitive dependencies
    - Wheels are saved to `${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels/`
    - pyproject.toml and uv.lock are also copied to the build context for reference
 
@@ -2254,7 +2255,7 @@ If automated cleanup fails:
 The KIWI image build process installs Python dependencies using a two-phase approach to work around the lack of network access during the KIWI config.sh phase:
 
 1. **Pre-Download Wheels (build-kiwi-image.sh — network available):**
-   - The build script uses `pip3 download` to fetch all dependency wheels
+   - The build script extracts the dependency list from pyproject.toml using `tomllib` and uses `pip3 download` to fetch all dependency wheels
    - Wheels are saved to the KIWI image overlay at /tmp/kiwi-build/wheels/
    - pyproject.toml and uv.lock are also copied for reference
 
@@ -2277,6 +2278,7 @@ The KIWI image build process installs Python dependencies using a two-phase appr
 The dependency installation is split across two scripts:
 
 - **build-kiwi-image.sh** (runs on GitHub Actions runner with network):
+  - Extracts dependency list from pyproject.toml using `tomllib`
   - Pre-downloads all dependency wheels using `pip3 download`
   - Copies wheels into the KIWI image overlay directory
 

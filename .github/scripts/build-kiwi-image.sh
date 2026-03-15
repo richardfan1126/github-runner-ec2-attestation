@@ -73,6 +73,19 @@ cp "${GITHUB_WORKSPACE}/uv.lock" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 TARGET_PYTHON_VERSION=$(docker run --rm kiwi-builder:latest python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "Target Python version inside builder image: ${TARGET_PYTHON_VERSION}"
 
+echo "Extracting dependencies from pyproject.toml..."
+DEPS=$(python3 -c "
+import tomllib, pathlib
+data = tomllib.loads(pathlib.Path('${GITHUB_WORKSPACE}/pyproject.toml').read_text())
+for dep in data['project']['dependencies']:
+    print(dep)
+")
+if [ -z "${DEPS}" ]; then
+    echo "::error::No dependencies found in pyproject.toml"
+    exit 1
+fi
+echo "Dependencies: ${DEPS}"
+
 echo "Pre-downloading Python dependency wheels..."
 mkdir -p "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels"
 pip3 download \
@@ -85,7 +98,7 @@ pip3 download \
     --platform any \
     --implementation cp \
     --abi cp39 \
-    fastapi">=0.115.0" uvicorn">=0.32.0" requests">=2.32.0" exceptiongroup">=1.0.0"
+    ${DEPS}
 
 echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
 

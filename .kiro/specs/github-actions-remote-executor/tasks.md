@@ -354,6 +354,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - [x] 17.3 Create build script (.github/scripts/build-kiwi-image.sh)
     - Configure loop device setup on host
     - Ensure pyproject.toml and uv.lock are in KIWI image description directory
+    - Extract dependency list dynamically from pyproject.toml using tomllib (no hardcoded package names)
     - Pre-download Python dependency wheels using pip3 download (network available in this phase)
     - Copy pre-downloaded wheels into KIWI image overlay at /tmp/kiwi-build/wheels/
     - Execute KIWI NG build in Docker container
@@ -738,6 +739,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - boto3 is ONLY used by build/deployment scripts (build-ami.py, cleanup.py, deploy.py) that run outside the KIWI image
   - When building the KIWI image, only dependencies from pyproject.toml are installed via config.sh script
   - The KIWI config.sh phase has no network access; dependency wheels are pre-downloaded by build-kiwi-image.sh (which has network) and installed offline using pip3 install --no-index --find-links
+  - build-kiwi-image.sh extracts the dependency list dynamically from pyproject.toml using tomllib — package names are never hardcoded in the build script
   - No uv package manager is needed inside the KIWI image
   - Dependency installation occurs during KIWI image build phase, before image finalization
 - AWS Nitro attestation requires running on a Nitro-based EC2 instance
