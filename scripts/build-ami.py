@@ -938,6 +938,35 @@ def upload_snapshot(ssh_client: paramiko.SSHClient, region: str) -> str:
     logger.info(f"Snapshot created successfully: {snapshot_id}")
     return snapshot_id
 
+def wait_for_snapshot(ec2_client: Any, snapshot_id: str) -> None:
+    """
+    Wait for an EBS snapshot to complete using EC2 waiter.
+
+    Creates an EC2 waiter for snapshot_completed, configured with 15-second
+    delay and 40 max attempts (up to 10 minutes total).
+
+    Args:
+        ec2_client: Boto3 EC2 client
+        snapshot_id: EBS snapshot ID to wait for
+
+    Raises:
+        WaiterError: If timeout exceeded or snapshot enters error state
+
+    Requirements: 19.5, 19.6
+    """
+    logger.info(f"Waiting for snapshot {snapshot_id} to complete...")
+    try:
+        waiter = ec2_client.get_waiter('snapshot_completed')
+        waiter.wait(
+            SnapshotIds=[snapshot_id],
+            WaiterConfig={'Delay': 15, 'MaxAttempts': 40}  # Up to 10 minutes
+        )
+        logger.info(f"Snapshot {snapshot_id} completed successfully")
+    except WaiterError as e:
+        logger.error(f"Snapshot {snapshot_id} failed to complete: {e}")
+        raise
+
+
 def register_ami(
     ec2_client: Any,
     snapshot_id: str,
@@ -960,19 +989,6 @@ def register_ami(
     logger.info(f"  Snapshot: {snapshot_id}")
     logger.info(f"  Architecture: {architecture}")
     logger.info(f"  Name: {ami_name}")
-    
-    # Wait for snapshot to complete before registering AMI
-    logger.info("Waiting for snapshot to complete...")
-    try:
-        waiter = ec2_client.get_waiter('snapshot_completed')
-        waiter.wait(
-            SnapshotIds=[snapshot_id],
-            WaiterConfig={'Delay': 15, 'MaxAttempts': 40}  # Up to 10 minutes
-        )
-        logger.info("Snapshot completed successfully")
-    except WaiterError as e:
-        logger.error(f"Snapshot failed to complete: {e}")
-        raise
     
     try:
         response = ec2_client.register_image(
@@ -1212,7 +1228,8 @@ def main() -> int:
         
         architecture = "x86_64"
         snapshot_id = upload_snapshot(ssh_client, args.region)
-        ami_name = f"attestable-ami-imported-{architecture}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        wait_for_snapshot(ec2_client, snapshot_id)
+        ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).isoformat()}"
         ami_id = register_ami(ec2_client, snapshot_id, architecture, ami_name)
 
         # Cleanup and save results

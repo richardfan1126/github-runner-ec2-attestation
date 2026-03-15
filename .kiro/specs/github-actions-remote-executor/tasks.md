@@ -637,8 +637,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 72: PCR Measurements Round-Trip**
     - **Validates: Requirements 18.4, 18.5, 18.7**
 
-- [ ] 28. Implement snapshot upload and AMI registration
-  - [ ] 28.1 Create upload_snapshot function
+- [x] 28. Implement snapshot upload and AMI registration
+  - [x] 28.1 Create upload_snapshot function
     - Find raw disk image filename in ~/artifacts/build-output using ls *.raw
     - Execute /home/ec2-user/.cargo/bin/coldsnap upload with full path to raw image
     - Stream coldsnap output to logger in real-time during upload
@@ -648,7 +648,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise RuntimeError if snapshot ID cannot be parsed or upload fails
     - _Requirements: 19.1, 19.2, 19.3, 19.4_
 
-  - [ ] 28.2 Create wait_for_snapshot function
+  - [x] 28.2 Create wait_for_snapshot function
     - Create EC2 waiter for snapshot_completed
     - Configure waiter with 15-second delay and 40 max attempts (up to 10 minutes)
     - Wait for snapshot to complete
@@ -656,7 +656,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise WaiterError if timeout exceeded or snapshot enters error state
     - _Requirements: 19.5, 19.6_
 
-  - [ ] 28.3 Create register_ami function
+  - [x] 28.3 Create register_ami function
     - Generate AMI name with format: attestable-ami-imported-{architecture}-{timestamp}
     - Use ISO 8601 timestamp with UTC timezone
     - Register AMI with boto3 ec2_client.register_image with parameters:
@@ -672,7 +672,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise ClientError on registration failure
     - _Requirements: 19.7, 19.8, 19.9, 19.10, 19.11, 19.12, 19.13, 19.14, 19.15, 19.16, 19.17_
 
-  - [ ] 28.4 Write property tests for snapshot and AMI
+  - [x] 28.4 Write property tests for snapshot and AMI
     - **Property 73: Snapshot Upload Success**
     - **Property 74: AMI Registration Configuration**
     - **Property 80: Coldsnap Output Streaming**
