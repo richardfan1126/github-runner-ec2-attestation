@@ -1017,55 +1017,114 @@ def register_ami(
         logger.error(f"Failed to register AMI: {e}")
         raise
 
+def generate_build_result(
+    ami_id: str,
+    snapshot_id: str,
+    region: str,
+    pcr_measurements: dict,
+    output_file: str
+) -> dict:
+    """
+    Generate build result dictionary and write it to the output file.
+
+    Creates a build result containing AMI details, region, timestamp, and
+    PCR measurements, then writes it as JSON with 2-space indentation.
+
+    Args:
+        ami_id: The registered AMI ID
+        snapshot_id: The EBS snapshot ID
+        region: AWS region where the AMI was created
+        pcr_measurements: Dict with structure {"Measurements": {"PCR4": "...", "PCR7": "..."}}
+        output_file: Path to the output JSON file
+
+    Returns:
+        The build result dictionary
+
+    Requirements: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6
+    """
+    build_result = {
+        "ami_id": ami_id,
+        "snapshot_id": snapshot_id,
+        "region": region,
+        "build_timestamp": datetime.now(timezone.utc).isoformat(),
+        "pcr_measurements": {
+            "pcr4": pcr_measurements['Measurements']['PCR4'],
+            "pcr7": pcr_measurements['Measurements']['PCR7'],
+        }
+    }
+
+    with open(output_file, 'w') as f:
+        json.dump(build_result, f, indent=2)
+
+    logger.info(f"Build result: {json.dumps(build_result, indent=2)}")
+
+    return build_result
+
+
 def cleanup_infrastructure(
     region: str,
     instance_type: str,
     allowed_ssh_cidr: str,
-    ssh_key_path: str
+    ssh_key_path: str,
+    ssh_client: Optional[paramiko.SSHClient] = None
 ) -> None:
     """
     Destroy all resources:
-    - Terraform infratructure
+    - Close SSH client connection if open
+    - Terraform infrastructure
     - SSH key
-    
+
     Args:
         region: AWS region for the instance
         instance_type: EC2 instance type for the instance
         allowed_ssh_cidr: CIDR block for SSH access
+        ssh_key_path: Path to the temporary SSH key file
+        ssh_client: Optional SSH client to close before cleanup
+
+    Requirements: 20.7, 20.8, 20.9, 20.10, 20.11, 20.13, 20.14
     """
+    # Close SSH client connection if open
+    if ssh_client:
+        try:
+            ssh_client.close()
+            logger.info("SSH client connection closed")
+        except Exception as e:
+            logger.error(f"Failed to close SSH client: {e}")
+
     logger.info("Destroying infrastructure with Terraform...")
-    
+
     # Initialize Terraform
     tf_working_dir = Path(__file__).parent.parent / 'terraform' / 'build-ami'
-    
+
     # Prepare variables (same as used during apply)
     tf_vars = {
         'region': region,
         'instance_type': instance_type,
         'allowed_ssh_cidr': allowed_ssh_cidr
     }
-    
+
     # Destroy infrastructure with auto-approve flag and variables
     cmd = ['terraform', 'destroy', '-auto-approve']
     for key, value in tf_vars.items():
         cmd.extend(['-var', f'{key}={value}'])
-    
+
     result = subprocess.run(
         cmd,
         cwd=tf_working_dir,
         capture_output=True,
         text=True
     )
-    
+
     if result.returncode != 0:
         logger.error(f"Terraform destroy failed: {result.stderr}")
-    
-    logger.info("Infrastructure destroyed successfully")
+    else:
+        logger.info("Infrastructure destroyed successfully")
 
     # Clean up temporary SSH key file
     if ssh_key_path and os.path.exists(ssh_key_path):
         try:
             os.unlink(ssh_key_path)
+            logger.info(f"Temporary SSH key file deleted: {ssh_key_path}")
         except Exception:
             pass
 
@@ -1232,32 +1291,20 @@ def main() -> int:
         ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).isoformat()}"
         ami_id = register_ami(ec2_client, snapshot_id, architecture, ami_name)
 
-        # Cleanup and save results
+        # Save build results
         logger.info("")
         logger.info("=" * 80)
-        logger.info("Cleanup and Save Results")
+        logger.info("Save Results")
         logger.info("=" * 80)
-        
-        # Close SSH connection before destroying infrastructure
-        if ssh_client:
-            ssh_client.close()
-            ssh_client = None
-        
-        # Save build result to file
-        build_result = {
-            "ami_id": ami_id,
-            "snapshot_id": snapshot_id,
-            "region": args.region,
-            "build_timestamp": datetime.now(timezone.utc).isoformat(),
-            "pcr_measurements": {
-                "pcr4": pcr_measurement['Measurements']['PCR4'],
-                "pcr7": pcr_measurement['Measurements']['PCR7'],
-            }
-        }
 
-        with open(args.output_file, 'w') as f:
-            json.dump(build_result, f, indent=2)
-        
+        generate_build_result(
+            ami_id=ami_id,
+            snapshot_id=snapshot_id,
+            region=args.region,
+            pcr_measurements=pcr_measurement,
+            output_file=args.output_file
+        )
+
         return 0
 
     except Exception as e:
@@ -1277,7 +1324,8 @@ def main() -> int:
                 region=args.region,
                 instance_type=args.instance_type,
                 allowed_ssh_cidr=allowed_ssh_cidr,
-                ssh_key_path=ssh_key_path
+                ssh_key_path=ssh_key_path,
+                ssh_client=ssh_client
             )
         except Exception as cleanup_error:
             logger.error(f"Failed to cleanup infrastructure: {cleanup_error}")
