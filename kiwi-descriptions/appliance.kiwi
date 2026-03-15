@@ -61,8 +61,8 @@
         <package name="systemd-resolved"/>
         <package name="amazon-chrony-config"/>
         <package name="binutils"/>
-        <package name="python3"/>
-        <package name="python3-pip"/>
+        <package name="python3.11"/>
+        <package name="python3.11-pip"/>
         <!-- Don't install these packages -->
         <ignore name="ec2-hibinit-agent"/>
         <ignore name="grubby"/>

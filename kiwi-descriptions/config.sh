@@ -25,13 +25,13 @@ fi
 
 # Install dependencies from pre-downloaded wheels (fully offline)
 echo "Installing dependencies from pre-downloaded wheels..."
-pip3 install --no-index --find-links /tmp/kiwi-build/wheels /tmp/kiwi-build/wheels/*.whl
+pip3.11 install --no-index --find-links /tmp/kiwi-build/wheels /tmp/kiwi-build/wheels/*.whl
 
 # Verify critical packages are importable
 echo "Verifying critical packages..."
-python3 -c "import fastapi" || { echo "ERROR: fastapi not importable"; exit 1; }
-python3 -c "import uvicorn" || { echo "ERROR: uvicorn not importable"; exit 1; }
-python3 -c "import requests" || { echo "ERROR: requests not importable"; exit 1; }
+python3.11 -c "import fastapi" || { echo "ERROR: fastapi not importable"; exit 1; }
+python3.11 -c "import uvicorn" || { echo "ERROR: uvicorn not importable"; exit 1; }
+python3.11 -c "import requests" || { echo "ERROR: requests not importable"; exit 1; }
 
 echo "✓ All critical packages verified successfully"
 echo "✓ Python dependency installation complete"

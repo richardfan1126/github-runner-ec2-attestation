@@ -17,6 +17,8 @@ RUN dnf install -y \
     git \
     cargo \
     aws-nitro-tpm-tools \
+    python3.11 \
+    python3.11-pip \
     && dnf clean all
 
 # Create output directory for build artifacts

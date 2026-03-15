@@ -70,7 +70,7 @@ cp "${GITHUB_WORKSPACE}/uv.lock" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 # Detect the Python version inside the KIWI builder image so we download
 # wheels that are compatible with the target image (AL2023 ships Python 3.9,
 # while the GitHub Actions runner may have a newer version).
-TARGET_PYTHON_VERSION=$(docker run --rm kiwi-builder:latest python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+TARGET_PYTHON_VERSION=$(docker run --rm kiwi-builder:latest python3.11 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "Target Python version inside builder image: ${TARGET_PYTHON_VERSION}"
 
 echo "Extracting dependencies from pyproject.toml..."
@@ -97,7 +97,7 @@ pip3 download \
     --platform linux_x86_64 \
     --platform any \
     --implementation cp \
-    --abi cp39 \
+    --abi cp311 \
     ${DEPS}
 
 echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
@@ -125,7 +125,7 @@ cp -r "${EXECUTOR_SRC_DIR}"/* "${TEMP_IMAGE_DIR}/root/opt/github-actions-remote-
 cat > "${TEMP_IMAGE_DIR}/root/usr/local/bin/github-actions-remote-executor" << 'EOF'
 #!/bin/bash
 cd /opt/github-actions-remote-executor
-exec python3 -m src.main
+exec python3.11 -m src.main
 EOF
 
 chmod +x "${TEMP_IMAGE_DIR}/root/usr/local/bin/github-actions-remote-executor"
