@@ -25,7 +25,7 @@ fi
 
 # Install dependencies from pre-downloaded wheels (fully offline)
 echo "Installing dependencies from pre-downloaded wheels..."
-pip3 install --no-index --find-links /tmp/kiwi-build/wheels /tmp/kiwi-build/wheels/*.whl
+pip3 install --no-deps /tmp/kiwi-build/wheels/*.whl
 
 # Verify critical packages are importable
 echo "Verifying critical packages..."

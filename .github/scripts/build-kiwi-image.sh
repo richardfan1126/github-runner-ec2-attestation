@@ -82,6 +82,7 @@ pip3 download \
     --platform manylinux2014_x86_64 \
     --platform manylinux_2_17_x86_64 \
     --platform linux_x86_64 \
+    --platform any \
     fastapi">=0.115.0" uvicorn">=0.32.0" requests">=2.32.0"
 
 echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
