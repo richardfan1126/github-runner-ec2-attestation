@@ -121,6 +121,10 @@ jobs:
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
           echo "artifact_ref=$ARTIFACT_REF" >> $GITHUB_OUTPUT
           
+          # subject-name for attestation must be the image name without the tag
+          SUBJECT_NAME="ghcr.io/${REPO_LOWER}/attestable-image"
+          echo "subject_name=$SUBJECT_NAME" >> $GITHUB_OUTPUT
+          
           echo "### Artifact Published" >> $GITHUB_STEP_SUMMARY
           echo "- **Reference**: \`$ARTIFACT_REF\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Digest**: \`$DIGEST\`" >> $GITHUB_STEP_SUMMARY
@@ -129,7 +133,7 @@ jobs:
         id: attest
         uses: actions/attest-build-provenance@v1
         with:
-          subject-name: ${{ steps.push.outputs.artifact_ref }}
+          subject-name: ${{ steps.push.outputs.subject_name }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
       
