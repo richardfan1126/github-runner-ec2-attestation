@@ -161,8 +161,8 @@ fi
 echo ""
 echo "=== Validating Build Outputs ==="
 
-# Check for raw disk image
-RAW_IMAGE=$(find "${BUILD_OUTPUT_DIR}" -name "*.raw" -type f | head -n 1)
+# Check for raw disk image (maxdepth 1: .raw is output directly to BUILD_OUTPUT_DIR)
+RAW_IMAGE=$(find "${BUILD_OUTPUT_DIR}" -maxdepth 1 -name "*.raw" -type f | head -n 1)
 if [ -z "${RAW_IMAGE}" ]; then
     echo "::error::Raw disk image (.raw) not found in build output directory"
     exit 1
