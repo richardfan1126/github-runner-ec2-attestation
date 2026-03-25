@@ -6,11 +6,13 @@ This document specifies the requirements for the GitHub Actions Remote Executor 
 
 The GitHub Actions Remote Executor is a secure service that receives script execution requests from GitHub Actions workflows, retrieves scripts from GitHub repositories, generates attestation documents, executes scripts in isolated environments, and returns execution results. The system runs inside an AWS Nitro Enclave to provide cryptographic attestation of the execution environment.
 
-This specification covers two major aspects:
+This specification covers three major aspects:
 
 1. **Runtime Requirements (Requirements 1-10)**: How the Remote Executor operates when deployed - receiving execution requests, authenticating requests, fetching scripts from GitHub, generating attestations, executing scripts asynchronously, and providing output polling endpoints.
 
-2. **Build Requirements (Requirements 11-20)**: How the attestable AMI containing the Remote Executor is built - using a GitHub Actions workflow to build a KIWI image in a reproducible environment, attesting build artifacts, pushing them to GitHub Container Registry with PCR measurements, and converting the KIWI image into an AWS AMI using a separate EC2 instance that verifies signatures.
+2. **Build Requirements (Requirements 11-21)**: How the attestable AMI containing the Remote Executor is built - using a GitHub Actions workflow to build a KIWI image in a reproducible environment, attesting build artifacts, pushing them to GitHub Container Registry with PCR measurements, and converting the KIWI image into an AWS AMI using a separate EC2 instance that verifies signatures.
+
+3. **Deployment Requirements (Requirements 22-27)**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups for HTTP-only access, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
 
 The build process does NOT use the Remote Executor itself (since you can't use something that doesn't exist yet during initial builds). Instead, it uses standard GitHub Actions runners to build the KIWI image, and a temporary EC2 instance to convert it to an AMI.
 
@@ -28,6 +30,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **GHA_Secret_Token**: Secret token used to authenticate GitHub Actions requests
 - **Execution_Request**: JSON payload containing script location and execution parameters
 - **Script_Output**: Captured stdout, stderr, and exit code from script execution
+
+### Deployment Components
+- **Deploy_Terraform**: Terraform configuration in terraform/deploy/ that provisions the target EC2 instance and supporting network infrastructure
+- **Deploy_Script**: Python script (scripts/deploy.py) that orchestrates the deployment by loading AMI build results, detecting user IP, running Terraform, and saving infrastructure state
+- **Target_Instance**: EC2 instance launched from the attestable AMI that runs the Remote Executor service
+- **Infrastructure_State**: JSON file containing deployed resource identifiers and attestation API URL
 
 ### Build Components
 - **Build_Workflow**: The GitHub Actions workflow that builds the KIWI image and attests artifacts
@@ -405,3 +413,95 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE AMI_Converter SHALL perform cleanup in a finally block to ensure execution even if AMI creation fails
 13. IF cleanup fails, THEN THE AMI_Converter SHALL log cleanup errors but not fail the overall process
 14. THE AMI_Converter SHALL log all cleanup operations including infrastructure destruction and key deletion
+
+## Deployment Requirements
+
+### Requirement 22: Deployment Network Infrastructure
+
+**User Story:** As a DevOps engineer, I want the deployment to provision an isolated VPC with internet access, so that the target EC2 instance can serve HTTP requests while remaining network-isolated from other resources
+
+#### Acceptance Criteria
+
+1. THE Deploy_Terraform SHALL create a VPC with CIDR block 10.0.0.0/16 with DNS hostnames and DNS support enabled
+2. THE Deploy_Terraform SHALL create a public subnet with CIDR block 10.0.1.0/24 in the first available availability zone
+3. THE Deploy_Terraform SHALL configure the public subnet to map public IP addresses on launch
+4. THE Deploy_Terraform SHALL create an Internet Gateway attached to the VPC
+5. THE Deploy_Terraform SHALL create a route table with a default route (0.0.0.0/0) through the Internet Gateway
+6. THE Deploy_Terraform SHALL associate the route table with the public subnet
+7. THE Deploy_Terraform SHALL tag all network resources with descriptive Name tags prefixed with "github-runner-ec2-attestation"
+
+### Requirement 23: Deployment Security Group Configuration
+
+**User Story:** As a security engineer, I want the target instance's network access restricted to HTTP on port 8080 from a specific CIDR, so that only authorized clients can reach the attestation API
+
+#### Acceptance Criteria
+
+1. THE Deploy_Terraform SHALL create a security group in the deployment VPC
+2. THE security group SHALL allow inbound TCP traffic on port 8080 only from the allowed_http_cidr variable
+3. THE security group SHALL allow all outbound traffic
+4. THE security group SHALL NOT allow inbound SSH access on port 22
+5. THE security group SHALL NOT allow inbound traffic on any port other than 8080
+6. THE Deploy_Terraform SHALL require the allowed_http_cidr variable as a mandatory input with no default value
+
+### Requirement 24: Target EC2 Instance Provisioning
+
+**User Story:** As a DevOps engineer, I want the target EC2 instance launched from the attestable AMI with NitroTPM and IMDSv2 enabled, so that the instance supports hardware-based attestation and secure metadata access
+
+#### Acceptance Criteria
+
+1. THE Deploy_Terraform SHALL launch an EC2 instance using the attestable_ami_id variable
+2. THE Deploy_Terraform SHALL require the attestable_ami_id variable as a mandatory input with no default value
+3. THE Deploy_Terraform SHALL use instance type from the instance_type variable with default value c5.9xlarge
+4. THE Deploy_Terraform SHALL place the instance in the public subnet with an associated public IP address
+5. THE Deploy_Terraform SHALL attach the deployment security group to the instance
+6. THE Deploy_Terraform SHALL enable detailed monitoring on the instance
+7. THE Deploy_Terraform SHALL configure IMDSv2 as required by setting http_tokens to "required"
+8. THE Deploy_Terraform SHALL set the IMDSv2 http_put_response_hop_limit to 1
+9. THE Deploy_Terraform SHALL use the aws_region variable with default value us-east-1
+10. THE Deploy_Terraform SHALL use the AWS provider version ~> 5.0
+
+### Requirement 25: Deployment Outputs
+
+**User Story:** As a DevOps engineer, I want Terraform to output all key resource identifiers and the attestation API URL, so that downstream processes can reference the deployed infrastructure
+
+#### Acceptance Criteria
+
+1. THE Deploy_Terraform SHALL output the vpc_id of the created VPC
+2. THE Deploy_Terraform SHALL output the subnet_id of the created public subnet
+3. THE Deploy_Terraform SHALL output the security_group_id of the created security group
+4. THE Deploy_Terraform SHALL output the instance_id of the launched EC2 instance
+5. THE Deploy_Terraform SHALL output the instance_public_ip of the launched EC2 instance
+6. THE Deploy_Terraform SHALL output the attestation_api_url constructed as http://{instance_public_ip}:8080
+
+### Requirement 26: Deployment Script AMI Loading and IP Detection
+
+**User Story:** As a DevOps engineer, I want the deployment script to load AMI build results from a JSON file and detect my public IP for CIDR whitelisting, so that deployment is automated and secure by default
+
+#### Acceptance Criteria
+
+1. THE Deploy_Script SHALL accept a --ami-build-result argument with default value ami_build_result.json
+2. THE Deploy_Script SHALL accept an --instance-type argument with default value c5.9xlarge
+3. THE Deploy_Script SHALL accept an --output-file argument with default value infrastructure_state.json
+4. IF the AMI build result file does not exist, THEN THE Deploy_Script SHALL fail with a FileNotFoundError
+5. THE Deploy_Script SHALL parse the AMI build result file as JSON and extract ami_id, snapshot_id, and region fields
+6. IF the AMI build result file cannot be parsed, THEN THE Deploy_Script SHALL fail with a RuntimeError
+7. THE Deploy_Script SHALL detect the user's public IP address by querying https://checkip.amazonaws.com with a 5 second timeout
+8. THE Deploy_Script SHALL construct the allowed_http_cidr as {detected_ip}/32
+
+### Requirement 27: Deployment Script Terraform Orchestration and State Persistence
+
+**User Story:** As a DevOps engineer, I want the deployment script to run Terraform init and apply, then save the infrastructure state to a JSON file, so that the deployment is fully automated and results are persisted
+
+#### Acceptance Criteria
+
+1. THE Deploy_Script SHALL run terraform init in the terraform/deploy directory
+2. IF the terraform/deploy directory does not exist, THEN THE Deploy_Script SHALL fail with a FileNotFoundError
+3. IF terraform init fails with a non-zero exit code, THEN THE Deploy_Script SHALL fail with a RuntimeError
+4. THE Deploy_Script SHALL run terraform apply -auto-approve with variables attestable_ami_id, instance_type, allowed_http_cidr, and aws_region passed via -var flags
+5. IF terraform apply fails with a non-zero exit code, THEN THE Deploy_Script SHALL fail with a RuntimeError
+6. WHEN terraform apply succeeds, THE Deploy_Script SHALL retrieve outputs by running terraform output -json
+7. THE Deploy_Script SHALL extract the value field from each raw Terraform output entry
+8. THE Deploy_Script SHALL write the extracted infrastructure state to the output file as JSON with 2-space indentation
+9. IF saving the infrastructure state file fails, THEN THE Deploy_Script SHALL fail with a RuntimeError
+10. THE Deploy_Script SHALL log all operations including Terraform variable values, command outputs, and final infrastructure state summary
+11. IF any deployment step fails, THEN THE Deploy_Script SHALL log a message advising the user to run terraform destroy to clean up partial resources

@@ -4,11 +4,13 @@
 
 The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-based EC2 instance, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts asynchronously while allowing clients to poll for output and status.
 
-This design document covers two major aspects of the system:
+This design document covers three major aspects of the system:
 
 1. **Runtime Design**: How the Remote Executor operates when deployed - the HTTP server, request handling, script execution, attestation generation, and output polling mechanisms.
 
 2. **Build Design**: How the attestable AMI containing the Remote Executor is built - the GitHub Actions workflow that builds a KIWI image in a reproducible Docker environment, attests build artifacts using GitHub's attestation service, publishes them to GitHub Container Registry with PCR measurements, and converts the KIWI image to an AWS AMI using a temporary EC2 instance that verifies signatures before AMI creation.
+
+3. **Deployment Design**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups for HTTP-only access, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
 
 ### Key Design Principles
 
@@ -3468,3 +3470,338 @@ The build system requires both unit testing and property-based testing:
 - Verify PCR measurements match between annotations and file
 - Verify artifact digest matches manifest
 - Verify downloaded files match expected checksums
+
+
+---
+
+# PART 3: DEPLOYMENT DESIGN
+
+## Deployment Overview
+
+The deployment phase takes the attestable AMI produced by the build process and launches it as a running target EC2 instance within an isolated VPC. A Python deployment script (`scripts/deploy.py`) orchestrates the process by loading AMI build results, detecting the user's public IP for access whitelisting, running Terraform to provision infrastructure, and persisting the resulting infrastructure state to a JSON file.
+
+Unlike the build phase which uses a temporary EC2 instance with SSH access for tool installation, the deployment creates a persistent instance accessible only via HTTP on port 8080 — no SSH access is provided.
+
+## Deployment Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Deploy Script (scripts/deploy.py)            │
+│                                                                 │
+│  1. Load AMI build result (ami_build_result.json)               │
+│  2. Detect public IP (checkip.amazonaws.com)                    │
+│  3. terraform init                                              │
+│  4. terraform apply                                             │
+│  5. Extract outputs                                             │
+│  6. Save infrastructure state (infrastructure_state.json)       │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 Terraform (terraform/deploy/)                    │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                  VPC (10.0.0.0/16)                        │  │
+│  │                                                           │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │          Public Subnet (10.0.1.0/24)                │  │  │
+│  │  │                                                     │  │  │
+│  │  │  ┌───────────────────────────────────────────────┐  │  │  │
+│  │  │  │       Target EC2 Instance                     │  │  │  │
+│  │  │  │       (Attestable AMI)                        │  │  │  │
+│  │  │  │                                               │  │  │  │
+│  │  │  │  - Remote Executor HTTP Server (:8080)        │  │  │  │
+│  │  │  │  - NitroTPM (auto-enabled via AMI)            │  │  │  │
+│  │  │  │  - IMDSv2 required                            │  │  │  │
+│  │  │  │  - Detailed monitoring enabled                │  │  │  │
+│  │  │  └───────────────────────────────────────────────┘  │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  │                                                           │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │  │
+│  │  │     IGW      │  │ Route Table  │  │ Security Grp │    │  │
+│  │  │              │  │ 0.0.0.0/0→IGW│  │ IN: 8080/tcp │    │  │
+│  │  │              │  │              │  │ OUT: all      │    │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘    │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Deployment Infrastructure
+
+### Network Architecture
+
+The deployment provisions a dedicated VPC with internet connectivity:
+
+- **VPC**: CIDR `10.0.0.0/16` with DNS hostnames and DNS support enabled
+- **Public Subnet**: CIDR `10.0.1.0/24` in the first available AZ, with `map_public_ip_on_launch = true`
+- **Internet Gateway**: Attached to the VPC for internet access
+- **Route Table**: Default route `0.0.0.0/0` through the IGW, associated with the public subnet
+- **Resource Tagging**: All resources tagged with Name prefix `github-runner-ec2-attestation-`
+
+### Security Group
+
+The security group enforces HTTP-only access — no SSH:
+
+| Direction | Protocol | Port  | Source/Destination     |
+|-----------|----------|-------|------------------------|
+| Ingress   | TCP      | 8080  | `var.allowed_http_cidr`|
+| Egress    | All      | All   | `0.0.0.0/0`           |
+
+There is no ingress rule for port 22 (SSH). The target instance is managed exclusively through the attestation HTTP API.
+
+### EC2 Instance
+
+The target instance is launched from the attestable AMI:
+
+- **AMI**: `var.attestable_ami_id` (required, no default)
+- **Instance Type**: `var.instance_type` (default `c5.9xlarge`)
+- **Subnet**: Placed in the public subnet with `associate_public_ip_address = true`
+- **Security Group**: Attached deployment security group (HTTP 8080 only)
+- **Monitoring**: `monitoring = true` (detailed CloudWatch monitoring)
+- **IMDSv2**: `http_tokens = "required"`, `http_put_response_hop_limit = 1`
+- **NitroTPM**: Automatically enabled — the attestable AMI has UEFI boot mode and TPM 2.0 support baked in, so NitroTPM is auto-enabled on launch without explicit Terraform configuration
+
+### Terraform Variables
+
+| Variable             | Type   | Required | Default      | Description                              |
+|----------------------|--------|----------|--------------|------------------------------------------|
+| `attestable_ami_id`  | string | Yes      | —            | AMI ID from the build process            |
+| `instance_type`      | string | No       | `c5.9xlarge` | EC2 instance type (NitroTPM-compatible)  |
+| `allowed_http_cidr`  | string | Yes      | —            | CIDR for HTTP access on port 8080        |
+| `aws_region`         | string | No       | `us-east-1`  | AWS region for deployment                |
+
+### Terraform Outputs
+
+| Output                | Description                                      |
+|-----------------------|--------------------------------------------------|
+| `vpc_id`              | ID of the created VPC                            |
+| `subnet_id`           | ID of the public subnet                          |
+| `security_group_id`   | ID of the security group                         |
+| `instance_id`         | ID of the launched EC2 instance                  |
+| `instance_public_ip`  | Public IP address of the instance                |
+| `attestation_api_url` | Full URL: `http://{instance_public_ip}:8080`     |
+
+## Deployment Script Design
+
+### CLI Arguments
+
+```
+scripts/deploy.py [--ami-build-result FILE] [--instance-type TYPE] [--output-file FILE]
+```
+
+| Argument              | Default                    | Description                          |
+|-----------------------|----------------------------|--------------------------------------|
+| `--ami-build-result`  | `ami_build_result.json`    | Path to AMI build result JSON file   |
+| `--instance-type`     | `c5.9xlarge`               | EC2 instance type                    |
+| `--output-file`       | `infrastructure_state.json`| Output file for infrastructure state |
+
+### Execution Flow
+
+```
+Load AMI Build Result (ami_build_result.json)
+    │
+    ├── Extract: ami_id, snapshot_id, region
+    │
+    ▼
+Detect Public IP (checkip.amazonaws.com)
+    │
+    ├── Construct: {ip}/32 → allowed_http_cidr
+    │
+    ▼
+terraform init (terraform/deploy/)
+    │
+    ▼
+terraform apply -auto-approve
+    │
+    ├── -var attestable_ami_id=...
+    ├── -var instance_type=...
+    ├── -var allowed_http_cidr=...
+    ├── -var aws_region=...
+    │
+    ▼
+terraform output -json
+    │
+    ├── Extract "value" from each output entry
+    │
+    ▼
+Save Infrastructure State (infrastructure_state.json)
+```
+
+### Functions
+
+| Function                | Purpose                                                    |
+|-------------------------|------------------------------------------------------------|
+| `get_user_public_ip()`  | Queries `checkip.amazonaws.com` to detect public IP        |
+| `terraform_init()`      | Runs `terraform init` in the deploy directory              |
+| `terraform_apply()`     | Runs `terraform apply` with variables, returns raw outputs |
+| `load_terraform_output()`| Extracts `value` field from each raw Terraform output     |
+| `parse_arguments()`     | Parses CLI arguments with argparse                         |
+| `main()`                | Orchestrates the full deployment flow                      |
+
+### Error Handling
+
+| Error Condition                    | Exception Type       | Behavior                                              |
+|------------------------------------|----------------------|-------------------------------------------------------|
+| AMI build result file missing      | `FileNotFoundError`  | Fail immediately with descriptive message             |
+| AMI build result unparseable       | `RuntimeError`       | Fail with parsing error details                       |
+| Terraform directory missing        | `FileNotFoundError`  | Fail immediately                                      |
+| `terraform init` non-zero exit     | `RuntimeError`       | Fail with exit code and stderr                        |
+| `terraform apply` non-zero exit    | `RuntimeError`       | Fail with exit code and stderr                        |
+| `terraform output` parse failure   | `RuntimeError`       | Fail with JSON decode error                           |
+| Infrastructure state write failure | `RuntimeError`       | Fail with write error details                         |
+| Any failure                        | —                    | Log advice to run `terraform destroy` for cleanup     |
+
+### Logging
+
+- Dual output: `stdout` (StreamHandler) and `deploy.log` (FileHandler)
+- Format: `%(asctime)s - %(name)s - %(levelname)s - %(message)s`
+- Logs Terraform variable values, command outputs, and final infrastructure state summary
+- Section headers with `=` separators for readability
+
+## Deployment Security
+
+### HTTP-Only Access
+
+The target instance has no SSH access. Unlike the build instance (which requires SSH for tool installation and AMI conversion), the deployed instance is accessed exclusively through the Remote Executor HTTP API on port 8080. This reduces the attack surface significantly.
+
+### IMDSv2 Enforcement
+
+Instance metadata access requires token-based authentication:
+- `http_tokens = "required"` — disables IMDSv1
+- `http_put_response_hop_limit = 1` — prevents token forwarding from containers
+
+### IP Whitelisting
+
+The deployment script auto-detects the user's public IP via `checkip.amazonaws.com` and constructs a `/32` CIDR block. This ensures only the deployer's IP can reach the attestation API.
+
+### NitroTPM
+
+NitroTPM is automatically enabled when launching from the attestable AMI because the AMI was registered with `TpmSupport = v2.0` and `BootMode = uefi` during the build phase. No explicit Terraform configuration is needed — the instance inherits TPM support from the AMI.
+
+## Key Differences from Build Infrastructure
+
+| Aspect                  | Build (`terraform/build-ami/`)         | Deploy (`terraform/deploy/`)           |
+|-------------------------|----------------------------------------|----------------------------------------|
+| VPC CIDR                | `10.2.0.0/16`                          | `10.0.0.0/16`                          |
+| Inbound Access          | SSH on port 22 (user IP only)          | HTTP on port 8080 (user IP only)       |
+| SSH Access              | Yes (RSA 4096-bit key pair)            | No                                     |
+| IAM Instance Profile    | Yes (EC2/EBS permissions)              | No                                     |
+| SSH Key Pair            | Generated via `tls_private_key`        | None                                   |
+| Instance Lifecycle      | Temporary (destroyed after AMI build)  | Persistent (runs the service)          |
+| AMI Source              | Amazon Linux 2023                      | Attestable AMI (custom KIWI build)     |
+| Purpose                 | Tool installation + AMI conversion     | Run Remote Executor service            |
+
+## Deployment Correctness Properties
+
+*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+
+### Property 81: Deployment VPC Isolation
+
+*For any* deployment Terraform configuration, the VPC should be created with CIDR block `10.0.0.0/16` and have both DNS hostnames and DNS support enabled.
+
+**Validates: Requirements 22.1**
+
+### Property 82: Security Group HTTP-Only Access
+
+*For any* deployment security group configuration, the only allowed inbound traffic should be TCP on port 8080 from the `allowed_http_cidr` variable — no SSH (port 22) or any other port should be permitted inbound.
+
+**Validates: Requirements 23.2, 23.4, 23.5**
+
+### Property 83: IMDSv2 Enforcement
+
+*For any* target EC2 instance launched by the deployment, IMDSv2 should be enforced with `http_tokens` set to `"required"` and `http_put_response_hop_limit` set to `1`.
+
+**Validates: Requirements 24.7, 24.8**
+
+### Property 84: Infrastructure State Persistence
+
+*For any* raw Terraform output JSON where each key contains a `value` field, extracting the values and writing them to a JSON file with 2-space indentation, then reading back the file, should produce a dictionary equivalent to the extracted values.
+
+**Validates: Requirements 25.1, 25.2, 25.3, 25.4, 25.5, 25.6, 27.7, 27.8**
+
+### Property 85: Deployment IP Auto-Detection
+
+*For any* valid IPv4 address returned by the IP detection service, the deployment script should construct the `allowed_http_cidr` as `{ip}/32`.
+
+**Validates: Requirements 26.7, 26.8**
+
+### Property 86: AMI Build Result Loading
+
+*For any* valid JSON file containing `ami_id`, `snapshot_id`, and `region` fields, the deployment script should correctly parse and extract all three fields.
+
+**Validates: Requirements 26.5**
+
+## Deployment Error Handling
+
+### Error Categories
+
+1. **File Errors**: Missing AMI build result file, missing Terraform directory, unparseable JSON
+2. **Terraform Errors**: `terraform init` failure, `terraform apply` failure, output parsing failure
+3. **Network Errors**: IP detection failure (checkip.amazonaws.com timeout)
+4. **State Persistence Errors**: Failed to write infrastructure state file
+
+### Cleanup Guidance
+
+Unlike the build process which has automated `terraform destroy` in a `finally` block, the deployment creates persistent infrastructure. On failure, the script logs advice to manually run `terraform destroy` to clean up partial resources. This is intentional — the deployed infrastructure is meant to persist.
+
+## Deployment Testing Strategy
+
+### Dual Testing Approach
+
+**Unit Tests** focus on:
+- CLI argument parsing with default values
+- AMI build result file loading (valid JSON, missing file, invalid JSON)
+- IP detection and CIDR construction
+- Terraform output value extraction
+- Infrastructure state file writing
+- Error handling for each failure mode
+
+**Property-Based Tests** focus on:
+- Security group configuration invariants (HTTP-only, no SSH)
+- IMDSv2 enforcement across all instance configurations
+- Infrastructure state round-trip (write → read produces equivalent data)
+- IP-to-CIDR formatting for all valid IPv4 addresses
+- AMI build result parsing for all valid JSON structures
+- VPC configuration invariants (CIDR, DNS settings)
+
+### Property-Based Testing Configuration
+
+- Library: `hypothesis` (Python)
+- Minimum 100 iterations per property test
+- Each test tagged with: **Feature: github-actions-remote-executor, Property {number}: {property_text}**
+- Each correctness property implemented by a single property-based test
+
+### Deployment Unit Testing
+
+**AMI Build Result Loading**
+- Unit tests: Missing file, empty file, invalid JSON, missing required fields
+- Property tests: Valid JSON round-trip (Property 86)
+
+**IP Detection and CIDR Construction**
+- Unit tests: Network timeout, invalid response
+- Property tests: IP-to-CIDR formatting (Property 85)
+
+**Terraform Orchestration**
+- Unit tests: Missing directory, init failure, apply failure, output parse failure
+- Property tests: Output value extraction (Property 84)
+
+**Infrastructure State Persistence**
+- Unit tests: Write permission errors, disk full
+- Property tests: State round-trip (Property 84)
+
+**Security Configuration**
+- Unit tests: Specific port checks (8080 open, 22 closed)
+- Property tests: HTTP-only invariant (Property 82), IMDSv2 enforcement (Property 83)
+
+### Deployment Integration Testing
+
+**End-to-End Deployment Scenarios**:
+1. Complete deployment flow: Load AMI result → detect IP → terraform init → apply → save state
+2. Missing AMI build result: Should fail with FileNotFoundError before any Terraform operations
+3. Terraform apply failure: Should log cleanup advice
+4. Invalid AMI ID: Terraform should fail with descriptive error
+
+**External Dependencies**:
+- Mock `checkip.amazonaws.com` for IP detection
+- Mock `subprocess.run` for Terraform commands
+- Use test fixtures for AMI build result JSON and Terraform output JSON

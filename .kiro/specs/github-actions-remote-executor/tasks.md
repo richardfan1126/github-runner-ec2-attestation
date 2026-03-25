@@ -737,16 +737,117 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Document the output: ami_build_result.json containing ami_id, snapshot_id, region, build_timestamp, and pcr_measurements
     - _Requirements: 11.1, 11.4, 14.1, 15.1, 17.1, 19.1, 20.1, 20.5_
 
-- [ ] 31. Final checkpoint - Ensure all build tests pass
+- [x] 31. Final checkpoint - Ensure all build tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 32. Create deployment Terraform module
+  - [ ] 32.1 Create terraform/deploy/main.tf with deployment infrastructure
+    - Configure AWS provider with region variable and required_providers (hashicorp/aws ~> 5.0)
+    - Create VPC with CIDR 10.0.0.0/16, DNS hostnames and DNS support enabled
+    - Create public subnet with CIDR 10.0.1.0/24 in first availability zone, map public IP on launch
+    - Create Internet Gateway attached to VPC
+    - Create route table with default route (0.0.0.0/0) through IGW
+    - Associate route table with public subnet
+    - Create security group allowing inbound TCP on port 8080 only from allowed_http_cidr (no SSH, no other ports)
+    - Allow all outbound traffic
+    - Launch EC2 instance from attestable_ami_id with instance_type variable
+    - Place instance in public subnet with public IP, attach security group
+    - Enable detailed monitoring
+    - Configure IMDSv2 required (http_tokens = "required", http_put_response_hop_limit = 1)
+    - Tag all resources with "github-runner-ec2-attestation" prefix
+    - _Requirements: 22.1, 22.2, 22.3, 22.4, 22.5, 22.6, 22.7, 23.1, 23.2, 23.3, 23.4, 23.5, 23.6, 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.7, 24.8, 24.9, 24.10_
+
+  - [ ] 32.2 Create terraform/deploy/variables.tf with deployment variables
+    - Define attestable_ami_id (string, required, no default)
+    - Define instance_type (string, default "c5.9xlarge")
+    - Define allowed_http_cidr (string, required, no default)
+    - Define aws_region (string, default "us-east-1")
+    - _Requirements: 23.6, 24.1, 24.2, 24.3, 24.9, 24.10_
+
+  - [ ] 32.3 Create terraform/deploy/outputs.tf with deployment outputs
+    - Output vpc_id of the created VPC
+    - Output subnet_id of the created public subnet
+    - Output security_group_id of the created security group
+    - Output instance_id of the launched EC2 instance
+    - Output instance_public_ip of the launched EC2 instance
+    - Output attestation_api_url constructed as http://{instance_public_ip}:8080
+    - _Requirements: 25.1, 25.2, 25.3, 25.4, 25.5, 25.6_
+
+  - [ ] 32.4 Write property tests for deployment infrastructure
+    - **Property 81: Deployment VPC Isolation**
+    - **Property 82: Security Group HTTP-Only Access**
+    - **Property 83: IMDSv2 Enforcement**
+    - **Validates: Requirements 22.1, 23.2, 23.4, 23.5, 24.7, 24.8**
+
+- [ ] 33. Create deployment script (scripts/deploy.py)
+  - [ ] 33.1 Implement CLI argument parsing with parse_arguments()
+    - Accept --ami-build-result (default: ami_build_result.json)
+    - Accept --instance-type (default: c5.9xlarge)
+    - Accept --output-file (default: infrastructure_state.json)
+    - _Requirements: 26.1, 26.2, 26.3_
+
+  - [ ] 33.2 Implement get_user_public_ip() function
+    - Query https://checkip.amazonaws.com with 5-second timeout
+    - Return stripped IP address string
+    - _Requirements: 26.7_
+
+  - [ ] 33.3 Implement terraform_init() function
+    - Run terraform init in terraform/deploy directory
+    - Raise FileNotFoundError if directory missing
+    - Raise RuntimeError on non-zero exit code
+    - Log stdout/stderr output
+    - _Requirements: 27.1, 27.2, 27.3_
+
+  - [ ] 33.4 Implement terraform_apply() function
+    - Run terraform apply -auto-approve with -var flags for attestable_ami_id, instance_type, allowed_http_cidr, aws_region
+    - Raise RuntimeError on non-zero exit code
+    - Retrieve outputs via terraform output -json
+    - Parse and return raw JSON outputs
+    - Log Terraform variable values and command output
+    - _Requirements: 27.4, 27.5, 27.6, 27.10_
+
+  - [ ] 33.5 Implement load_terraform_output() function
+    - Extract value field from each raw Terraform output entry
+    - Return dict with extracted values
+    - _Requirements: 27.7_
+
+  - [ ] 33.6 Implement main() function orchestrating the full deployment flow
+    - Load AMI build result JSON (fail with FileNotFoundError if missing, RuntimeError if unparseable)
+    - Detect public IP and construct {ip}/32 CIDR
+    - Run terraform_init and terraform_apply
+    - Extract values via load_terraform_output
+    - Write infrastructure state to output file as JSON with 2-space indentation
+    - Log all operations and final infrastructure state summary
+    - On failure, log advice to run terraform destroy for cleanup
+    - _Requirements: 26.4, 26.5, 26.6, 26.8, 27.8, 27.9, 27.10, 27.11_
+
+  - [ ] 33.7 Write property tests for deployment script
+    - **Property 84: Infrastructure State Persistence**
+    - **Property 85: Deployment IP Auto-Detection**
+    - **Property 86: AMI Build Result Loading**
+    - **Validates: Requirements 25.1-25.6, 26.5, 26.7, 26.8, 27.7, 27.8**
+
+- [ ] 34. Checkpoint - Ensure all deployment tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 35. Add README section documenting how to deploy
+  - Document running deploy.py with CLI arguments (--ami-build-result, --instance-type, --output-file)
+  - Document prerequisites: AMI build result file (ami_build_result.json), Terraform installed, AWS credentials configured, Python with boto3 (scripts/pyproject.toml)
+  - Document the deployment flow: load AMI result → detect IP → terraform init → apply → save state
+  - Document the output: infrastructure_state.json containing vpc_id, subnet_id, security_group_id, instance_id, instance_public_ip, attestation_api_url
+  - _Requirements: 22, 23, 24, 25, 26, 27_
+
+- [ ] 36. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 80 correctness properties from the design document
+- Property tests validate the 86 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
-- The build implementation (tasks 17-32) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
+- The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
+- The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
 - Python dependencies are separated into two configurations:
   - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, hypothesis, pytest, pytest-asyncio, httpx)
   - scripts/pyproject.toml: Build/deployment script dependencies (boto3, paramiko)
@@ -759,7 +860,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Dependency installation occurs during KIWI image build phase, before image finalization
 - AWS Nitro attestation requires running on a Nitro-based EC2 instance
 - Scripts execute as root with full system privileges
-- All 80 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 86 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
@@ -770,3 +871,10 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - SSH connectivity uses paramiko with keepalive (30s intervals) and retries (10 attempts, 30s delay)
 - Infrastructure cleanup guaranteed via finally block, executes even on build failure
 - Terraform state isolated per build for concurrent build support
+- Deployment Terraform (terraform/deploy/) creates persistent infrastructure unlike build Terraform which is temporary
+- Deployment VPC uses CIDR 10.0.0.0/16 (distinct from build VPC 10.2.0.0/16)
+- Target instance has HTTP-only access on port 8080 (no SSH) — reduced attack surface compared to build instance
+- IMDSv2 enforced on target instance with http_tokens = "required" and hop limit = 1
+- NitroTPM automatically enabled via AMI registration settings (TpmSupport = v2.0, BootMode = uefi)
+- Deployment script auto-detects user IP via checkip.amazonaws.com for /32 CIDR whitelisting
+- On deployment failure, user must manually run terraform destroy (no automated cleanup — infrastructure is meant to persist)
