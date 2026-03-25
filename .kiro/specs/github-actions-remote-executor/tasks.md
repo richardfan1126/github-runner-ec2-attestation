@@ -722,8 +722,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test cleanup on various failure scenarios
     - _Requirements: 11-20_
 
-- [ ] 30. Add README section documenting how to build the AMI
-  - [ ] 30.1 Add "Building the AMI" section to README.md after the "AWS Nitro EC2 Deployment" section
+- [x] 30. Add README section documenting how to build the AMI
+  - [x] 30.1 Add "Building the AMI" section to README.md after the "AWS Nitro EC2 Deployment" section
     - Document the two-phase build process: (1) build the KIWI image via GitHub Actions, (2) convert to AMI via build-ami.py
     - Document prerequisites: AWS credentials configured, Terraform installed, Python with boto3 and paramiko (scripts/pyproject.toml), ORAS CLI
     - Document Step 1: Triggering the GitHub Actions workflow (push to main/develop or manual workflow_dispatch) to build and publish the KIWI image to GHCR
@@ -737,17 +737,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Document the output: ami_build_result.json containing ami_id, snapshot_id, region, build_timestamp, and pcr_measurements
     - _Requirements: 11.1, 11.4, 14.1, 15.1, 17.1, 19.1, 20.1, 20.5_
 
-- [ ] 31. Add README section documenting how to deploy the AMI to an EC2 instance
-  - [ ] 31.1 Add "Deploying the AMI" section to README.md after the "Building the AMI" section
-    - Document prerequisites: AMI ID from the build result (ami_build_result.json), AWS CLI or Console access
-    - Document launching an EC2 instance from the AMI using AWS CLI (`aws ec2 run-instances`)
-    - Include required instance configuration: Nitro-based instance type, UEFI boot mode, TPM v2.0 support, ENA support
-    - Document security group configuration: allow inbound traffic on the configured server port (default 8080)
-    - Document setting environment variables for the Remote Executor (reference the Configuration section)
-    - Document verifying the deployment by hitting the /health endpoint
-    - _Requirements: 9.1, 10.1, 10.2_
-
-- [ ] 32. Final checkpoint - Ensure all build tests pass
+- [ ] 31. Final checkpoint - Ensure all build tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
