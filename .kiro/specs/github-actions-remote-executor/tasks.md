@@ -779,26 +779,26 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 83: IMDSv2 Enforcement**
     - **Validates: Requirements 22.1, 23.2, 23.4, 23.5, 24.7, 24.8**
 
-- [ ] 33. Create deployment script (scripts/deploy.py)
-  - [ ] 33.1 Implement CLI argument parsing with parse_arguments()
+- [x] 33. Create deployment script (scripts/deploy.py)
+  - [x] 33.1 Implement CLI argument parsing with parse_arguments()
     - Accept --ami-build-result (default: ami_build_result.json)
     - Accept --instance-type (default: c5.9xlarge)
     - Accept --output-file (default: infrastructure_state.json)
     - _Requirements: 26.1, 26.2, 26.3_
 
-  - [ ] 33.2 Implement get_user_public_ip() function
+  - [x] 33.2 Implement get_user_public_ip() function
     - Query https://checkip.amazonaws.com with 5-second timeout
     - Return stripped IP address string
     - _Requirements: 26.7_
 
-  - [ ] 33.3 Implement terraform_init() function
+  - [x] 33.3 Implement terraform_init() function
     - Run terraform init in terraform/deploy directory
     - Raise FileNotFoundError if directory missing
     - Raise RuntimeError on non-zero exit code
     - Log stdout/stderr output
     - _Requirements: 27.1, 27.2, 27.3_
 
-  - [ ] 33.4 Implement terraform_apply() function
+  - [x] 33.4 Implement terraform_apply() function
     - Run terraform apply -auto-approve with -var flags for attestable_ami_id, instance_type, allowed_http_cidr, aws_region
     - Raise RuntimeError on non-zero exit code
     - Retrieve outputs via terraform output -json
@@ -806,12 +806,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Log Terraform variable values and command output
     - _Requirements: 27.4, 27.5, 27.6, 27.10_
 
-  - [ ] 33.5 Implement load_terraform_output() function
+  - [x] 33.5 Implement load_terraform_output() function
     - Extract value field from each raw Terraform output entry
     - Return dict with extracted values
     - _Requirements: 27.7_
 
-  - [ ] 33.6 Implement main() function orchestrating the full deployment flow
+  - [x] 33.6 Implement main() function orchestrating the full deployment flow
     - Load AMI build result JSON (fail with FileNotFoundError if missing, RuntimeError if unparseable)
     - Detect public IP and construct {ip}/32 CIDR
     - Run terraform_init and terraform_apply
@@ -821,7 +821,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - On failure, log advice to run terraform destroy for cleanup
     - _Requirements: 26.4, 26.5, 26.6, 26.8, 27.8, 27.9, 27.10, 27.11_
 
-  - [ ] 33.7 Write property tests for deployment script
+  - [x] 33.7 Write property tests for deployment script
     - **Property 84: Infrastructure State Persistence**
     - **Property 85: Deployment IP Auto-Detection**
     - **Property 86: AMI Build Result Loading**
