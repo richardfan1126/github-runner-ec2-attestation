@@ -740,8 +740,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 31. Final checkpoint - Ensure all build tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 32. Create deployment Terraform module
-  - [ ] 32.1 Create terraform/deploy/main.tf with deployment infrastructure
+- [x] 32. Create deployment Terraform module
+  - [x] 32.1 Create terraform/deploy/main.tf with deployment infrastructure
     - Configure AWS provider with region variable and required_providers (hashicorp/aws ~> 5.0)
     - Create VPC with CIDR 10.0.0.0/16, DNS hostnames and DNS support enabled
     - Create public subnet with CIDR 10.0.1.0/24 in first availability zone, map public IP on launch
@@ -757,14 +757,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Tag all resources with "github-runner-ec2-attestation" prefix
     - _Requirements: 22.1, 22.2, 22.3, 22.4, 22.5, 22.6, 22.7, 23.1, 23.2, 23.3, 23.4, 23.5, 23.6, 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.7, 24.8, 24.9, 24.10_
 
-  - [ ] 32.2 Create terraform/deploy/variables.tf with deployment variables
+  - [x] 32.2 Create terraform/deploy/variables.tf with deployment variables
     - Define attestable_ami_id (string, required, no default)
     - Define instance_type (string, default "c5.9xlarge")
     - Define allowed_http_cidr (string, required, no default)
     - Define aws_region (string, default "us-east-1")
     - _Requirements: 23.6, 24.1, 24.2, 24.3, 24.9, 24.10_
 
-  - [ ] 32.3 Create terraform/deploy/outputs.tf with deployment outputs
+  - [x] 32.3 Create terraform/deploy/outputs.tf with deployment outputs
     - Output vpc_id of the created VPC
     - Output subnet_id of the created public subnet
     - Output security_group_id of the created security group
@@ -773,7 +773,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Output attestation_api_url constructed as http://{instance_public_ip}:8080
     - _Requirements: 25.1, 25.2, 25.3, 25.4, 25.5, 25.6_
 
-  - [ ] 32.4 Write property tests for deployment infrastructure
+  - [x] 32.4 Write property tests for deployment infrastructure
     - **Property 81: Deployment VPC Isolation**
     - **Property 82: Security Group HTTP-Only Access**
     - **Property 83: IMDSv2 Enforcement**
