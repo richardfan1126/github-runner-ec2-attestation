@@ -257,6 +257,42 @@ On success, the script writes `infrastructure_state.json`:
 
 You can then reach the Remote Executor API at the `attestation_api_url`.
 
+## Cleaning Up
+
+When you're done, remove all deployed resources (Terraform infrastructure, AMI, and EBS snapshot) using the cleanup script.
+
+### Prerequisites
+
+- AMI build result file (`ami_build_result.json`) from the build step
+- [Terraform](https://developer.hashicorp.com/terraform/install) installed
+- AWS credentials configured (`aws configure` or environment variables)
+- Python 3.11+ with [uv](https://astral.sh/uv) installed
+- Script dependencies (boto3) managed via `scripts/pyproject.toml`
+
+### Running the Cleanup
+
+```bash
+uv run --project scripts python scripts/cleanup.py \
+  --ami-build-result ami_build_result.json \
+  --terraform-dir terraform/deploy
+```
+
+CLI arguments:
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--ami-build-result` | No | `ami_build_result.json` | Path to the AMI build result JSON from the build step |
+| `--terraform-dir` | No | `terraform/deploy` | Path to the Terraform configuration directory |
+
+### Cleanup Flow
+
+1. Loads the AMI build result file to read the AMI ID, snapshot ID, and region
+2. Prompts for confirmation before proceeding (type `yes` to confirm)
+3. Runs `terraform init` and `terraform destroy -auto-approve` in the Terraform directory
+4. Deregisters the AMI and deletes the associated EBS snapshot via the AWS API
+5. Verifies that all resources (EC2 instances, AMI, snapshot) have been removed
+6. Reports any remaining resources that may need manual cleanup
+
 ## License
 
 See LICENSE file for details.
