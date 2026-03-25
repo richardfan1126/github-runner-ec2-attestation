@@ -827,10 +827,10 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 86: AMI Build Result Loading**
     - **Validates: Requirements 25.1-25.6, 26.5, 26.7, 26.8, 27.7, 27.8**
 
-- [ ] 34. Checkpoint - Ensure all deployment tests pass
+- [x] 34. Checkpoint - Ensure all deployment tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 35. Add README section documenting how to deploy
+- [x] 35. Add README section documenting how to deploy
   - Document running deploy.py with CLI arguments (--ami-build-result, --instance-type, --output-file)
   - Document prerequisites: AMI build result file (ami_build_result.json), Terraform installed, AWS credentials configured, Python with boto3 (scripts/pyproject.toml)
   - Document the deployment flow: load AMI result → detect IP → terraform init → apply → save state

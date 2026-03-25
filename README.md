@@ -196,6 +196,67 @@ On success, the script writes `ami_build_result.json` (or the path specified by 
 }
 ```
 
+## Deploying the Instance
+
+Once you have a built AMI (from the build step above), deploy it as a running EC2 instance with full network infrastructure.
+
+### Prerequisites
+
+- AMI build result file (`ami_build_result.json`) from the build step
+- [Terraform](https://developer.hashicorp.com/terraform/install) installed
+- AWS credentials configured (`aws configure` or environment variables)
+- Python 3.11+ with [uv](https://astral.sh/uv) installed
+- Script dependencies (boto3, paramiko) managed via `scripts/pyproject.toml`
+
+### Running the Deployment
+
+```bash
+uv run --project scripts python scripts/deploy.py \
+  --ami-build-result ami_build_result.json \
+  --instance-type c5.9xlarge \
+  --output-file infrastructure_state.json
+```
+
+CLI arguments:
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--ami-build-result` | No | `ami_build_result.json` | Path to the AMI build result JSON from the build step |
+| `--instance-type` | No | `c5.9xlarge` | EC2 instance type (must be NitroTPM-compatible) |
+| `--output-file` | No | `infrastructure_state.json` | Path for the infrastructure state output |
+
+### Deployment Flow
+
+1. Loads the AMI build result file to read the AMI ID and region
+2. Detects your public IP via `checkip.amazonaws.com` for security group whitelisting
+3. Runs `terraform init` in `terraform/deploy/`
+4. Runs `terraform apply` with the AMI ID, instance type, detected IP (as `/32` CIDR), and region
+5. Saves Terraform outputs to the infrastructure state file
+
+The Terraform configuration provisions:
+- A VPC (`10.0.0.0/16`) with DNS support
+- A public subnet (`10.0.1.0/24`) with auto-assign public IP
+- An Internet Gateway and route table
+- A security group allowing HTTP on port 8080 only from your IP
+- An EC2 instance from the attestable AMI with IMDSv2 required
+
+### Deployment Output
+
+On success, the script writes `infrastructure_state.json`:
+
+```json
+{
+  "vpc_id": "vpc-0123456789abcdef0",
+  "subnet_id": "subnet-0123456789abcdef0",
+  "security_group_id": "sg-0123456789abcdef0",
+  "instance_id": "i-0123456789abcdef0",
+  "instance_public_ip": "203.0.113.42",
+  "attestation_api_url": "http://203.0.113.42:8080"
+}
+```
+
+You can then reach the Remote Executor API at the `attestation_api_url`.
+
 ## License
 
 See LICENSE file for details.
