@@ -4,13 +4,15 @@
 
 The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-based EC2 instance, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts asynchronously while allowing clients to poll for output and status.
 
-This design document covers three major aspects of the system:
+This design document covers four major aspects of the system:
 
 1. **Runtime Design**: How the Remote Executor operates when deployed - the HTTP server, request handling, script execution, attestation generation, and output polling mechanisms.
 
 2. **Build Design**: How the attestable AMI containing the Remote Executor is built - the GitHub Actions workflow that builds a KIWI image in a reproducible Docker environment, attests build artifacts using GitHub's attestation service, publishes them to GitHub Container Registry with PCR measurements, and converts the KIWI image to an AWS AMI using a temporary EC2 instance that verifies signatures before AMI creation.
 
 3. **Deployment Design**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups for HTTP-only access, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
+
+4. **Cleanup Design**: How all AWS resources created during the build and deployment process are removed - loading resource identifiers from the AMI build result file, destroying Terraform-managed infrastructure, deregistering the AMI and associated EBS snapshot, and verifying all resources have been cleaned up.
 
 ### Key Design Principles
 
@@ -3805,3 +3807,275 @@ Unlike the build process which has automated `terraform destroy` in a `finally` 
 - Mock `checkip.amazonaws.com` for IP detection
 - Mock `subprocess.run` for Terraform commands
 - Use test fixtures for AMI build result JSON and Terraform output JSON
+
+
+---
+
+# PART 4: CLEANUP DESIGN
+
+## Overview
+
+The cleanup system removes all AWS resources created during the build and deployment process. It is implemented as a standalone Python script (`scripts/cleanup.py`) that orchestrates three phases: Terraform infrastructure destruction, AMI/snapshot deregistration, and verification of complete resource removal.
+
+The cleanup script is intentionally separate from the build and deployment scripts — it runs after the user is done with the deployed infrastructure and wants to tear everything down.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[User runs cleanup.py] --> B[Load AMI Build Result JSON]
+    B --> C{User Confirmation?}
+    C -- No --> D[Exit code 0 - Cancelled]
+    C -- Yes --> E[Phase 1: Terraform Destroy]
+    E --> F{terraform-dir exists?}
+    F -- No --> G[Log warning, skip]
+    F -- Yes --> H{terraform.tfstate exists?}
+    H -- No --> I[Log warning, skip]
+    H -- Yes --> J[terraform init]
+    J --> K[terraform destroy -auto-approve]
+    K --> L[Verify state empty]
+    
+    G --> M[Phase 2: AMI Deregistration]
+    I --> M
+    L --> M
+    
+    M --> N{AMI exists?}
+    N -- No --> O[Log warning, skip]
+    N -- Yes --> P[DeregisterImage with DeleteAssociatedSnapshots=True]
+    P --> Q[Wait 2s for propagation]
+    Q --> R[Verify AMI deregistered]
+    R --> S[Verify snapshot deleted]
+    
+    O --> T[Phase 3: Verification]
+    S --> T
+    
+    T --> U[Check EC2 instances tagged Purpose: AMI Build / Attestation Demo]
+    U --> V[Check specific AMI by ami_id]
+    V --> W[Check specific snapshot by snapshot_id]
+    W --> X{Remaining resources?}
+    X -- Yes --> Y[Report resources with type, ID, status]
+    X -- No --> Z[Log: all resources removed]
+    
+    Y --> AA[Exit code 0 on success, 1 on failure]
+    Z --> AA
+```
+
+## Components and Interfaces
+
+### Cleanup Script (`scripts/cleanup.py`)
+
+The cleanup script consists of five functions:
+
+#### `parse_arguments() -> argparse.Namespace`
+
+Parses CLI arguments:
+- `--ami-build-result`: Path to AMI build result JSON file (default: `ami_build_result.json`)
+- `--terraform-dir`: Path to Terraform configuration directory (default: `terraform/deploy`)
+
+#### `destroy_infrastructure(terraform_dir: str) -> None`
+
+Destroys Terraform-managed infrastructure:
+1. Checks if `terraform_dir` exists — skips with warning if not
+2. Checks if `terraform.tfstate` exists in `terraform_dir` — skips with warning if not
+3. Runs `terraform init` in `terraform_dir`
+4. Runs `terraform destroy -auto-approve` with dummy variable values:
+   - `-var 'attestable_ami_id=dummy'`
+   - `-var 'allowed_http_cidr=0.0.0.0/0'`
+5. Verifies Terraform state file shows no remaining resources by parsing `terraform.tfstate` JSON and checking the `resources` array is empty
+
+#### `deregister_ami(ec2_client, ami_id: str, snapshot_id: str) -> None`
+
+Deregisters the AMI and associated snapshot:
+1. Calls `describe_images(ImageIds=[ami_id])` to check AMI exists
+2. If `InvalidAMIID.NotFound`, logs warning and returns (skip)
+3. Calls `deregister_image(ImageId=ami_id, DeleteAssociatedSnapshots=True)`
+4. Waits 2 seconds for propagation
+5. Verifies AMI deregistration via `describe_images` (expects `InvalidAMIID.NotFound`)
+6. Verifies snapshot deletion via `describe_snapshots` (expects `InvalidSnapshot.NotFound`)
+
+#### `verify_cleanup(ec2_client, ami_build_result: dict) -> None`
+
+Verifies all resources have been cleaned up:
+1. Queries EC2 instances with tag filters:
+   - `Purpose: AMI Build` or `Purpose: Attestation Demo`
+   - States: `pending`, `running`, `stopping`, `stopped`
+2. Checks specific AMI by `ami_id` from build result
+3. Checks specific EBS snapshot by `snapshot_id` from build result
+4. Collects remaining resources as list of `{Type, ID, Status}` dicts
+5. Reports remaining resources or confirms complete cleanup
+
+#### `main() -> int`
+
+Orchestrates the full cleanup flow:
+1. Parses arguments
+2. Loads and validates AMI build result JSON (extracts `ami_id`, `snapshot_id`, `region`)
+3. Prompts user for confirmation — exits with code 0 if declined
+4. Calls `destroy_infrastructure(terraform_dir)`
+5. Creates EC2 client with region from build result
+6. Calls `deregister_ami(ec2_client, ami_id, snapshot_id)`
+7. Calls `verify_cleanup(ec2_client, ami_build_result)`
+8. Returns 0 on success, 1 on any exception
+
+### Logging Configuration
+
+- Dual output: `stdout` and `cleanup.log` file
+- Format: `%(asctime)s - %(name)s - %(levelname)s - %(message)s`
+- Level: `INFO`
+
+## Data Models
+
+### AMI Build Result (Input)
+
+```json
+{
+  "ami_id": "ami-0123456789abcdef0",
+  "snapshot_id": "snap-0123456789abcdef0",
+  "region": "us-east-1"
+}
+```
+
+### Remaining Resource (Internal)
+
+```python
+{
+    "Type": "EC2 Instance" | "AMI" | "EBS Snapshot",
+    "ID": str,       # e.g. "i-0123...", "ami-0123...", "snap-0123..."
+    "Status": str     # e.g. "running", "available", "completed"
+}
+```
+
+## Correctness Properties
+
+*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+
+### Property 87: Cleanup CLI Argument Parsing
+
+*For any* invocation of the cleanup script with or without `--ami-build-result` and `--terraform-dir` arguments, the parser should return the provided values or the defaults (`ami_build_result.json` and `terraform/deploy` respectively).
+
+**Validates: Requirements 28.1, 28.2**
+
+### Property 88: Cleanup Build Result Loading
+
+*For any* valid JSON file containing `ami_id`, `snapshot_id`, and `region` fields, the cleanup script should correctly parse and extract all three fields.
+
+**Validates: Requirements 28.4**
+
+### Property 89: Cleanup User Cancellation
+
+*For any* user input string that is not "yes" or "y" (case-insensitive), the cleanup script should exit with return code 0 without performing any resource deletion.
+
+**Validates: Requirements 28.8, 28.9**
+
+### Property 90: Terraform Subprocess Error Propagation
+
+*For any* non-zero exit code from `terraform init` or `terraform destroy`, the `destroy_infrastructure` function should raise a `RuntimeError`.
+
+**Validates: Requirements 29.4, 29.6**
+
+### Property 91: Post-Destroy State Verification
+
+*For any* Terraform state file JSON, if the `resources` array is empty after destroy, the function should log success; if the `resources` array is non-empty, the function should log a warning about remaining resources.
+
+**Validates: Requirements 29.7, 29.8**
+
+### Property 92: AMI Deregistration Verification
+
+*For any* AMI ID that exists, after calling `deregister_image` with `DeleteAssociatedSnapshots=True`, the function should verify both AMI deregistration and snapshot deletion by calling `describe_images` and `describe_snapshots` respectively.
+
+**Validates: Requirements 30.2, 30.4, 30.5, 30.6**
+
+### Property 93: Cleanup Resource Verification and Reporting
+
+*For any* set of remaining AWS resources (EC2 instances, AMIs, EBS snapshots), the `verify_cleanup` function should report each resource's type, ID, and status. If no resources remain, it should log that all resources are removed.
+
+**Validates: Requirements 31.1, 31.2, 31.3, 31.4, 31.5, 31.6**
+
+### Property 94: Cleanup Exit Code Correctness
+
+*For any* execution of the cleanup script, if all steps succeed the exit code should be 0; if any step raises an exception the exit code should be 1.
+
+**Validates: Requirements 31.7, 31.8**
+
+## Cleanup Error Handling
+
+### Error Categories
+
+1. **File Errors**: Missing AMI build result file (`FileNotFoundError`), unparseable JSON (`RuntimeError`)
+2. **Terraform Errors**: Missing terraform-dir (warning + skip), missing terraform.tfstate (warning + skip), `terraform init` failure (`RuntimeError`), `terraform destroy` failure (`RuntimeError`)
+3. **AWS API Errors**: AMI not found (`InvalidAMIID.NotFound` — warning + skip), snapshot not found (`InvalidSnapshot.NotFound` — warning + skip), `DeregisterImage` failure (`ClientError` — re-raised)
+4. **User Cancellation**: Non-confirming input — clean exit with code 0
+
+### Error Handling Strategy
+
+The cleanup script uses a defensive approach:
+- **Skip on missing**: If terraform-dir, state file, or AMI doesn't exist, log a warning and continue to the next phase rather than failing
+- **Fail on subprocess errors**: If `terraform init` or `terraform destroy` returns non-zero, raise immediately
+- **Fail on API errors**: If `deregister_image` fails (other than NotFound), re-raise the `ClientError`
+- **Top-level catch**: The `main()` function wraps everything in a try/except, returning exit code 1 on any unhandled exception and logging that resources may still exist
+
+### Graceful Degradation
+
+The three cleanup phases are sequential but independent in terms of skip behavior:
+- If Terraform destruction is skipped (missing dir/state), AMI deregistration still proceeds
+- If AMI deregistration is skipped (already deregistered), verification still proceeds
+- Verification always runs to give the user a final report of remaining resources
+
+## Cleanup Testing Strategy
+
+### Dual Testing Approach
+
+**Unit Tests** focus on:
+- CLI argument parsing with default values and custom values
+- AMI build result file loading (valid JSON, missing file, invalid JSON, missing fields)
+- User confirmation prompt handling (yes, y, no, empty, random strings)
+- `destroy_infrastructure` with missing directory, missing state file, init failure, destroy failure
+- `deregister_ami` with existing AMI, already-deregistered AMI, API failure
+- `verify_cleanup` with no remaining resources, mixed remaining resources
+- Exit code 0 on success, exit code 1 on failure
+
+**Property-Based Tests** focus on:
+- CLI argument parsing defaults and overrides (Property 87)
+- AMI build result JSON parsing for all valid structures (Property 88)
+- User cancellation for all non-confirming inputs (Property 89)
+- Terraform error propagation for all non-zero exit codes (Property 90)
+- Post-destroy state verification for all state file contents (Property 91)
+- AMI deregistration verification flow (Property 92)
+- Resource verification and reporting for all resource combinations (Property 93)
+- Exit code correctness across success and failure paths (Property 94)
+
+### Property-Based Testing Configuration
+
+- Library: `hypothesis` (Python)
+- Minimum 100 iterations per property test
+- Each test tagged with: **Feature: github-actions-remote-executor, Property {number}: {property_text}**
+- Each correctness property implemented by a single property-based test
+
+### Cleanup Unit Testing
+
+**CLI Argument Parsing**
+- Unit tests: No args (defaults), custom `--ami-build-result`, custom `--terraform-dir`, both custom
+- Property tests: Argument round-trip (Property 87)
+
+**Build Result Loading**
+- Unit tests: Missing file, empty file, invalid JSON, missing `ami_id`/`snapshot_id`/`region`
+- Property tests: Valid JSON extraction (Property 88)
+
+**User Confirmation**
+- Unit tests: "yes", "y", "Yes", "Y", "no", "n", "", "maybe"
+- Property tests: Non-confirming cancellation (Property 89)
+
+**Terraform Destruction**
+- Unit tests: Missing directory, missing state, init failure (exit code 1), destroy failure (exit code 1), successful destroy with empty state, successful destroy with non-empty state
+- Property tests: Error propagation (Property 90), state verification (Property 91)
+
+**AMI Deregistration**
+- Unit tests: AMI exists and deregisters, AMI not found (skip), API error on deregister
+- Property tests: Deregistration verification (Property 92)
+
+**Cleanup Verification**
+- Unit tests: No remaining resources, EC2 instances found, AMI found, snapshot found, mixed resources
+- Property tests: Resource reporting (Property 93)
+
+**Exit Code**
+- Unit tests: Full success path (exit 0), exception during Terraform (exit 1), exception during AMI deregister (exit 1), user cancellation (exit 0)
+- Property tests: Exit code correctness (Property 94)

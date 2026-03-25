@@ -837,22 +837,83 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Document the output: infrastructure_state.json containing vpc_id, subnet_id, security_group_id, instance_id, instance_public_ip, attestation_api_url
   - _Requirements: 22, 23, 24, 25, 26, 27_
 
-- [ ] 36. Final checkpoint - Ensure all tests pass
+- [x] 36. Final checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 37. Test cleanup script (scripts/cleanup.py)
+  - [ ] 37.1 Write property tests for cleanup CLI argument parsing
+    - **Property 87: Cleanup CLI Argument Parsing**
+    - Test that invoking parse_arguments() with no args returns defaults (ami_build_result.json, terraform/deploy)
+    - Test that providing custom --ami-build-result and --terraform-dir values are correctly parsed
+    - **Validates: Requirements 28.1, 28.2**
+
+  - [ ] 37.2 Write property tests for cleanup build result loading
+    - **Property 88: Cleanup Build Result Loading**
+    - Test that any valid JSON file containing ami_id, snapshot_id, and region fields is correctly parsed
+    - Test that missing file raises FileNotFoundError, invalid JSON raises RuntimeError
+    - **Validates: Requirements 28.4**
+
+  - [ ] 37.3 Write property tests for cleanup user cancellation
+    - **Property 89: Cleanup User Cancellation**
+    - Test that any user input not equal to "yes" or "y" (case-insensitive) results in exit code 0 without resource deletion
+    - **Validates: Requirements 28.8, 28.9**
+
+  - [ ] 37.4 Write property tests for Terraform subprocess error propagation
+    - **Property 90: Terraform Subprocess Error Propagation**
+    - Test that any non-zero exit code from terraform init or terraform destroy causes destroy_infrastructure to raise RuntimeError
+    - **Validates: Requirements 29.4, 29.6**
+
+  - [ ] 37.5 Write property tests for post-destroy state verification
+    - **Property 91: Post-Destroy State Verification**
+    - Test that empty resources array in Terraform state logs success; non-empty resources array logs warning
+    - **Validates: Requirements 29.7, 29.8**
+
+  - [ ] 37.6 Write property tests for AMI deregistration verification
+    - **Property 92: AMI Deregistration Verification**
+    - Test that after deregister_image with DeleteAssociatedSnapshots=True, both AMI and snapshot deletion are verified via describe_images and describe_snapshots
+    - Test that AMI not found (InvalidAMIID.NotFound) is handled gracefully with a warning
+    - **Validates: Requirements 30.2, 30.4, 30.5, 30.6**
+
+  - [ ] 37.7 Write property tests for cleanup resource verification and reporting
+    - **Property 93: Cleanup Resource Verification and Reporting**
+    - Test that verify_cleanup reports each remaining resource's type, ID, and status
+    - Test that when no resources remain, it logs that all resources are removed
+    - **Validates: Requirements 31.1, 31.2, 31.3, 31.4, 31.5, 31.6**
+
+  - [ ] 37.8 Write property tests for cleanup exit code correctness
+    - **Property 94: Cleanup Exit Code Correctness**
+    - Test that main() returns 0 when all steps succeed
+    - Test that main() returns 1 when any step raises an exception
+    - **Validates: Requirements 31.7, 31.8**
+
+  - [ ] 37.9 Write unit tests for cleanup script functions
+    - Test parse_arguments with no args (defaults), custom args, both custom
+    - Test build result loading: missing file, empty file, invalid JSON, missing fields
+    - Test user confirmation: "yes", "y", "Yes", "Y", "no", "n", "", "maybe"
+    - Test destroy_infrastructure: missing directory, missing state, init failure, destroy failure, successful destroy
+    - Test deregister_ami: AMI exists and deregisters, AMI not found, API error
+    - Test verify_cleanup: no remaining resources, EC2 instances found, AMI found, snapshot found, mixed resources
+    - Test main exit codes: full success (0), exception during Terraform (1), user cancellation (0)
+    - _Requirements: 28.1-28.9, 29.1-29.8, 30.1-30.7, 31.1-31.8_
+
+- [ ] 38. Final checkpoint - Ensure all cleanup tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 86 correctness properties from the design document
+- Property tests validate the 94 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
+- The cleanup implementation (tasks 37-38) covers testing the existing scripts/cleanup.py which is already fully implemented
 - Python dependencies are separated into two configurations:
   - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, hypothesis, pytest, pytest-asyncio, httpx)
   - scripts/pyproject.toml: Build/deployment script dependencies (boto3, paramiko)
   - The remote executor does NOT use boto3 - it only runs on the EC2 instance and doesn't interact with AWS APIs
   - boto3 is ONLY used by build/deployment scripts (build-ami.py, cleanup.py, deploy.py) that run outside the KIWI image
+  - cleanup.py uses boto3 from scripts/pyproject.toml (same dependency configuration as build-ami.py and deploy.py)
   - When building the KIWI image, only dependencies from pyproject.toml are installed via config.sh script
   - The KIWI config.sh phase has no network access; dependency wheels are pre-downloaded by build-kiwi-image.sh (which has network) and installed offline using pip3 install --no-index --find-links
   - build-kiwi-image.sh extracts the dependency list dynamically from pyproject.toml using tomllib — package names are never hardcoded in the build script
@@ -860,7 +921,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Dependency installation occurs during KIWI image build phase, before image finalization
 - AWS Nitro attestation requires running on a Nitro-based EC2 instance
 - Scripts execute as root with full system privileges
-- All 86 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 94 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
@@ -878,3 +939,6 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - NitroTPM automatically enabled via AMI registration settings (TpmSupport = v2.0, BootMode = uefi)
 - Deployment script auto-detects user IP via checkip.amazonaws.com for /32 CIDR whitelisting
 - On deployment failure, user must manually run terraform destroy (no automated cleanup — infrastructure is meant to persist)
+- Cleanup script (scripts/cleanup.py) is already fully implemented; tasks 37-38 focus exclusively on writing property and unit tests for the existing code
+- Cleanup script uses subprocess to invoke Terraform and boto3 for AWS API calls (deregister AMI, describe resources)
+- Cleanup verification checks for EC2 instances, AMIs, and EBS snapshots using project-specific tags and resource IDs

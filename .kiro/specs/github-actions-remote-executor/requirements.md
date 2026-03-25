@@ -14,6 +14,8 @@ This specification covers three major aspects:
 
 3. **Deployment Requirements (Requirements 22-27)**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups for HTTP-only access, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
 
+4. **Cleanup Requirements (Requirements 28-31)**: How all AWS resources created during the build and deployment process are removed - loading resource identifiers from the AMI build result file, destroying Terraform-managed infrastructure, deregistering the AMI and associated EBS snapshot, and verifying all resources have been cleaned up.
+
 The build process does NOT use the Remote Executor itself (since you can't use something that doesn't exist yet during initial builds). Instead, it uses standard GitHub Actions runners to build the KIWI image, and a temporary EC2 instance to convert it to an AMI.
 
 ## Glossary
@@ -36,6 +38,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Deploy_Script**: Python script (scripts/deploy.py) that orchestrates the deployment by loading AMI build results, detecting user IP, running Terraform, and saving infrastructure state
 - **Target_Instance**: EC2 instance launched from the attestable AMI that runs the Remote Executor service
 - **Infrastructure_State**: JSON file containing deployed resource identifiers and attestation API URL
+
+### Cleanup Components
+- **Cleanup_Script**: Python script (scripts/cleanup.py) that orchestrates the removal of all AWS resources created during the build and deployment process
+- **AMI_Build_Result**: JSON file containing ami_id, snapshot_id, and region fields produced by the AMI build process
 
 ### Build Components
 - **Build_Workflow**: The GitHub Actions workflow that builds the KIWI image and attests artifacts
@@ -505,3 +511,66 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 9. IF saving the infrastructure state file fails, THEN THE Deploy_Script SHALL fail with a RuntimeError
 10. THE Deploy_Script SHALL log all operations including Terraform variable values, command outputs, and final infrastructure state summary
 11. IF any deployment step fails, THEN THE Deploy_Script SHALL log a message advising the user to run terraform destroy to clean up partial resources
+
+
+## Cleanup Requirements
+
+### Requirement 28: Cleanup Script Configuration and Input Loading
+
+**User Story:** As a DevOps engineer, I want the cleanup script to load resource identifiers from the AMI build result file, so that the correct resources are targeted for deletion
+
+#### Acceptance Criteria
+
+1. THE Cleanup_Script SHALL accept a --ami-build-result argument with default value ami_build_result.json
+2. THE Cleanup_Script SHALL accept a --terraform-dir argument with default value terraform/deploy
+3. IF the AMI build result file does not exist, THEN THE Cleanup_Script SHALL fail with a FileNotFoundError
+4. THE Cleanup_Script SHALL parse the AMI build result file as JSON and extract ami_id, snapshot_id, and region fields
+5. IF the AMI build result file cannot be parsed, THEN THE Cleanup_Script SHALL fail with a RuntimeError
+6. THE Cleanup_Script SHALL log the loaded ami_id, snapshot_id, and region values at INFO level
+7. THE Cleanup_Script SHALL configure logging to output to both stdout and a cleanup.log file
+8. THE Cleanup_Script SHALL prompt the user for confirmation before proceeding with resource destruction
+9. IF the user does not confirm with "yes" or "y", THEN THE Cleanup_Script SHALL exit with return code 0 without deleting resources
+
+### Requirement 29: Terraform Infrastructure Destruction
+
+**User Story:** As a DevOps engineer, I want the cleanup script to destroy all Terraform-managed deployment infrastructure, so that VPC, security groups, and EC2 instances are removed
+
+#### Acceptance Criteria
+
+1. THE Cleanup_Script SHALL run terraform init in the terraform-dir directory before executing destroy
+2. IF the terraform-dir directory does not exist, THEN THE Cleanup_Script SHALL log a warning and skip Terraform destruction
+3. IF no terraform.tfstate file exists in the terraform-dir, THEN THE Cleanup_Script SHALL log a warning and skip Terraform destruction
+4. IF terraform init fails with a non-zero exit code, THEN THE Cleanup_Script SHALL raise a RuntimeError
+5. THE Cleanup_Script SHALL run terraform destroy -auto-approve with dummy variable values for attestable_ami_id and allowed_http_cidr
+6. IF terraform destroy fails with a non-zero exit code, THEN THE Cleanup_Script SHALL raise a RuntimeError
+7. WHEN terraform destroy succeeds, THE Cleanup_Script SHALL verify the Terraform state file shows no remaining resources
+8. IF the Terraform state still contains resources after destroy, THEN THE Cleanup_Script SHALL log a warning indicating resources may not have been destroyed properly
+
+### Requirement 30: AMI Deregistration and Snapshot Deletion
+
+**User Story:** As a DevOps engineer, I want the cleanup script to deregister the attestable AMI and delete the associated EBS snapshot, so that no unused images remain in the AWS account
+
+#### Acceptance Criteria
+
+1. THE Cleanup_Script SHALL create an EC2 client using the region from the AMI build result
+2. THE Cleanup_Script SHALL check if the AMI exists before attempting deregistration using describe_images
+3. IF the AMI is not found (InvalidAMIID.NotFound), THEN THE Cleanup_Script SHALL log a warning and skip AMI deregistration
+4. THE Cleanup_Script SHALL deregister the AMI using the EC2 DeregisterImage API with DeleteAssociatedSnapshots set to True
+5. WHEN the AMI is deregistered, THE Cleanup_Script SHALL wait 2 seconds and verify the deregistration propagated using describe_images
+6. WHEN the AMI is deregistered, THE Cleanup_Script SHALL verify the snapshot deletion propagated using describe_snapshots
+7. IF the EC2 DeregisterImage API call fails, THEN THE Cleanup_Script SHALL log the error and raise the ClientError
+
+### Requirement 31: Cleanup Verification and Reporting
+
+**User Story:** As a DevOps engineer, I want the cleanup script to verify all resources have been removed and report any remaining resources, so that I can manually clean up anything that was missed
+
+#### Acceptance Criteria
+
+1. WHEN AMI deregistration completes, THE Cleanup_Script SHALL check for remaining EC2 instances tagged with Purpose "AMI Build" or "Attestation Demo" in pending, running, stopping, or stopped states
+2. THE Cleanup_Script SHALL check for the specific AMI by ami_id from the build result
+3. THE Cleanup_Script SHALL check for the specific EBS snapshot by snapshot_id from the build result
+4. IF remaining resources are found, THEN THE Cleanup_Script SHALL log a warning listing each resource type, ID, and status
+5. IF remaining resources are found, THEN THE Cleanup_Script SHALL advise the user to manually delete the listed resources
+6. IF no remaining resources are found, THEN THE Cleanup_Script SHALL log that cleanup verification is complete and all resources are removed
+7. IF any step in the cleanup process fails, THEN THE Cleanup_Script SHALL return exit code 1 and log that some resources may still exist
+8. WHEN all cleanup steps succeed, THE Cleanup_Script SHALL return exit code 0
