@@ -840,53 +840,53 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 36. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 37. Test cleanup script (scripts/cleanup.py)
-  - [ ] 37.1 Write property tests for cleanup CLI argument parsing
+- [x] 37. Test cleanup script (scripts/cleanup.py)
+  - [x] 37.1 Write property tests for cleanup CLI argument parsing
     - **Property 87: Cleanup CLI Argument Parsing**
     - Test that invoking parse_arguments() with no args returns defaults (ami_build_result.json, terraform/deploy)
     - Test that providing custom --ami-build-result and --terraform-dir values are correctly parsed
     - **Validates: Requirements 28.1, 28.2**
 
-  - [ ] 37.2 Write property tests for cleanup build result loading
+  - [x] 37.2 Write property tests for cleanup build result loading
     - **Property 88: Cleanup Build Result Loading**
     - Test that any valid JSON file containing ami_id, snapshot_id, and region fields is correctly parsed
     - Test that missing file raises FileNotFoundError, invalid JSON raises RuntimeError
     - **Validates: Requirements 28.4**
 
-  - [ ] 37.3 Write property tests for cleanup user cancellation
+  - [x] 37.3 Write property tests for cleanup user cancellation
     - **Property 89: Cleanup User Cancellation**
     - Test that any user input not equal to "yes" or "y" (case-insensitive) results in exit code 0 without resource deletion
     - **Validates: Requirements 28.8, 28.9**
 
-  - [ ] 37.4 Write property tests for Terraform subprocess error propagation
+  - [x] 37.4 Write property tests for Terraform subprocess error propagation
     - **Property 90: Terraform Subprocess Error Propagation**
     - Test that any non-zero exit code from terraform init or terraform destroy causes destroy_infrastructure to raise RuntimeError
     - **Validates: Requirements 29.4, 29.6**
 
-  - [ ] 37.5 Write property tests for post-destroy state verification
+  - [x] 37.5 Write property tests for post-destroy state verification
     - **Property 91: Post-Destroy State Verification**
     - Test that empty resources array in Terraform state logs success; non-empty resources array logs warning
     - **Validates: Requirements 29.7, 29.8**
 
-  - [ ] 37.6 Write property tests for AMI deregistration verification
+  - [x] 37.6 Write property tests for AMI deregistration verification
     - **Property 92: AMI Deregistration Verification**
     - Test that after deregister_image with DeleteAssociatedSnapshots=True, both AMI and snapshot deletion are verified via describe_images and describe_snapshots
     - Test that AMI not found (InvalidAMIID.NotFound) is handled gracefully with a warning
     - **Validates: Requirements 30.2, 30.4, 30.5, 30.6**
 
-  - [ ] 37.7 Write property tests for cleanup resource verification and reporting
+  - [x] 37.7 Write property tests for cleanup resource verification and reporting
     - **Property 93: Cleanup Resource Verification and Reporting**
     - Test that verify_cleanup reports each remaining resource's type, ID, and status
     - Test that when no resources remain, it logs that all resources are removed
     - **Validates: Requirements 31.1, 31.2, 31.3, 31.4, 31.5, 31.6**
 
-  - [ ] 37.8 Write property tests for cleanup exit code correctness
+  - [x] 37.8 Write property tests for cleanup exit code correctness
     - **Property 94: Cleanup Exit Code Correctness**
     - Test that main() returns 0 when all steps succeed
     - Test that main() returns 1 when any step raises an exception
     - **Validates: Requirements 31.7, 31.8**
 
-  - [ ] 37.9 Write unit tests for cleanup script functions
+  - [x] 37.9 Write unit tests for cleanup script functions
     - Test parse_arguments with no args (defaults), custom args, both custom
     - Test build result loading: missing file, empty file, invalid JSON, missing fields
     - Test user confirmation: "yes", "y", "Yes", "Y", "no", "n", "", "maybe"
