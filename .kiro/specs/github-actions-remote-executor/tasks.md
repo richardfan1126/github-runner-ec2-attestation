@@ -341,7 +341,6 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Specify packages and system configuration
     - Include pyproject.toml and uv.lock in image description directory
     - _Requirements: 11.4_
-  
   - [x] 17.2.1 Create KIWI configuration script (config.sh) for Python dependencies
     - Create config.sh script that executes during KIWI image preparation phase
     - Install Python dependencies from pre-downloaded wheels using pip3 install --no-index --find-links (fully offline, no network required)
@@ -617,7 +616,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - _Requirements: 18.1, 18.2, 18.3, 18.8, 18.9_
 
   - [x] 27.2 Create validate_artifact_files function
-    - Verify raw disk image exists using ls ~/artifacts/build-output/*.raw
+    - Verify raw disk image exists using ls ~/artifacts/build-output/\*.raw
     - Verify pcr_measurements.json exists using test -f command
     - Raise RuntimeError with descriptive error if files missing
     - _Requirements: 18.4, 18.5, 18.10, 18.11_
@@ -639,7 +638,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [x] 28. Implement snapshot upload and AMI registration
   - [x] 28.1 Create upload_snapshot function
-    - Find raw disk image filename in ~/artifacts/build-output using ls *.raw
+    - Find raw disk image filename in ~/artifacts/build-output using ls \*.raw
     - Execute /home/ec2-user/.cargo/bin/coldsnap upload with full path to raw image
     - Stream coldsnap output to logger in real-time during upload
     - Parse snapshot ID from coldsnap stdout (search for "snap-" prefix in all lines)
@@ -896,7 +895,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test main exit codes: full success (0), exception during Terraform (1), user cancellation (0)
     - _Requirements: 28.1-28.9, 29.1-29.8, 30.1-30.7, 31.1-31.8_
 
-- [ ] 38. Final checkpoint - Ensure all cleanup tests pass
+- [x] 38. Final checkpoint - Ensure all cleanup tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
