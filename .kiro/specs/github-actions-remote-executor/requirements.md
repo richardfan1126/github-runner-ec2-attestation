@@ -16,6 +16,10 @@ This specification covers three major aspects:
 
 4. **Cleanup Requirements (Requirements 28-31)**: How all AWS resources created during the build and deployment process are removed - loading resource identifiers from the AMI build result file, destroying Terraform-managed infrastructure, deregistering the AMI and associated EBS snapshot, and verifying all resources have been cleaned up.
 
+5. **Debug Requirements (Requirement 32)**: Optional debug features for the deployed instance - enabling SSH access using standard EC2 key pair provisioning for troubleshooting, controlled via opt-in flags in the deployment script and Terraform variables.
+
+Note: By default, the KIWI image excludes SSH-related packages (openssh-server, cloud-init, ec2-instance-connect) to remove operator access. The debug feature must be enabled at KIWI image build time to include these packages, and then at deployment time to open port 22 and attach a key pair.
+
 The build process does NOT use the Remote Executor itself (since you can't use something that doesn't exist yet during initial builds). Instead, it uses standard GitHub Actions runners to build the KIWI image, and a temporary EC2 instance to convert it to an AMI.
 
 ## Glossary
@@ -574,3 +578,48 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. IF no remaining resources are found, THEN THE Cleanup_Script SHALL log that cleanup verification is complete and all resources are removed
 7. IF any step in the cleanup process fails, THEN THE Cleanup_Script SHALL return exit code 1 and log that some resources may still exist
 8. WHEN all cleanup steps succeed, THE Cleanup_Script SHALL return exit code 0
+
+## Debug Requirements
+
+### Requirement 32: Debug SSH Access for KIWI Image Build
+
+**User Story:** As a DevOps engineer, I want to optionally build a KIWI image with SSH access enabled, so that instances launched from the AMI can be accessed via SSH for debugging using standard EC2 key pair provisioning
+
+#### Acceptance Criteria
+
+##### GitHub Actions Workflow
+
+1. THE Build_Workflow SHALL default to building the KIWI image without SSH access on all triggers (push, pull_request, schedule)
+2. THE Build_Workflow SHALL define a workflow_dispatch input named enable_ssh of type boolean with default value false and a description indicating it enables SSH debug access in the built image
+3. WHEN triggered via workflow_dispatch with enable_ssh set to true, THE Build_Workflow SHALL pass the --enable-ssh flag to the build-kiwi-image.sh script
+4. WHEN triggered via push or any non-workflow_dispatch event, THE Build_Workflow SHALL NOT pass the --enable-ssh flag to the build script
+5. WHEN the image is built with SSH enabled, THE Build_Workflow SHALL append a prominent warning to the GitHub Actions job summary (GITHUB_STEP_SUMMARY) indicating that the image was built with SSH debug access enabled and is NOT intended for production use
+6. THE warning in the job summary SHALL be visually distinct (e.g., using a blockquote with a warning emoji or similar markdown formatting) so it cannot be overlooked
+
+##### Build-Time (KIWI Image)
+
+7. THE build-kiwi-image.sh script SHALL accept an optional --enable-ssh flag
+8. WHEN --enable-ssh is passed, THE build script SHALL modify the KIWI image description to remove the ignore directives for openssh-server, cloud-init, cloud-init-cfg-ec2, and ec2-instance-connect before building
+9. WHEN --enable-ssh is NOT passed, THE KIWI image SHALL continue to exclude openssh-server, cloud-init, cloud-init-cfg-ec2, and ec2-instance-connect via ignore directives (default secure behavior)
+10. WHEN --enable-ssh is passed, THE config.sh script SHALL enable the sshd service via systemctl enable sshd
+11. WHEN --enable-ssh is NOT passed, THE config.sh script SHALL NOT enable the sshd service
+12. THE build script SHALL pass an ENABLE_SSH environment variable to the KIWI builder Docker container
+13. THE config.sh script SHALL read the ENABLE_SSH environment variable to conditionally enable sshd
+14. WHEN SSH is enabled, THE KIWI image SHALL rely on cloud-init and ec2-instance-connect for SSH key provisioning using standard EC2 key pair mechanisms (no baked-in keys)
+
+##### Deployment-Time (Terraform and Deploy Script)
+
+15. THE Deploy_Script SHALL accept an optional --enable-ssh flag that defaults to disabled
+16. THE Deploy_Script SHALL accept an optional --key-pair-name argument specifying an existing EC2 key pair name
+17. IF --enable-ssh is provided without --key-pair-name, THEN THE Deploy_Script SHALL fail with an error indicating that --key-pair-name is required when SSH is enabled
+18. IF --enable-ssh is not provided, THEN THE Deploy_Terraform SHALL NOT attach any key pair to the Target_Instance
+19. IF --enable-ssh is not provided, THEN THE Deploy_Terraform SHALL NOT allow inbound SSH traffic in the security group
+20. WHEN --enable-ssh is provided, THE Deploy_Terraform SHALL accept an enable_ssh variable with default value false
+21. WHEN --enable-ssh is provided, THE Deploy_Terraform SHALL accept a key_pair_name variable with default value ""
+22. WHEN enable_ssh is true, THE Deploy_Terraform SHALL add an inbound security group rule allowing TCP port 22 from the allowed_http_cidr variable
+23. WHEN enable_ssh is true, THE Deploy_Terraform SHALL attach the EC2 key pair specified by key_pair_name to the Target_Instance
+24. WHEN enable_ssh is false, THE security group SHALL NOT contain any inbound rule for port 22
+25. WHEN enable_ssh is false, THE Target_Instance SHALL NOT have a key_name attribute set
+26. THE Deploy_Script SHALL pass enable_ssh and key_pair_name as Terraform variables via -var flags when --enable-ssh is provided
+27. WHEN --enable-ssh is provided, THE Deploy_Script SHALL log a warning that SSH debug access is enabled and the instance is accessible on port 22
+28. THE Deploy_Script SHALL include the ssh_enabled status in the Infrastructure_State JSON output

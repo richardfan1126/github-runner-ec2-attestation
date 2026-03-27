@@ -4,7 +4,7 @@
 
 The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-based EC2 instance, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts asynchronously while allowing clients to poll for output and status.
 
-This design document covers four major aspects of the system:
+This design document covers five major aspects of the system:
 
 1. **Runtime Design**: How the Remote Executor operates when deployed - the HTTP server, request handling, script execution, attestation generation, and output polling mechanisms.
 
@@ -13,6 +13,8 @@ This design document covers four major aspects of the system:
 3. **Deployment Design**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups for HTTP-only access, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
 
 4. **Cleanup Design**: How all AWS resources created during the build and deployment process are removed - loading resource identifiers from the AMI build result file, destroying Terraform-managed infrastructure, deregistering the AMI and associated EBS snapshot, and verifying all resources have been cleaned up.
+
+5. **Debug Design**: How optional SSH debug access is enabled across the build and deployment pipeline - adding a `workflow_dispatch` input to the GitHub Actions workflow, modifying the KIWI image build to conditionally include SSH packages, and extending the deploy script and Terraform to open port 22 and attach an EC2 key pair when debug access is requested.
 
 ### Key Design Principles
 
@@ -1107,11 +1109,11 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Checks out repository with submodules
 - Builds KIWI builder Docker image
 - Configures loop devices for KIWI image building
-- Executes KIWI NG build script inside container
+- Executes KIWI NG build script inside container (optionally with `--enable-ssh` flag — see [PART 5: DEBUG DESIGN](#part-5-debug-design))
 - Extracts PCR measurements from build output
 - Publishes artifacts to GHCR with ORAS
 - Triggers GitHub attestation service
-- Generates workflow summary with verification instructions
+- Generates workflow summary with verification instructions (includes SSH warning when debug access is enabled)
 
 **KIWI_Builder (Docker Container)**
 - Provides reproducible build environment
@@ -1179,12 +1181,12 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 3. KIWI builder Docker image built from Dockerfile
 4. Build output directory created on host
 5. Loop devices configured on host for KIWI
-6. KIWI NG build script executed inside container
+6. KIWI NG build script executed inside container (with `--enable-ssh` if `workflow_dispatch` input is true — see [PART 5: DEBUG DESIGN](#part-5-debug-design))
 7. Raw disk image and PCR measurements generated
 8. PCR4 and PCR7 extracted from pcr_measurements.json
 9. Artifacts pushed to GHCR with ORAS (with PCR annotations)
 10. GitHub attestation service signs artifacts
-11. Workflow summary generated with verification instructions
+11. Workflow summary generated with verification instructions (SSH warning appended if debug access enabled)
 
 **Artifact Publishing Flow:**
 
@@ -3542,14 +3544,14 @@ The deployment provisions a dedicated VPC with internet connectivity:
 
 ### Security Group
 
-The security group enforces HTTP-only access — no SSH:
+The security group enforces HTTP-only access by default — no SSH:
 
 | Direction | Protocol | Port  | Source/Destination     |
 |-----------|----------|-------|------------------------|
 | Ingress   | TCP      | 8080  | `var.allowed_http_cidr`|
 | Egress    | All      | All   | `0.0.0.0/0`           |
 
-There is no ingress rule for port 22 (SSH). The target instance is managed exclusively through the attestation HTTP API.
+By default, there is no ingress rule for port 22 (SSH). The target instance is managed exclusively through the attestation HTTP API. When debug SSH access is enabled (`var.enable_ssh = true`), an additional ingress rule for TCP port 22 is added — see [PART 5: DEBUG DESIGN](#part-5-debug-design).
 
 ### EC2 Instance
 
@@ -3571,6 +3573,8 @@ The target instance is launched from the attestable AMI:
 | `instance_type`      | string | No       | `c5.9xlarge` | EC2 instance type (NitroTPM-compatible)  |
 | `allowed_http_cidr`  | string | Yes      | —            | CIDR for HTTP access on port 8080        |
 | `aws_region`         | string | No       | `us-east-1`  | AWS region for deployment                |
+| `enable_ssh`         | bool   | No       | `false`      | Enable SSH debug access (see [PART 5](#part-5-debug-design)) |
+| `key_pair_name`      | string | No       | `""`         | EC2 key pair name for SSH access         |
 
 ### Terraform Outputs
 
@@ -3588,7 +3592,7 @@ The target instance is launched from the attestable AMI:
 ### CLI Arguments
 
 ```
-scripts/deploy.py [--ami-build-result FILE] [--instance-type TYPE] [--output-file FILE]
+scripts/deploy.py [--ami-build-result FILE] [--instance-type TYPE] [--output-file FILE] [--enable-ssh --key-pair-name NAME]
 ```
 
 | Argument              | Default                    | Description                          |
@@ -3596,6 +3600,8 @@ scripts/deploy.py [--ami-build-result FILE] [--instance-type TYPE] [--output-fil
 | `--ami-build-result`  | `ami_build_result.json`    | Path to AMI build result JSON file   |
 | `--instance-type`     | `c5.9xlarge`               | EC2 instance type                    |
 | `--output-file`       | `infrastructure_state.json`| Output file for infrastructure state |
+| `--enable-ssh`        | `False` (flag)             | Enable SSH debug access (see [PART 5](#part-5-debug-design)) |
+| `--key-pair-name`     | —                          | EC2 key pair name (required when `--enable-ssh` is set) |
 
 ### Execution Flow
 
@@ -3619,6 +3625,8 @@ terraform apply -auto-approve
     ├── -var instance_type=...
     ├── -var allowed_http_cidr=...
     ├── -var aws_region=...
+    ├── -var enable_ssh=...        (if --enable-ssh)
+    ├── -var key_pair_name=...     (if --enable-ssh)
     │
     ▼
 terraform output -json
@@ -3627,6 +3635,8 @@ terraform output -json
     │
     ▼
 Save Infrastructure State (infrastructure_state.json)
+    │
+    ├── Includes ssh_enabled field
 ```
 
 ### Functions
@@ -3662,9 +3672,9 @@ Save Infrastructure State (infrastructure_state.json)
 
 ## Deployment Security
 
-### HTTP-Only Access
+### HTTP-Only Access (Default)
 
-The target instance has no SSH access. Unlike the build instance (which requires SSH for tool installation and AMI conversion), the deployed instance is accessed exclusively through the Remote Executor HTTP API on port 8080. This reduces the attack surface significantly.
+By default, the target instance has no SSH access. Unlike the build instance (which requires SSH for tool installation and AMI conversion), the deployed instance is accessed exclusively through the Remote Executor HTTP API on port 8080. This reduces the attack surface significantly. When debug SSH access is enabled, port 22 is additionally opened — see [PART 5: DEBUG DESIGN](#part-5-debug-design) for details.
 
 ### IMDSv2 Enforcement
 
@@ -3686,9 +3696,9 @@ NitroTPM is automatically enabled when launching from the attestable AMI because
 |-------------------------|----------------------------------------|----------------------------------------|
 | VPC CIDR                | `10.2.0.0/16`                          | `10.0.0.0/16`                          |
 | Inbound Access          | SSH on port 22 (user IP only)          | HTTP on port 8080 (user IP only)       |
-| SSH Access              | Yes (RSA 4096-bit key pair)            | No                                     |
+| SSH Access              | Yes (RSA 4096-bit key pair)            | No (unless debug SSH enabled — see [PART 5](#part-5-debug-design)) |
 | IAM Instance Profile    | Yes (EC2/EBS permissions)              | No                                     |
-| SSH Key Pair            | Generated via `tls_private_key`        | None                                   |
+| SSH Key Pair            | Generated via `tls_private_key`        | None (unless debug SSH enabled)        |
 | Instance Lifecycle      | Temporary (destroyed after AMI build)  | Persistent (runs the service)          |
 | AMI Source              | Amazon Linux 2023                      | Attestable AMI (custom KIWI build)     |
 | Purpose                 | Tool installation + AMI conversion     | Run Remote Executor service            |
@@ -4079,3 +4089,466 @@ The three cleanup phases are sequential but independent in terms of skip behavio
 **Exit Code**
 - Unit tests: Full success path (exit 0), exception during Terraform (exit 1), exception during AMI deregister (exit 1), user cancellation (exit 0)
 - Property tests: Exit code correctness (Property 94)
+
+
+---
+
+# PART 5: DEBUG DESIGN
+
+## Overview
+
+The debug SSH access feature provides an opt-in mechanism to build KIWI images with SSH packages included and deploy instances with port 22 open. This enables DevOps engineers to SSH into running instances for troubleshooting. The feature is disabled by default at every layer — the GitHub Actions workflow, the build script, and the deploy script all default to the secure (no-SSH) configuration.
+
+The feature spans three phases:
+
+1. **Build-Time**: The GitHub Actions workflow passes `--enable-ssh` to the build script, which removes SSH package ignore directives from the KIWI image description and passes `ENABLE_SSH` to the Docker container so `config.sh` can enable `sshd`.
+2. **Deploy-Time**: The deploy script passes `enable_ssh` and `key_pair_name` Terraform variables, which conditionally open port 22 in the security group and attach an EC2 key pair to the instance.
+3. **Key Provisioning**: SSH keys are provisioned via standard EC2 key pair mechanisms using `cloud-init` and `ec2-instance-connect` — no keys are baked into the image.
+
+### Design Principles
+
+1. **Secure by Default**: SSH is disabled at every layer unless explicitly opted in
+2. **No Baked-In Keys**: SSH key provisioning relies on cloud-init and ec2-instance-connect, never hardcoded keys
+3. **Visible Warnings**: Both the GHA job summary and deploy script log prominent warnings when SSH is enabled
+4. **Two-Phase Opt-In**: SSH must be enabled at both build time (to include packages) and deploy time (to open port 22 and attach key pair)
+
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph "Build-Time (GitHub Actions)"
+        A[workflow_dispatch<br/>enable_ssh: true] --> B[Build KIWI Image step]
+        B --> C{enable_ssh?}
+        C -- true --> D["Pass --enable-ssh to<br/>build-kiwi-image.sh"]
+        C -- false --> E["No --enable-ssh flag"]
+        D --> F["build-kiwi-image.sh<br/>removes ignore directives<br/>from appliance.kiwi"]
+        F --> G["Docker run with<br/>ENABLE_SSH=true"]
+        G --> H["config.sh reads ENABLE_SSH<br/>systemctl enable sshd"]
+        D --> I["Append SSH warning<br/>to GITHUB_STEP_SUMMARY"]
+    end
+
+    subgraph "Deploy-Time (Terraform + Script)"
+        J["deploy.py --enable-ssh<br/>--key-pair-name my-key"] --> K{enable_ssh?}
+        K -- true --> L["Pass -var enable_ssh=true<br/>-var key_pair_name=my-key"]
+        K -- false --> M["No SSH vars passed"]
+        L --> N["Terraform adds port 22<br/>ingress rule + key_name"]
+        L --> O["Log SSH warning"]
+        L --> P["Include ssh_enabled<br/>in infrastructure_state.json"]
+    end
+
+    subgraph "Runtime (EC2 Instance)"
+        Q["Instance boots with<br/>openssh-server + cloud-init"] --> R["cloud-init provisions<br/>EC2 key pair via IMDS"]
+        R --> S["SSH accessible on port 22<br/>using EC2 key pair"]
+    end
+
+    H --> Q
+    N --> Q
+```
+
+## Build-Time Design
+
+### GitHub Actions Workflow Changes
+
+The workflow (`build-attestable-image.yml`) adds a `workflow_dispatch` input:
+
+```yaml
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      enable_ssh:
+        description: 'Enable SSH debug access in the built image (NOT for production)'
+        required: false
+        type: boolean
+        default: false
+```
+
+The "Build KIWI image" step conditionally passes the flag:
+
+```yaml
+- name: Build KIWI image
+  run: |
+    chmod +x .github/scripts/build-kiwi-image.sh
+    SSH_FLAG=""
+    if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
+      SSH_FLAG="--enable-ssh"
+    fi
+    .github/scripts/build-kiwi-image.sh $SSH_FLAG
+```
+
+When SSH is enabled, a warning is appended to the job summary:
+
+```yaml
+- name: SSH debug warning
+  if: github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true
+  run: |
+    echo "" >> $GITHUB_STEP_SUMMARY
+    echo "> ⚠️ **WARNING: This image was built with SSH debug access enabled.**" >> $GITHUB_STEP_SUMMARY
+    echo "> This image includes openssh-server, cloud-init, and ec2-instance-connect." >> $GITHUB_STEP_SUMMARY
+    echo "> **It is NOT intended for production use.**" >> $GITHUB_STEP_SUMMARY
+```
+
+### Build Script Changes (`build-kiwi-image.sh`)
+
+The build script parses the `--enable-ssh` flag:
+
+```bash
+ENABLE_SSH="false"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --enable-ssh)
+            ENABLE_SSH="true"
+            shift
+            ;;
+        *)
+            echo "::error::Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+```
+
+When `--enable-ssh` is passed, the script removes the SSH-related ignore directives from the copied `appliance.kiwi` before building:
+
+```bash
+if [ "$ENABLE_SSH" = "true" ]; then
+    echo "=== SSH Debug Access Enabled ==="
+    echo "Removing ignore directives for SSH packages..."
+    sed -i '/<ignore name="openssh-server"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    sed -i '/<ignore name="cloud-init"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    sed -i '/<ignore name="cloud-init-cfg-ec2"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    sed -i '/<ignore name="ec2-instance-connect"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    echo "✓ SSH packages will be included in the image"
+fi
+```
+
+The `ENABLE_SSH` environment variable is passed to the Docker container:
+
+```bash
+docker run --rm \
+    --privileged \
+    -v /dev:/dev \
+    -v "${TEMP_IMAGE_DIR}:/workspace" \
+    -v "${BUILD_OUTPUT_DIR}:/output" \
+    -e "ENABLE_SSH=${ENABLE_SSH}" \
+    kiwi-builder:latest \
+    bash -c "cd /workspace && kiwi-ng system build --description . --target-dir /output"
+```
+
+### Config Script Changes (`config.sh`)
+
+The config script reads the `ENABLE_SSH` environment variable and conditionally enables `sshd`:
+
+```bash
+################################
+# Conditional SSH Enablement   #
+################################
+if [ "${ENABLE_SSH}" = "true" ]; then
+    echo "=== Enabling SSH Debug Access ==="
+    systemctl enable sshd
+    echo "✓ sshd service enabled"
+else
+    echo "SSH debug access is disabled (default secure behavior)"
+fi
+```
+
+This block runs after the existing service enablement and before the Python dependency installation. When `ENABLE_SSH` is not set or is any value other than `"true"`, sshd is not enabled.
+
+### KIWI Image Description Modification
+
+The `appliance.kiwi` file currently contains these ignore directives that exclude SSH packages:
+
+```xml
+<!-- Remove operator access by not installing these packages -->
+<ignore name="openssh-server"/>
+<ignore name="amazon-ssm-agent"/>
+<ignore name="cloud-init"/>
+<ignore name="cloud-init-cfg-ec2"/>
+<ignore name="update-motd" />
+<ignore name="ec2-instance-connect"/>
+```
+
+When `--enable-ssh` is passed, the build script removes exactly four of these directives:
+- `<ignore name="openssh-server"/>` — the SSH server itself
+- `<ignore name="cloud-init"/>` — cloud-init for key provisioning
+- `<ignore name="cloud-init-cfg-ec2"/>` — EC2-specific cloud-init config
+- `<ignore name="ec2-instance-connect"/>` — EC2 Instance Connect for key delivery
+
+The remaining directives (`amazon-ssm-agent`, `update-motd`) are NOT removed — SSM agent and MOTD remain excluded even in debug builds.
+
+## Deploy-Time Design
+
+### Deploy Script Changes (`deploy.py`)
+
+Two new CLI arguments are added:
+
+```python
+parser.add_argument(
+    '--enable-ssh',
+    action='store_true',
+    default=False,
+    help='Enable SSH debug access (requires --key-pair-name)'
+)
+
+parser.add_argument(
+    '--key-pair-name',
+    type=str,
+    default='',
+    help='EC2 key pair name for SSH access (required when --enable-ssh is set)'
+)
+```
+
+Validation in `main()` ensures `--key-pair-name` is provided when SSH is enabled:
+
+```python
+if args.enable_ssh and not args.key_pair_name:
+    logger.error("--key-pair-name is required when --enable-ssh is provided")
+    return 1
+```
+
+When `--enable-ssh` is provided, the deploy script:
+1. Adds `enable_ssh` and `key_pair_name` to the Terraform variables
+2. Logs a warning about SSH debug access
+3. Includes `ssh_enabled` in the infrastructure state output
+
+```python
+if args.enable_ssh:
+    tf_vars['enable_ssh'] = 'true'
+    tf_vars['key_pair_name'] = args.key_pair_name
+    logger.warning("⚠️  SSH debug access is enabled. The instance will be accessible on port 22.")
+
+# After saving terraform output:
+terraform_output['ssh_enabled'] = args.enable_ssh
+```
+
+### Terraform Changes (`terraform/deploy/`)
+
+Two new variables are added to `variables.tf`:
+
+```hcl
+variable "enable_ssh" {
+  description = "Enable SSH debug access (NOT for production)"
+  type        = bool
+  default     = false
+}
+
+variable "key_pair_name" {
+  description = "EC2 key pair name for SSH access"
+  type        = string
+  default     = ""
+}
+```
+
+The security group in `main.tf` gets a conditional SSH ingress rule:
+
+```hcl
+dynamic "ingress" {
+  for_each = var.enable_ssh ? [1] : []
+  content {
+    description = "SSH debug access"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_http_cidr]
+  }
+}
+```
+
+The EC2 instance conditionally attaches the key pair:
+
+```hcl
+resource "aws_instance" "target" {
+  ami                    = var.attestable_ami_id
+  instance_type          = var.instance_type
+  subnet_id              = aws_subnet.public.id
+  vpc_security_group_ids = [aws_security_group.attestation_api.id]
+  key_name               = var.enable_ssh ? var.key_pair_name : null
+
+  # ... rest of instance config unchanged
+}
+```
+
+When `enable_ssh` is `false` (default), `key_name` is `null` (no key pair attached) and no port 22 ingress rule exists. When `enable_ssh` is `true`, the key pair is attached and port 22 is opened from the same CIDR as port 8080.
+
+### Security Group Configuration Summary
+
+| `enable_ssh` | Port 8080 | Port 22 | Key Pair |
+|--------------|-----------|---------|----------|
+| `false`      | Open      | Closed  | None     |
+| `true`       | Open      | Open    | Attached |
+
+## Data Models
+
+### Infrastructure State (with SSH)
+
+When SSH is enabled, the infrastructure state JSON includes the `ssh_enabled` field:
+
+```json
+{
+  "vpc_id": "vpc-0123456789abcdef0",
+  "subnet_id": "subnet-0123456789abcdef0",
+  "security_group_id": "sg-0123456789abcdef0",
+  "instance_id": "i-0123456789abcdef0",
+  "instance_public_ip": "203.0.113.42",
+  "attestation_api_url": "http://203.0.113.42:8080",
+  "ssh_enabled": true
+}
+```
+
+When SSH is disabled (default):
+
+```json
+{
+  "vpc_id": "vpc-0123456789abcdef0",
+  "...": "...",
+  "ssh_enabled": false
+}
+```
+
+## Correctness Properties
+
+*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+
+### Property 95: Build Flag Propagation
+
+*For any* workflow trigger event, the `--enable-ssh` flag should be passed to `build-kiwi-image.sh` if and only if the event is `workflow_dispatch` with `enable_ssh` input set to `true`. For all other trigger types (push, pull_request, schedule), the flag should never be passed.
+
+**Validates: Requirements 32.1, 32.3, 32.4**
+
+### Property 96: KIWI XML SSH Directive Modification
+
+*For any* KIWI image description XML containing ignore directives for `openssh-server`, `cloud-init`, `cloud-init-cfg-ec2`, and `ec2-instance-connect`, when `--enable-ssh` is passed to the build script, the resulting XML should not contain those four ignore directives. When `--enable-ssh` is not passed, all four ignore directives should remain present.
+
+**Validates: Requirements 32.8, 32.9**
+
+### Property 97: Conditional sshd Enablement
+
+*For any* value of the `ENABLE_SSH` environment variable, the `config.sh` script should enable the `sshd` service if and only if `ENABLE_SSH` equals `"true"`. For all other values (empty, unset, `"false"`, any other string), `sshd` should not be enabled.
+
+**Validates: Requirements 32.10, 32.11, 32.12, 32.13**
+
+### Property 98: GHA Summary SSH Warning
+
+*For any* build triggered via `workflow_dispatch` with `enable_ssh` set to `true`, the GitHub Actions job summary should contain a warning indicating that the image was built with SSH debug access enabled and is not intended for production use. For all other triggers, no such warning should appear.
+
+**Validates: Requirements 32.5**
+
+### Property 99: Deploy Script SSH Argument Validation
+
+*For any* invocation of the deploy script with `--enable-ssh` but without `--key-pair-name`, the script should fail with an error. For any invocation with both `--enable-ssh` and `--key-pair-name`, the script should proceed. For any invocation without `--enable-ssh`, the script should proceed regardless of `--key-pair-name`.
+
+**Validates: Requirements 32.15, 32.16, 32.17**
+
+### Property 100: Terraform SSH Configuration Consistency
+
+*For any* value of the `enable_ssh` Terraform variable, the security group should contain an inbound rule for TCP port 22 if and only if `enable_ssh` is `true`. Similarly, the EC2 instance should have a `key_name` attribute set if and only if `enable_ssh` is `true`.
+
+**Validates: Requirements 32.18, 32.19, 32.22, 32.23, 32.24, 32.25**
+
+### Property 101: Deploy Script SSH Terraform Variable Passing
+
+*For any* invocation of the deploy script with `--enable-ssh` and `--key-pair-name`, the Terraform command should include `-var enable_ssh=true` and `-var key_pair_name={name}` flags. When `--enable-ssh` is not provided, these variables should not be passed.
+
+**Validates: Requirements 32.26**
+
+### Property 102: Infrastructure State SSH Status
+
+*For any* deployment, the infrastructure state JSON output should include an `ssh_enabled` field whose value is `true` when `--enable-ssh` was provided and `false` otherwise.
+
+**Validates: Requirements 32.28**
+
+### Property 103: Deploy Script SSH Warning
+
+*For any* invocation of the deploy script with `--enable-ssh`, the script should log a warning indicating that SSH debug access is enabled and the instance is accessible on port 22. When `--enable-ssh` is not provided, no such warning should be logged.
+
+**Validates: Requirements 32.27**
+
+## Error Handling
+
+### Build-Time Errors
+
+| Error Condition                          | Behavior                                              |
+|------------------------------------------|-------------------------------------------------------|
+| Unknown argument to `build-kiwi-image.sh`| Exit with error message                               |
+| `sed` fails to modify `appliance.kiwi`  | Build fails (set -e)                                  |
+| `ENABLE_SSH` not set in config.sh        | Treated as disabled (default secure behavior)         |
+| `systemctl enable sshd` fails            | Build fails (set -e)                                  |
+
+### Deploy-Time Errors
+
+| Error Condition                          | Behavior                                              |
+|------------------------------------------|-------------------------------------------------------|
+| `--enable-ssh` without `--key-pair-name` | Exit with error code 1 and descriptive message        |
+| Key pair name doesn't exist in AWS       | Terraform apply fails with descriptive error          |
+| SSH enabled but image built without SSH  | Instance launches but sshd not running (no crash)     |
+
+### Important Caveat
+
+The debug SSH feature requires coordination between build-time and deploy-time:
+- If the image was built **without** `--enable-ssh`, deploying with `--enable-ssh` will open port 22 and attach a key pair, but `sshd` won't be running and SSH connections will be refused.
+- If the image was built **with** `--enable-ssh`, deploying **without** `--enable-ssh` means `sshd` is installed but port 22 is closed and no key pair is attached — SSH is effectively inaccessible.
+
+Both flags must be enabled for SSH to work end-to-end.
+
+## Testing Strategy
+
+### Dual Testing Approach
+
+**Unit Tests** focus on:
+- Build script `--enable-ssh` flag parsing
+- `sed` removal of specific ignore directives from sample XML
+- `config.sh` conditional `sshd` enablement logic
+- Deploy script `--enable-ssh` and `--key-pair-name` argument parsing
+- Deploy script validation (SSH without key pair name)
+- Terraform variable construction with and without SSH flags
+- Infrastructure state JSON with `ssh_enabled` field
+- GHA summary warning content when SSH is enabled
+
+**Property-Based Tests** focus on:
+- Build flag propagation across all trigger types (Property 95)
+- KIWI XML directive modification for all valid XML inputs (Property 96)
+- Conditional sshd enablement for all ENABLE_SSH values (Property 97)
+- GHA summary warning presence/absence (Property 98)
+- Deploy script argument validation for all flag combinations (Property 99)
+- Terraform SSH configuration consistency (Property 100)
+- Terraform variable passing for all deploy script invocations (Property 101)
+- Infrastructure state SSH status for all deployments (Property 102)
+- Deploy script SSH warning logging (Property 103)
+
+### Property-Based Testing Configuration
+
+- Library: `hypothesis` (Python)
+- Minimum 100 iterations per property test
+- Each test tagged with: **Feature: github-actions-remote-executor, Property {number}: {property_text}**
+- Each correctness property implemented by a single property-based test
+
+### Debug Unit Testing
+
+**Build Script Flag Parsing**
+- Unit tests: No args (default), `--enable-ssh`, unknown arg (error)
+- Property tests: Flag propagation (Property 95)
+
+**KIWI XML Modification**
+- Unit tests: Verify specific directives removed, verify other directives preserved, verify no-op when flag absent
+- Property tests: Directive modification (Property 96)
+
+**Config.sh sshd Enablement**
+- Unit tests: `ENABLE_SSH=true` (enable), `ENABLE_SSH=false` (skip), unset (skip)
+- Property tests: Conditional enablement (Property 97)
+
+**Deploy Script Argument Parsing**
+- Unit tests: No SSH args (defaults), `--enable-ssh --key-pair-name foo`, `--enable-ssh` without key pair (error)
+- Property tests: Argument validation (Property 99)
+
+**Terraform Variable Construction**
+- Unit tests: Without SSH (4 vars), with SSH (6 vars), verify var values
+- Property tests: Variable passing (Property 101)
+
+**Security Group Configuration**
+- Unit tests: `enable_ssh=false` (no port 22), `enable_ssh=true` (port 22 open)
+- Property tests: Configuration consistency (Property 100)
+
+**Infrastructure State Output**
+- Unit tests: `ssh_enabled=true`, `ssh_enabled=false`
+- Property tests: SSH status inclusion (Property 102)

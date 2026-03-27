@@ -898,15 +898,155 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 38. Final checkpoint - Ensure all cleanup tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 39. Implement build-time SSH debug support in build-kiwi-image.sh
+  - [ ] 39.1 Add --enable-ssh flag parsing to build-kiwi-image.sh
+    - Add `ENABLE_SSH="false"` default and a `while` loop to parse `--enable-ssh` flag (exit on unknown args)
+    - Place argument parsing at the top of the script before any other logic
+    - _Requirements: 32.7_
+
+  - [ ] 39.2 Add sed-based removal of SSH ignore directives when --enable-ssh is passed
+    - When `ENABLE_SSH="true"`, use `sed -i` to remove `<ignore name="openssh-server"/>`, `<ignore name="cloud-init"/>`, `<ignore name="cloud-init-cfg-ec2"/>`, and `<ignore name="ec2-instance-connect"/>` from the copied `appliance.kiwi` in `${TEMP_IMAGE_DIR}`
+    - Place this block after the image description files are copied to `TEMP_IMAGE_DIR` but before the Docker build step
+    - Do NOT remove `amazon-ssm-agent` or `update-motd` ignore directives
+    - _Requirements: 32.8, 32.9, 32.14_
+
+  - [ ] 39.3 Pass ENABLE_SSH environment variable to the Docker container
+    - Add `-e "ENABLE_SSH=${ENABLE_SSH}"` to the existing `docker run` command that runs the KIWI build
+    - _Requirements: 32.12_
+
+- [ ] 40. Implement conditional sshd enablement in config.sh
+  - [ ] 40.1 Add conditional sshd enablement block to config.sh
+    - Add a block that reads the `ENABLE_SSH` environment variable
+    - When `ENABLE_SSH` equals `"true"`, run `systemctl enable sshd` and log success
+    - When `ENABLE_SSH` is unset, empty, or any other value, log that SSH is disabled (default secure behavior)
+    - Place this block after the existing `systemctl enable github-actions-remote-executor.service` line and before the Python dependency installation section
+    - _Requirements: 32.10, 32.11, 32.12, 32.13_
+
+- [ ] 41. Update GitHub Actions workflow for SSH debug support
+  - [ ] 41.1 Add workflow_dispatch enable_ssh input to build-attestable-image.yml
+    - Add `enable_ssh` input under the existing `workflow_dispatch` trigger with type `boolean`, default `false`, and description indicating it enables SSH debug access (NOT for production)
+    - _Requirements: 32.2_
+
+  - [ ] 41.2 Conditionally pass --enable-ssh flag in the Build KIWI image step
+    - Modify the "Build KIWI image" step to construct an `SSH_FLAG` variable: set to `--enable-ssh` only when `github.event_name == 'workflow_dispatch'` AND `inputs.enable_ssh == 'true'`; otherwise empty
+    - Pass `$SSH_FLAG` as an argument to `build-kiwi-image.sh`
+    - _Requirements: 32.1, 32.3, 32.4_
+
+  - [ ] 41.3 Add SSH debug warning step to workflow
+    - Add a new step "SSH debug warning" that runs only when `github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true`
+    - Append a prominent blockquote warning to `$GITHUB_STEP_SUMMARY` indicating the image was built with SSH debug access and is NOT for production use
+    - _Requirements: 32.5, 32.6_
+
+- [ ] 42. Checkpoint - Ensure build-time SSH changes are consistent
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 43. Add Terraform variables and conditional SSH infrastructure
+  - [ ] 43.1 Add enable_ssh and key_pair_name variables to terraform/deploy/variables.tf
+    - Add `enable_ssh` variable of type `bool` with default `false` and description "Enable SSH debug access (NOT for production)"
+    - Add `key_pair_name` variable of type `string` with default `""` and description "EC2 key pair name for SSH access"
+    - _Requirements: 32.20, 32.21_
+
+  - [ ] 43.2 Add conditional SSH ingress rule to security group in terraform/deploy/main.tf
+    - Add a `dynamic "ingress"` block inside `aws_security_group.attestation_api` that creates a TCP port 22 rule from `var.allowed_http_cidr` only when `var.enable_ssh` is `true`
+    - When `enable_ssh` is `false`, no port 22 rule should exist
+    - _Requirements: 32.22, 32.24_
+
+  - [ ] 43.3 Conditionally attach key pair to EC2 instance in terraform/deploy/main.tf
+    - Set `key_name = var.enable_ssh ? var.key_pair_name : null` on the `aws_instance.target` resource
+    - When `enable_ssh` is `false`, `key_name` is `null` (no key pair attached)
+    - _Requirements: 32.23, 32.25_
+
+- [ ] 44. Update deploy.py for SSH debug support
+  - [ ] 44.1 Add --enable-ssh and --key-pair-name CLI arguments to deploy.py
+    - Add `--enable-ssh` as a `store_true` flag defaulting to `False` with help text "Enable SSH debug access (requires --key-pair-name)"
+    - Add `--key-pair-name` as a `str` argument defaulting to `''` with help text "EC2 key pair name for SSH access (required when --enable-ssh is set)"
+    - _Requirements: 32.15, 32.16_
+
+  - [ ] 44.2 Add validation that --key-pair-name is required when --enable-ssh is set
+    - In `main()`, after parsing arguments, check if `args.enable_ssh` is `True` and `args.key_pair_name` is empty — if so, log an error and return exit code 1
+    - _Requirements: 32.17_
+
+  - [ ] 44.3 Pass enable_ssh and key_pair_name as Terraform variables
+    - When `args.enable_ssh` is `True`, add `enable_ssh: 'true'` and `key_pair_name: args.key_pair_name` to the `tf_vars` dict before calling `terraform_apply`
+    - When `args.enable_ssh` is `False`, do not add these variables (Terraform defaults apply)
+    - _Requirements: 32.18, 32.19, 32.26_
+
+  - [ ] 44.4 Log SSH warning and include ssh_enabled in infrastructure state
+    - When `args.enable_ssh` is `True`, log a warning: "⚠️  SSH debug access is enabled. The instance will be accessible on port 22."
+    - After loading Terraform output, set `terraform_output['ssh_enabled'] = args.enable_ssh` before writing the infrastructure state JSON
+    - _Requirements: 32.27, 32.28_
+
+- [ ] 45. Checkpoint - Ensure deploy-time SSH changes are consistent
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 46. Write property and unit tests for debug SSH feature
+  - [ ] 46.1 Write property test for build flag propagation
+    - **Property 95: Build Flag Propagation**
+    - Test that --enable-ssh is passed to build script if and only if event is workflow_dispatch with enable_ssh=true; never passed for push, pull_request, or schedule triggers
+    - **Validates: Requirements 32.1, 32.3, 32.4**
+
+  - [ ] 46.2 Write property test for KIWI XML SSH directive modification
+    - **Property 96: KIWI XML SSH Directive Modification**
+    - Test that when --enable-ssh is passed, the four SSH ignore directives (openssh-server, cloud-init, cloud-init-cfg-ec2, ec2-instance-connect) are removed from appliance.kiwi; when not passed, all four remain
+    - **Validates: Requirements 32.8, 32.9**
+
+  - [ ] 46.3 Write property test for conditional sshd enablement
+    - **Property 97: Conditional sshd Enablement**
+    - Test that sshd is enabled if and only if ENABLE_SSH equals "true"; for all other values (empty, unset, "false", arbitrary strings) sshd is not enabled
+    - **Validates: Requirements 32.10, 32.11, 32.12, 32.13**
+
+  - [ ] 46.4 Write property test for GHA summary SSH warning
+    - **Property 98: GHA Summary SSH Warning**
+    - Test that the job summary contains an SSH warning if and only if the trigger is workflow_dispatch with enable_ssh=true
+    - **Validates: Requirements 32.5**
+
+  - [ ] 46.5 Write property test for deploy script SSH argument validation
+    - **Property 99: Deploy Script SSH Argument Validation**
+    - Test that --enable-ssh without --key-pair-name fails with error; --enable-ssh with --key-pair-name proceeds; no --enable-ssh proceeds regardless of --key-pair-name
+    - **Validates: Requirements 32.15, 32.16, 32.17**
+
+  - [ ] 46.6 Write property test for Terraform SSH configuration consistency
+    - **Property 100: Terraform SSH Configuration Consistency**
+    - Test that port 22 ingress rule exists if and only if enable_ssh=true; key_name is set if and only if enable_ssh=true
+    - **Validates: Requirements 32.18, 32.19, 32.22, 32.23, 32.24, 32.25**
+
+  - [ ] 46.7 Write property test for deploy script SSH Terraform variable passing
+    - **Property 101: Deploy Script SSH Terraform Variable Passing**
+    - Test that when --enable-ssh and --key-pair-name are provided, tf_vars includes enable_ssh=true and key_pair_name={name}; when --enable-ssh is not provided, these variables are absent
+    - **Validates: Requirements 32.26**
+
+  - [ ] 46.8 Write property test for infrastructure state SSH status
+    - **Property 102: Infrastructure State SSH Status**
+    - Test that infrastructure state JSON includes ssh_enabled=true when --enable-ssh is provided and ssh_enabled=false otherwise
+    - **Validates: Requirements 32.28**
+
+  - [ ] 46.9 Write property test for deploy script SSH warning
+    - **Property 103: Deploy Script SSH Warning**
+    - Test that a warning about SSH debug access is logged when --enable-ssh is provided; no such warning when --enable-ssh is not provided
+    - **Validates: Requirements 32.27**
+
+  - [ ] 46.10 Write unit tests for debug SSH feature
+    - Test build script --enable-ssh flag parsing: no args (default), --enable-ssh, unknown arg (error)
+    - Test sed removal of specific ignore directives from sample appliance.kiwi XML, verify other directives preserved
+    - Test config.sh conditional sshd enablement: ENABLE_SSH=true (enable), ENABLE_SSH=false (skip), unset (skip)
+    - Test deploy.py --enable-ssh and --key-pair-name argument parsing: no SSH args (defaults), both provided, --enable-ssh without key pair (error)
+    - Test Terraform variable construction: without SSH (4 vars), with SSH (6 vars)
+    - Test infrastructure state output: ssh_enabled=true, ssh_enabled=false
+    - _Requirements: 32.1-32.28_
+
+- [ ] 47. Final checkpoint - Ensure all debug SSH tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 94 correctness properties from the design document
+- Property tests validate the 103 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
 - The cleanup implementation (tasks 37-38) covers testing the existing scripts/cleanup.py which is already fully implemented
+- The debug SSH implementation (tasks 39-47) adds opt-in SSH debug access across build-time (KIWI image), deploy-time (Terraform + deploy script), and GitHub Actions workflow
 - Python dependencies are separated into two configurations:
   - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, hypothesis, pytest, pytest-asyncio, httpx)
   - scripts/pyproject.toml: Build/deployment script dependencies (boto3, paramiko)
@@ -918,6 +1058,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - build-kiwi-image.sh extracts the dependency list dynamically from pyproject.toml using tomllib — package names are never hardcoded in the build script
   - No uv package manager is needed inside the KIWI image
   - Dependency installation occurs during KIWI image build phase, before image finalization
+- Debug SSH feature requires coordination between build-time and deploy-time: both --enable-ssh flags must be used for SSH to work end-to-end
+- SSH key provisioning uses cloud-init and ec2-instance-connect (no baked-in keys)
 - AWS Nitro attestation requires running on a Nitro-based EC2 instance
 - Scripts execute as root with full system privileges
 - All 94 properties should be tested with hypothesis library (minimum 100 iterations each)
