@@ -25,6 +25,27 @@ if [ "${ENABLE_SSH}" = "true" ]; then
     echo "Pre-generating SSH host keys..."
     ssh-keygen -A
     echo "✓ SSH host keys generated"
+
+    # Enable cloud-init services so it can provision SSH keys from IMDS at boot.
+    # cloud-init is included in the image (ignore directives removed by build-kiwi-image.sh)
+    # but its services must be explicitly enabled.
+    echo "Enabling cloud-init services..."
+    systemctl enable cloud-init-local.service
+    systemctl enable cloud-init.service
+    systemctl enable cloud-config.service
+    systemctl enable cloud-final.service
+    echo "✓ cloud-init services enabled"
+
+    # Create the ec2-user account. On standard AL2023 AMIs this user is pre-created,
+    # but this KIWI image has no <users> section. cloud-init's default_user config
+    # expects ec2-user to exist (or be creatable). Creating it at build time in the
+    # base image ensures it persists in the read-only erofs layer and cloud-init only
+    # needs to write the authorized_keys file to the tmpfs overlay at boot.
+    echo "Creating ec2-user account..."
+    useradd -m -s /bin/bash ec2-user
+    echo "ec2-user ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ec2-user
+    chmod 440 /etc/sudoers.d/ec2-user
+    echo "✓ ec2-user account created with passwordless sudo"
 else
     echo "SSH debug access disabled (default secure behavior)"
 fi
