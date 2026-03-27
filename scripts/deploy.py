@@ -83,7 +83,9 @@ def terraform_apply(
     terraform_dir: str,
     ami_build_result: dict,
     allowed_http_cidr: str,
-    instance_type: str
+    instance_type: str,
+    enable_ssh: bool = False,
+    key_pair_name: str = ''
 ) -> dict:
     """
     Apply Terraform configuration to provision infrastructure.
@@ -111,6 +113,10 @@ def terraform_apply(
         'allowed_http_cidr': allowed_http_cidr,
         'aws_region': ami_build_result['region']
     }
+    
+    if enable_ssh:
+        tf_vars['enable_ssh'] = 'true'
+        tf_vars['key_pair_name'] = key_pair_name
     
     logger.info("Terraform variables:")
     for key, value in tf_vars.items():
@@ -222,11 +228,33 @@ def parse_arguments() -> argparse.Namespace:
         help='Output file for infrastructure state (default: infrastructure_state.json)'
     )
     
+    parser.add_argument(
+        '--enable-ssh',
+        action='store_true',
+        default=False,
+        help='Enable SSH debug access (requires --key-pair-name)'
+    )
+    
+    parser.add_argument(
+        '--key-pair-name',
+        type=str,
+        default='',
+        help='EC2 key pair name for SSH access (required when --enable-ssh is set)'
+    )
+    
     return parser.parse_args()
 
 def main() -> int:
     """Main entry point."""
     args = parse_arguments()
+
+    # Validate SSH arguments
+    if args.enable_ssh and not args.key_pair_name:
+        logger.error("--key-pair-name is required when --enable-ssh is set")
+        return 1
+
+    if args.enable_ssh:
+        logger.warning("⚠️  SSH debug access is enabled. The instance will be accessible on port 22.")
 
     terraform_dir = Path(__file__).parent.parent / 'terraform' / 'deploy'
     
@@ -282,11 +310,16 @@ def main() -> int:
             terraform_dir,
             ami_build_result,
             allowed_http_cidr,
-            args.instance_type
+            args.instance_type,
+            enable_ssh=args.enable_ssh,
+            key_pair_name=args.key_pair_name
         )
 
         # Extract values from terrafrom output
         terraform_output = load_terraform_output(raw_terraform_output)
+        
+        # Include SSH status in infrastructure state
+        terraform_output['ssh_enabled'] = args.enable_ssh
         
         # Save infrastructure state
         logger.info("")

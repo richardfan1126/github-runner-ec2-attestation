@@ -956,22 +956,22 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - When `enable_ssh` is `false`, `key_name` is `null` (no key pair attached)
     - _Requirements: 32.23, 32.25_
 
-- [ ] 44. Update deploy.py for SSH debug support
-  - [ ] 44.1 Add --enable-ssh and --key-pair-name CLI arguments to deploy.py
+- [x] 44. Update deploy.py for SSH debug support
+  - [x] 44.1 Add --enable-ssh and --key-pair-name CLI arguments to deploy.py
     - Add `--enable-ssh` as a `store_true` flag defaulting to `False` with help text "Enable SSH debug access (requires --key-pair-name)"
     - Add `--key-pair-name` as a `str` argument defaulting to `''` with help text "EC2 key pair name for SSH access (required when --enable-ssh is set)"
     - _Requirements: 32.15, 32.16_
 
-  - [ ] 44.2 Add validation that --key-pair-name is required when --enable-ssh is set
+  - [x] 44.2 Add validation that --key-pair-name is required when --enable-ssh is set
     - In `main()`, after parsing arguments, check if `args.enable_ssh` is `True` and `args.key_pair_name` is empty — if so, log an error and return exit code 1
     - _Requirements: 32.17_
 
-  - [ ] 44.3 Pass enable_ssh and key_pair_name as Terraform variables
+  - [x] 44.3 Pass enable_ssh and key_pair_name as Terraform variables
     - When `args.enable_ssh` is `True`, add `enable_ssh: 'true'` and `key_pair_name: args.key_pair_name` to the `tf_vars` dict before calling `terraform_apply`
     - When `args.enable_ssh` is `False`, do not add these variables (Terraform defaults apply)
     - _Requirements: 32.18, 32.19, 32.26_
 
-  - [ ] 44.4 Log SSH warning and include ssh_enabled in infrastructure state
+  - [x] 44.4 Log SSH warning and include ssh_enabled in infrastructure state
     - When `args.enable_ssh` is `True`, log a warning: "⚠️  SSH debug access is enabled. The instance will be accessible on port 22."
     - After loading Terraform output, set `terraform_output['ssh_enabled'] = args.enable_ssh` before writing the infrastructure state JSON
     - _Requirements: 32.27, 32.28_
