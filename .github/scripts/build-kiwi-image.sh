@@ -145,7 +145,8 @@ mkdir -p "${TEMP_IMAGE_DIR}/root/usr/local/bin"
 
 # Copy executor source files
 echo "Copying executor source files..."
-cp -r "${EXECUTOR_SRC_DIR}"/* "${TEMP_IMAGE_DIR}/root/opt/github-actions-remote-executor/"
+mkdir -p "${TEMP_IMAGE_DIR}/root/opt/github-actions-remote-executor/src"
+cp -r "${EXECUTOR_SRC_DIR}"/* "${TEMP_IMAGE_DIR}/root/opt/github-actions-remote-executor/src/"
 
 # Create wrapper script for the executor
 cat > "${TEMP_IMAGE_DIR}/root/usr/local/bin/github-actions-remote-executor" << 'EOF'
