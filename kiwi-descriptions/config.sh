@@ -13,6 +13,16 @@ systemctl preset set-hostname-imds
 systemctl enable github-actions-remote-executor.service
 
 ################################
+# Conditional sshd Enablement  #
+################################
+if [ "${ENABLE_SSH}" = "true" ]; then
+    echo "SSH debug access enabled — enabling sshd service"
+    systemctl enable sshd
+else
+    echo "SSH debug access disabled (default secure behavior)"
+fi
+
+################################
 # Install Python Dependencies  #
 ################################
 echo "=== Installing Python Dependencies ==="

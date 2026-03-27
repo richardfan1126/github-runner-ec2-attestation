@@ -914,8 +914,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add `-e "ENABLE_SSH=${ENABLE_SSH}"` to the existing `docker run` command that runs the KIWI build
     - _Requirements: 32.12_
 
-- [ ] 40. Implement conditional sshd enablement in config.sh
-  - [ ] 40.1 Add conditional sshd enablement block to config.sh
+- [x] 40. Implement conditional sshd enablement in config.sh
+  - [x] 40.1 Add conditional sshd enablement block to config.sh
     - Add a block that reads the `ENABLE_SSH` environment variable
     - When `ENABLE_SSH` equals `"true"`, run `systemctl enable sshd` and log success
     - When `ENABLE_SSH` is unset, empty, or any other value, log that SSH is disabled (default secure behavior)
