@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=/etc/github-actions-remote-executor/env
 ExecStart=/usr/local/bin/github-actions-remote-executor
 Restart=always
 RestartSec=10
