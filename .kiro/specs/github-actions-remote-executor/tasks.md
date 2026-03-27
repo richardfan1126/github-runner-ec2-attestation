@@ -979,53 +979,53 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 45. Checkpoint - Ensure deploy-time SSH changes are consistent
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 46. Write property and unit tests for debug SSH feature
-  - [ ] 46.1 Write property test for build flag propagation
+- [x] 46. Write property and unit tests for debug SSH feature
+  - [x] 46.1 Write property test for build flag propagation
     - **Property 95: Build Flag Propagation**
     - Test that --enable-ssh is passed to build script if and only if event is workflow_dispatch with enable_ssh=true; never passed for push, pull_request, or schedule triggers
     - **Validates: Requirements 32.1, 32.3, 32.4**
 
-  - [ ] 46.2 Write property test for KIWI XML SSH directive modification
+  - [x] 46.2 Write property test for KIWI XML SSH directive modification
     - **Property 96: KIWI XML SSH Directive Modification**
     - Test that when --enable-ssh is passed, the four SSH ignore directives (openssh-server, cloud-init, cloud-init-cfg-ec2, ec2-instance-connect) are removed from appliance.kiwi; when not passed, all four remain
     - **Validates: Requirements 32.8, 32.9**
 
-  - [ ] 46.3 Write property test for conditional sshd enablement
+  - [x] 46.3 Write property test for conditional sshd enablement
     - **Property 97: Conditional sshd Enablement**
     - Test that sshd is enabled if and only if ENABLE_SSH equals "true"; for all other values (empty, unset, "false", arbitrary strings) sshd is not enabled
     - **Validates: Requirements 32.10, 32.11, 32.12, 32.13**
 
-  - [ ] 46.4 Write property test for GHA summary SSH warning
+  - [x] 46.4 Write property test for GHA summary SSH warning
     - **Property 98: GHA Summary SSH Warning**
     - Test that the job summary contains an SSH warning if and only if the trigger is workflow_dispatch with enable_ssh=true
     - **Validates: Requirements 32.5**
 
-  - [ ] 46.5 Write property test for deploy script SSH argument validation
+  - [x] 46.5 Write property test for deploy script SSH argument validation
     - **Property 99: Deploy Script SSH Argument Validation**
     - Test that --enable-ssh without --key-pair-name fails with error; --enable-ssh with --key-pair-name proceeds; no --enable-ssh proceeds regardless of --key-pair-name
     - **Validates: Requirements 32.15, 32.16, 32.17**
 
-  - [ ] 46.6 Write property test for Terraform SSH configuration consistency
+  - [x] 46.6 Write property test for Terraform SSH configuration consistency
     - **Property 100: Terraform SSH Configuration Consistency**
     - Test that port 22 ingress rule exists if and only if enable_ssh=true; key_name is set if and only if enable_ssh=true
     - **Validates: Requirements 32.18, 32.19, 32.22, 32.23, 32.24, 32.25**
 
-  - [ ] 46.7 Write property test for deploy script SSH Terraform variable passing
+  - [x] 46.7 Write property test for deploy script SSH Terraform variable passing
     - **Property 101: Deploy Script SSH Terraform Variable Passing**
     - Test that when --enable-ssh and --key-pair-name are provided, tf_vars includes enable_ssh=true and key_pair_name={name}; when --enable-ssh is not provided, these variables are absent
     - **Validates: Requirements 32.26**
 
-  - [ ] 46.8 Write property test for infrastructure state SSH status
+  - [x] 46.8 Write property test for infrastructure state SSH status
     - **Property 102: Infrastructure State SSH Status**
     - Test that infrastructure state JSON includes ssh_enabled=true when --enable-ssh is provided and ssh_enabled=false otherwise
     - **Validates: Requirements 32.28**
 
-  - [ ] 46.9 Write property test for deploy script SSH warning
+  - [x] 46.9 Write property test for deploy script SSH warning
     - **Property 103: Deploy Script SSH Warning**
     - Test that a warning about SSH debug access is logged when --enable-ssh is provided; no such warning when --enable-ssh is not provided
     - **Validates: Requirements 32.27**
 
-  - [ ] 46.10 Write unit tests for debug SSH feature
+  - [x] 46.10 Write unit tests for debug SSH feature
     - Test build script --enable-ssh flag parsing: no args (default), --enable-ssh, unknown arg (error)
     - Test sed removal of specific ignore directives from sample appliance.kiwi XML, verify other directives preserved
     - Test config.sh conditional sshd enablement: ENABLE_SSH=true (enable), ENABLE_SSH=false (skip), unset (skip)
