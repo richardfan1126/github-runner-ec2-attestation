@@ -276,7 +276,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--terraform-dir',
         type=str,
-        default='terraform/deploy',
+        default=Path(__file__).parent.parent / 'terraform' / 'deploy',
         help='Path to Terraform configuration directory (default: terraform)'
     )
 

@@ -228,7 +228,7 @@ def main() -> int:
     """Main entry point."""
     args = parse_arguments()
 
-    terraform_dir = "terraform/deploy"
+    terraform_dir = Path(__file__).parent.parent / 'terraform' / 'deploy'
     
     logger.info("=" * 80)
     logger.info("Starting Infrastructure Deployment")
