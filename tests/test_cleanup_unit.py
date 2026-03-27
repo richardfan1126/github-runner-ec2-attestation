@@ -59,13 +59,15 @@ class TestParseArguments:
         with patch("sys.argv", ["cleanup.py"]):
             args = cleanup.parse_arguments()
         assert args.ami_build_result == "ami_build_result.json"
-        assert args.terraform_dir == "terraform/deploy"
+        expected = (Path(__file__).parent.parent / "scripts" / ".." / "terraform" / "deploy").resolve()
+        assert Path(str(args.terraform_dir)).resolve() == expected
 
     def test_parse_arguments_custom_ami_build_result(self):
         with patch("sys.argv", ["cleanup.py", "--ami-build-result", "custom.json"]):
             args = cleanup.parse_arguments()
         assert args.ami_build_result == "custom.json"
-        assert args.terraform_dir == "terraform/deploy"
+        expected = (Path(__file__).parent.parent / "scripts" / ".." / "terraform" / "deploy").resolve()
+        assert Path(str(args.terraform_dir)).resolve() == expected
 
     def test_parse_arguments_custom_terraform_dir(self):
         with patch("sys.argv", ["cleanup.py", "--terraform-dir", "custom/dir"]):

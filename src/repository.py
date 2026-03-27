@@ -243,10 +243,13 @@ class RepositoryClient:
         os.makedirs(self.temp_storage_path, exist_ok=True)
         
         # Create a temporary file with secure permissions
+        # Sanitize basename to ASCII to avoid filesystem encoding issues
+        basename = os.path.basename(path)
+        safe_basename = basename.encode('ascii', 'replace').decode('ascii')
         fd, temp_path = tempfile.mkstemp(
             dir=self.temp_storage_path,
             prefix=f"{commit[:8]}_",
-            suffix=f"_{os.path.basename(path)}"
+            suffix=f"_{safe_basename}"
         )
         
         try:

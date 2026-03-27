@@ -70,8 +70,9 @@ def test_property_87_cleanup_cli_defaults(_):
     assert args.ami_build_result == "ami_build_result.json", (
         f"Expected default ami_build_result='ami_build_result.json', got '{args.ami_build_result}'"
     )
-    assert args.terraform_dir == "terraform/deploy", (
-        f"Expected default terraform_dir='terraform/deploy', got '{args.terraform_dir}'"
+    expected_terraform_dir = Path(__file__).parent.parent / "scripts" / ".." / "terraform" / "deploy"
+    assert Path(str(args.terraform_dir)).resolve() == expected_terraform_dir.resolve(), (
+        f"Expected default terraform_dir to resolve to '{expected_terraform_dir.resolve()}', got '{args.terraform_dir}'"
     )
 
 
