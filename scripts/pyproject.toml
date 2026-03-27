@@ -3,11 +3,4 @@ name = "github-actions-remote-executor-scripts"
 version = "0.1.0"
 description = "Build and deployment scripts for GitHub Actions Remote Executor"
 requires-python = ">=3.11"
-dependencies = [
-    "boto3>=1.35.0",
-    "paramiko>=3.5.0",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+dependencies = ["boto3>=1.35.0", "paramiko>=3.5.0"]

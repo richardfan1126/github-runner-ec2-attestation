@@ -1288,7 +1288,7 @@ def main() -> int:
         architecture = "x86_64"
         snapshot_id = upload_snapshot(ssh_client, args.region)
         wait_for_snapshot(ec2_client, snapshot_id)
-        ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).isoformat()}"
+        ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
         ami_id = register_ami(ec2_client, snapshot_id, architecture, ami_name)
 
         # Save build results

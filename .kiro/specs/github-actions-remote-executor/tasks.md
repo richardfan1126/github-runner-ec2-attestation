@@ -657,7 +657,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
   - [x] 28.3 Create register_ami function
     - Generate AMI name with format: attestable-ami-imported-{architecture}-{timestamp}
-    - Use ISO 8601 timestamp with UTC timezone
+    - Use strftime('%Y-%m-%dT%H-%M-%S') with UTC timezone to produce AWS-valid AMI names (no colons or '+' characters)
     - Register AMI with boto3 ec2_client.register_image with parameters:
       - VirtualizationType: hvm
       - BootMode: uefi

@@ -394,7 +394,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. THE AMI_Converter SHALL register the AMI with EnaSupport set to True
 12. THE AMI_Converter SHALL register the AMI with RootDeviceName set to /dev/xvda
 13. THE AMI_Converter SHALL configure BlockDeviceMappings with the snapshot ID for /dev/xvda
-14. THE AMI_Converter SHALL generate an AMI name with format attestable-ami-import-{timestamp}
+14. THE AMI_Converter SHALL generate an AMI name with format attestable-ami-imported-{architecture}-{timestamp} where timestamp uses strftime('%Y-%m-%dT%H-%M-%S') to ensure only AWS-allowed characters (letters, numbers, '(', ')', '.', '-', '/', '_')
 15. IF snapshot upload fails, THEN THE AMI_Converter SHALL fail with upload error
 16. IF snapshot waiter times out, THEN THE AMI_Converter SHALL fail with waiter error
 17. IF AMI registration fails, THEN THE AMI_Converter SHALL fail with ClientError

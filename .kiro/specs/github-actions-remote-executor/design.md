@@ -1241,7 +1241,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 16. Snapshot ID parsed from coldsnap stdout (searches for "snap-" prefix)
 17. Snapshot completion awaited using EC2 waiter (15s delay, 40 attempts = up to 10 minutes)
 18. AMI registered with configuration:
-    - Name: `attestable-ami-imported-{architecture}-{timestamp}`
+    - Name: `attestable-ami-imported-{architecture}-{timestamp}` (timestamp uses `%Y-%m-%dT%H-%M-%S` format to avoid AWS-invalid characters)
     - VirtualizationType: hvm
     - BootMode: uefi
     - Architecture: x86_64
@@ -1935,8 +1935,8 @@ response = ec2_client.register_image(
 
 - **Name:** `attestable-ami-imported-{architecture}-{timestamp}`
   - Architecture: x86_64 (hardcoded)
-  - Timestamp: ISO 8601 format with UTC timezone
-  - Example: attestable-ami-imported-x86_64-2024-01-15T10:30:00+00:00
+  - Timestamp: UTC timezone, formatted with `strftime('%Y-%m-%dT%H-%M-%S')` to avoid colons and `+` which are invalid in AWS AMI names
+  - Example: attestable-ami-imported-x86_64-2024-01-15T10-30-00
 
 - **VirtualizationType:** hvm
   - Hardware Virtual Machine
@@ -2973,7 +2973,7 @@ ami_id = response['ImageId']
 
 - **Name:** AMI name (must be unique in region)
   - Format: `attestable-ami-imported-{architecture}-{timestamp}`
-  - Example: `attestable-ami-imported-x86_64-2024-01-15T10:30:00+00:00`
+  - Example: `attestable-ami-imported-x86_64-2024-01-15T10-30-00`
 
 - **VirtualizationType:** `hvm`
   - Hardware Virtual Machine (not paravirtual)

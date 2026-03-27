@@ -49,7 +49,7 @@ def ami_name_strategy():
     return st.builds(
         lambda arch, ts: f"attestable-ami-imported-{arch}-{ts}",
         arch=architecture_strategy(),
-        ts=st.from_regex(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00", fullmatch=True),
+        ts=st.from_regex(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}", fullmatch=True),
     )
 
 
