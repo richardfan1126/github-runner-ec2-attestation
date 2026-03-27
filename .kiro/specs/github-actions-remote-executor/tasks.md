@@ -940,18 +940,18 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 42. Checkpoint - Ensure build-time SSH changes are consistent
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 43. Add Terraform variables and conditional SSH infrastructure
-  - [ ] 43.1 Add enable_ssh and key_pair_name variables to terraform/deploy/variables.tf
+- [x] 43. Add Terraform variables and conditional SSH infrastructure
+  - [x] 43.1 Add enable_ssh and key_pair_name variables to terraform/deploy/variables.tf
     - Add `enable_ssh` variable of type `bool` with default `false` and description "Enable SSH debug access (NOT for production)"
     - Add `key_pair_name` variable of type `string` with default `""` and description "EC2 key pair name for SSH access"
     - _Requirements: 32.20, 32.21_
 
-  - [ ] 43.2 Add conditional SSH ingress rule to security group in terraform/deploy/main.tf
+  - [x] 43.2 Add conditional SSH ingress rule to security group in terraform/deploy/main.tf
     - Add a `dynamic "ingress"` block inside `aws_security_group.attestation_api` that creates a TCP port 22 rule from `var.allowed_http_cidr` only when `var.enable_ssh` is `true`
     - When `enable_ssh` is `false`, no port 22 rule should exist
     - _Requirements: 32.22, 32.24_
 
-  - [ ] 43.3 Conditionally attach key pair to EC2 instance in terraform/deploy/main.tf
+  - [x] 43.3 Conditionally attach key pair to EC2 instance in terraform/deploy/main.tf
     - Set `key_name = var.enable_ssh ? var.key_pair_name : null` on the `aws_instance.target` resource
     - When `enable_ssh` is `false`, `key_name` is `null` (no key pair attached)
     - _Requirements: 32.23, 32.25_

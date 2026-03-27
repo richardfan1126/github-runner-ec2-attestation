@@ -19,3 +19,15 @@ variable "aws_region" {
   type        = string
   default     = "us-east-1"
 }
+
+variable "enable_ssh" {
+  description = "Enable SSH debug access (NOT for production)"
+  type        = bool
+  default     = false
+}
+
+variable "key_pair_name" {
+  description = "EC2 key pair name for SSH access"
+  type        = string
+  default     = ""
+}

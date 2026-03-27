@@ -77,6 +77,17 @@ resource "aws_security_group" "attestation_api" {
     cidr_blocks = [var.allowed_http_cidr]
   }
 
+  dynamic "ingress" {
+    for_each = var.enable_ssh ? [1] : []
+    content {
+      description = "SSH debug access"
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = [var.allowed_http_cidr]
+    }
+  }
+
   egress {
     description = "Allow all outbound traffic"
     from_port   = 0
@@ -97,6 +108,7 @@ resource "aws_instance" "target" {
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.attestation_api.id]
+  key_name               = var.enable_ssh ? var.key_pair_name : null
 
   # Associate public IP for HTTP API access
   associate_public_ip_address = true
