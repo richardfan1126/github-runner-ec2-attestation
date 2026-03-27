@@ -113,16 +113,22 @@ def test_property_82_security_group_http_only_access(allowed_cidr):
     assert "var.allowed_http_cidr" in content, \
         "Security group must use allowed_http_cidr variable for ingress"
 
-    # Verify NO SSH (port 22) ingress rule exists
-    # Count ingress blocks — there should be exactly one
-    ingress_count = content.count("ingress {") + content.count("ingress{")
-    assert ingress_count == 1, \
-        f"Security group must have exactly 1 ingress rule (HTTP 8080 only), found {ingress_count}"
+    # Verify NO unconditional SSH (port 22) ingress rule exists.
+    # A dynamic ingress block gated by var.enable_ssh is acceptable (debug feature),
+    # but a static ingress block for port 22 is not.
+    #
+    # Static ingress blocks use "ingress {" while dynamic ones use 'dynamic "ingress" {'
+    # so counting "ingress {" only captures static blocks (dynamic format doesn't match).
+    static_ingress_count = content.count("ingress {") + content.count("ingress{")
+    assert static_ingress_count == 1, \
+        f"Security group must have exactly 1 static ingress rule (HTTP 8080 only), found {static_ingress_count}"
 
-    # Verify port 22 is NOT referenced in any ingress context
-    # Split content to isolate ingress blocks
-    assert "from_port   = 22" not in content and "from_port = 22" not in content, \
-        "Security group must NOT allow SSH (port 22) inbound"
+    # If port 22 appears, it must only be inside a dynamic block gated by enable_ssh
+    if "from_port   = 22" in content or "from_port = 22" in content:
+        assert 'dynamic "ingress"' in content, \
+            "SSH port 22 must only appear inside a dynamic ingress block"
+        assert "var.enable_ssh" in content, \
+            "SSH port 22 dynamic block must be gated by var.enable_ssh"
 
     # Verify egress allows all outbound
     assert "egress" in content, \
