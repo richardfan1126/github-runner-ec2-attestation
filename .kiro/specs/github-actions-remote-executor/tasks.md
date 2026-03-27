@@ -922,17 +922,17 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Place this block after the existing `systemctl enable github-actions-remote-executor.service` line and before the Python dependency installation section
     - _Requirements: 32.10, 32.11, 32.12, 32.13_
 
-- [ ] 41. Update GitHub Actions workflow for SSH debug support
-  - [ ] 41.1 Add workflow_dispatch enable_ssh input to build-attestable-image.yml
+- [x] 41. Update GitHub Actions workflow for SSH debug support
+  - [x] 41.1 Add workflow_dispatch enable_ssh input to build-attestable-image.yml
     - Add `enable_ssh` input under the existing `workflow_dispatch` trigger with type `boolean`, default `false`, and description indicating it enables SSH debug access (NOT for production)
     - _Requirements: 32.2_
 
-  - [ ] 41.2 Conditionally pass --enable-ssh flag in the Build KIWI image step
+  - [x] 41.2 Conditionally pass --enable-ssh flag in the Build KIWI image step
     - Modify the "Build KIWI image" step to construct an `SSH_FLAG` variable: set to `--enable-ssh` only when `github.event_name == 'workflow_dispatch'` AND `inputs.enable_ssh == 'true'`; otherwise empty
     - Pass `$SSH_FLAG` as an argument to `build-kiwi-image.sh`
     - _Requirements: 32.1, 32.3, 32.4_
 
-  - [ ] 41.3 Add SSH debug warning step to workflow
+  - [x] 41.3 Add SSH debug warning step to workflow
     - Add a new step "SSH debug warning" that runs only when `github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true`
     - Append a prominent blockquote warning to `$GITHUB_STEP_SUMMARY` indicating the image was built with SSH debug access and is NOT for production use
     - _Requirements: 32.5, 32.6_

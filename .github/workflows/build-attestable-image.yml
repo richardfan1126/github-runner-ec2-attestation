@@ -6,6 +6,11 @@ on:
       - main
       - develop
   workflow_dispatch:
+    inputs:
+      enable_ssh:
+        description: 'Enable SSH debug access in the built image (NOT for production use)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,8 +38,20 @@ jobs:
       - name: Build KIWI image
         run: |
           chmod +x .github/scripts/build-kiwi-image.sh
-          .github/scripts/build-kiwi-image.sh
+          SSH_FLAG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
+            SSH_FLAG="--enable-ssh"
+          fi
+          .github/scripts/build-kiwi-image.sh $SSH_FLAG
       
+      - name: SSH debug warning
+        if: github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ **WARNING: This image was built with SSH debug access enabled.**" >> $GITHUB_STEP_SUMMARY
+          echo "> This image is NOT intended for production use." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
