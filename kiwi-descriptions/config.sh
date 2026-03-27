@@ -18,6 +18,13 @@ systemctl enable github-actions-remote-executor.service
 if [ "${ENABLE_SSH}" = "true" ]; then
     echo "SSH debug access enabled — enabling sshd service"
     systemctl enable sshd
+
+    # Pre-generate SSH host keys so sshd can start on the read-only root filesystem.
+    # The overlayroot configuration uses a tmpfs overlay with a read-only erofs base,
+    # and sshd-keygen may fail to write keys before the overlay is ready at boot.
+    echo "Pre-generating SSH host keys..."
+    ssh-keygen -A
+    echo "✓ SSH host keys generated"
 else
     echo "SSH debug access disabled (default secure behavior)"
 fi
