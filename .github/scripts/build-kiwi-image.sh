@@ -18,6 +18,21 @@
 
 set -e -o pipefail
 
+# Parse command-line arguments
+ENABLE_SSH="false"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --enable-ssh)
+            ENABLE_SSH="true"
+            shift
+            ;;
+        *)
+            echo "::error::Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+
 # Configuration
 IMAGE_DESCRIPTION_DIR="${GITHUB_WORKSPACE}/kiwi-descriptions"
 BUILD_OUTPUT_DIR="${GITHUB_WORKSPACE}/build-output"
@@ -48,6 +63,17 @@ trap "rm -rf ${TEMP_IMAGE_DIR}" EXIT
 
 echo "Copying image description files to temporary directory..."
 cp -r "${IMAGE_DESCRIPTION_DIR}"/* "${TEMP_IMAGE_DIR}/"
+
+# Conditionally remove SSH-related ignore directives when --enable-ssh is passed
+if [ "${ENABLE_SSH}" = "true" ]; then
+    echo "=== SSH Debug Mode Enabled ==="
+    echo "Removing SSH-related ignore directives from appliance.kiwi..."
+    sed -i '/<ignore name="openssh-server"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    sed -i '/<ignore name="cloud-init"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    sed -i '/<ignore name="cloud-init-cfg-ec2"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    sed -i '/<ignore name="ec2-instance-connect"\/>/d' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    echo "✓ SSH packages will be included in the image"
+fi
 
 # Copy pyproject.toml and uv.lock to the image description directory
 echo "Copying pyproject.toml and uv.lock..."
@@ -162,6 +188,7 @@ if ! docker run --rm \
     -v /dev:/dev \
     -v "${TEMP_IMAGE_DIR}:/workspace" \
     -v "${BUILD_OUTPUT_DIR}:/output" \
+    -e "ENABLE_SSH=${ENABLE_SSH}" \
     kiwi-builder:latest \
     bash -c "cd /workspace && kiwi-ng system build --description . --target-dir /output"; then
     echo "::error::KIWI NG build failed. Check the build logs above for details."

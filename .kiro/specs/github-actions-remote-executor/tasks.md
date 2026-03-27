@@ -898,19 +898,19 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 38. Final checkpoint - Ensure all cleanup tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 39. Implement build-time SSH debug support in build-kiwi-image.sh
-  - [ ] 39.1 Add --enable-ssh flag parsing to build-kiwi-image.sh
+- [x] 39. Implement build-time SSH debug support in build-kiwi-image.sh
+  - [x] 39.1 Add --enable-ssh flag parsing to build-kiwi-image.sh
     - Add `ENABLE_SSH="false"` default and a `while` loop to parse `--enable-ssh` flag (exit on unknown args)
     - Place argument parsing at the top of the script before any other logic
     - _Requirements: 32.7_
 
-  - [ ] 39.2 Add sed-based removal of SSH ignore directives when --enable-ssh is passed
+  - [x] 39.2 Add sed-based removal of SSH ignore directives when --enable-ssh is passed
     - When `ENABLE_SSH="true"`, use `sed -i` to remove `<ignore name="openssh-server"/>`, `<ignore name="cloud-init"/>`, `<ignore name="cloud-init-cfg-ec2"/>`, and `<ignore name="ec2-instance-connect"/>` from the copied `appliance.kiwi` in `${TEMP_IMAGE_DIR}`
     - Place this block after the image description files are copied to `TEMP_IMAGE_DIR` but before the Docker build step
     - Do NOT remove `amazon-ssm-agent` or `update-motd` ignore directives
     - _Requirements: 32.8, 32.9, 32.14_
 
-  - [ ] 39.3 Pass ENABLE_SSH environment variable to the Docker container
+  - [x] 39.3 Pass ENABLE_SSH environment variable to the Docker container
     - Add `-e "ENABLE_SSH=${ENABLE_SSH}"` to the existing `docker run` command that runs the KIWI build
     - _Requirements: 32.12_
 
