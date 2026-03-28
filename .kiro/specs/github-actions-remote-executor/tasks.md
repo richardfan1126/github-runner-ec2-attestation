@@ -1037,8 +1037,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 47. Final checkpoint - Ensure all debug SSH tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 48. Rename NSM references to NitroTPM in source code (src/)
-  - [ ] 48.1 Update src/attestation.py
+- [x] 48. Rename NSM references to NitroTPM in source code (src/)
+  - [x] 48.1 Update src/attestation.py
     - Change module docstring from "AWS Nitro attestation document generation" to "NitroTPM attestation document generation"
     - Change class docstring from "Generates attestation documents using AWS Nitro Security Module" to "Generates attestation documents using NitroTPM on the Attestable EC2 instance"
     - Rename `__init__` parameter `nsm_device_path` to `tpm_device_path`
@@ -1049,18 +1049,18 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Note: log messages referencing "nitro-tpm-attest" binary name should remain unchanged
     - _Requirements: 4.1, 4.2, 4.6_
 
-  - [ ] 48.2 Update src/config.py
+  - [x] 48.2 Update src/config.py
     - Change comment "# AWS Nitro Configuration" to "# NitroTPM Configuration"
     - Rename field `nsm_device_path` to `tpm_device_path`
     - Change environment variable lookup from `NSM_DEVICE_PATH` to `TPM_DEVICE_PATH`
     - Update validation message from "nsm_device_path cannot be empty" to "tpm_device_path cannot be empty"
     - _Requirements: 9.1_
 
-  - [ ] 48.3 Update src/models.py
+  - [x] 48.3 Update src/models.py
     - Change comment `# CBOR-encoded NSM attestation` to `# CBOR-encoded NitroTPM attestation`
     - _Requirements: 4.2_
 
-  - [ ] 48.4 Update src/main.py
+  - [x] 48.4 Update src/main.py
     - Change log message "NSM device path" to "NitroTPM device path"
     - Change log message "Verifying NSM device availability" to "Verifying NitroTPM device availability"
     - Change `verify_nsm_available()` calls to `verify_tpm_available()`
@@ -1069,7 +1069,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change log "NSM device verified and available" to "NitroTPM device verified and available"
     - _Requirements: 9.1, 10.3_
 
-  - [ ] 48.5 Update src/server.py
+  - [x] 48.5 Update src/server.py
     - Change `config.nsm_device_path` to `config.tpm_device_path`
     - Change `verify_nsm_available()` calls to `verify_tpm_available()`
     - _Requirements: 10.3_

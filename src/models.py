@@ -45,7 +45,7 @@ class AttestationDocument:
     commit_hash: str
     script_path: str
     timestamp: datetime
-    signature: bytes  # CBOR-encoded NSM attestation
+    signature: bytes  # CBOR-encoded NitroTPM attestation
 
 
 @dataclass

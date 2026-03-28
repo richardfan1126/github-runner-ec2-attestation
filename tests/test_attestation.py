@@ -14,13 +14,13 @@ from src.models import AttestationDocument
 
 @pytest.fixture
 def generator():
-    """Create an attestation generator with mocked NSM device path"""
-    return AttestationGenerator(nsm_device_path="/usr/bin/nitro-tpm-attest")
+    """Create an attestation generator with mocked NitroTPM device path"""
+    return AttestationGenerator(tpm_device_path="/usr/bin/nitro-tpm-attest")
 
 
 @pytest.fixture
 def mock_nsm_device(tmp_path):
-    """Create a mock NSM device executable"""
+    """Create a mock NitroTPM device executable"""
     mock_device = tmp_path / "nitro-tpm-attest"
     mock_device.write_text("#!/bin/bash\necho 'mock attestation'")
     mock_device.chmod(0o755)
@@ -28,30 +28,30 @@ def mock_nsm_device(tmp_path):
 
 
 class TestNSMAvailability:
-    """Tests for NSM device availability checking"""
+    """Tests for NitroTPM device availability checking"""
     
     def test_nsm_available_when_exists_and_executable(self, tmp_path):
-        """Test NSM is available when device exists and is executable"""
+        """Test NitroTPM is available when device exists and is executable"""
         mock_device = tmp_path / "nitro-tpm-attest"
         mock_device.write_text("#!/bin/bash\necho 'test'")
         mock_device.chmod(0o755)
         
-        generator = AttestationGenerator(nsm_device_path=str(mock_device))
-        assert generator.verify_nsm_available() is True
+        generator = AttestationGenerator(tpm_device_path=str(mock_device))
+        assert generator.verify_tpm_available() is True
     
     def test_nsm_unavailable_when_not_exists(self):
-        """Test NSM is unavailable when device does not exist"""
-        generator = AttestationGenerator(nsm_device_path="/nonexistent/path")
-        assert generator.verify_nsm_available() is False
+        """Test NitroTPM is unavailable when device does not exist"""
+        generator = AttestationGenerator(tpm_device_path="/nonexistent/path")
+        assert generator.verify_tpm_available() is False
     
     def test_nsm_unavailable_when_not_executable(self, tmp_path):
-        """Test NSM is unavailable when device exists but is not executable"""
+        """Test NitroTPM is unavailable when device exists but is not executable"""
         mock_device = tmp_path / "nitro-tpm-attest"
         mock_device.write_text("#!/bin/bash\necho 'test'")
         mock_device.chmod(0o644)  # Not executable
         
-        generator = AttestationGenerator(nsm_device_path=str(mock_device))
-        assert generator.verify_nsm_available() is False
+        generator = AttestationGenerator(tpm_device_path=str(mock_device))
+        assert generator.verify_tpm_available() is False
 
 
 class TestAttestationDocumentStructure:

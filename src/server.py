@@ -114,7 +114,7 @@ def create_app(config: ServerConfig) -> FastAPI:
     execution_manager = ExecutionManager(config.output_retention_hours)
     output_collector = OutputCollector()
     repository_client = RepositoryClient(config.temp_storage_path)
-    attestation_generator = AttestationGenerator(config.nsm_device_path)
+    attestation_generator = AttestationGenerator(config.tpm_device_path)
     script_executor = ScriptExecutor(
         execution_manager,
         output_collector,
@@ -558,7 +558,7 @@ def add_routes(app: FastAPI) -> None:
 
             # Check attestation capability
             attestation_gen = request.app.state.attestation_generator
-            attestation_available = attestation_gen.verify_nsm_available()
+            attestation_available = attestation_gen.verify_tpm_available()
 
             # Check disk space
             config = request.app.state.config

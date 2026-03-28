@@ -20,7 +20,7 @@ def get_test_config():
         rate_limit_window_seconds=60,
         temp_storage_path="/tmp/test",
         output_retention_hours=24,
-        nsm_device_path="/usr/bin/nitro-tpm-attest"
+        tpm_device_path="/usr/bin/nitro-tpm-attest"
     )
 
 
@@ -39,7 +39,7 @@ def test_health_endpoint_response_structure():
     with patch('shutil.disk_usage') as mock_disk_usage:
         mock_disk_usage.return_value = mock_usage
         
-        with patch.object(app.state.attestation_generator, 'verify_nsm_available') as mock_verify:
+        with patch.object(app.state.attestation_generator, 'verify_tpm_available') as mock_verify:
             mock_verify.return_value = True
             
             response = client.get("/health")
@@ -81,7 +81,7 @@ def test_health_endpoint_when_attestation_unavailable():
     with patch('shutil.disk_usage') as mock_disk_usage:
         mock_disk_usage.return_value = mock_usage
         
-        with patch.object(app.state.attestation_generator, 'verify_nsm_available') as mock_verify:
+        with patch.object(app.state.attestation_generator, 'verify_tpm_available') as mock_verify:
             mock_verify.return_value = False
             
             response = client.get("/health")
@@ -118,7 +118,7 @@ def test_health_endpoint_with_active_executions():
     with patch('shutil.disk_usage') as mock_disk_usage:
         mock_disk_usage.return_value = mock_usage
         
-        with patch.object(app.state.attestation_generator, 'verify_nsm_available') as mock_verify:
+        with patch.object(app.state.attestation_generator, 'verify_tpm_available') as mock_verify:
             mock_verify.return_value = True
             
             response = client.get("/health")
@@ -139,7 +139,7 @@ def test_health_endpoint_handles_errors_gracefully():
     client = TestClient(app)
     
     # Simulate error by not mocking disk_usage (will fail on non-existent path)
-    with patch.object(app.state.attestation_generator, 'verify_nsm_available') as mock_verify:
+    with patch.object(app.state.attestation_generator, 'verify_tpm_available') as mock_verify:
         mock_verify.side_effect = Exception("Test error")
         
         response = client.get("/health")

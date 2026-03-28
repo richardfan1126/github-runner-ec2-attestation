@@ -518,7 +518,7 @@ def test_temporary_file_cleanup_on_failure(repo_url, commit, path, nonce):
 # Additional test: NSM device availability check
 def test_nsm_device_availability_check():
     """
-    Test that verify_nsm_available correctly checks for NSM device.
+    Test that verify_tpm_available correctly checks for NitroTPM device.
     This is a prerequisite for attestation generation.
     """
     generator = AttestationGenerator()
@@ -529,17 +529,17 @@ def test_nsm_device_availability_check():
         # Test when device exists and is executable
         mock_exists.return_value = True
         mock_access.return_value = True
-        assert generator.verify_nsm_available() is True
+        assert generator.verify_tpm_available() is True
         
         # Test when device doesn't exist
         mock_exists.return_value = False
         mock_access.return_value = False
-        assert generator.verify_nsm_available() is False
+        assert generator.verify_tpm_available() is False
         
         # Test when device exists but not executable
         mock_exists.return_value = True
         mock_access.return_value = False
-        assert generator.verify_nsm_available() is False
+        assert generator.verify_tpm_available() is False
 
 
 # Additional test: User data JSON structure

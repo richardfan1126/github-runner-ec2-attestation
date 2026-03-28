@@ -29,8 +29,8 @@ class ServerConfig:
     temp_storage_path: str
     output_retention_hours: int
     
-    # AWS Nitro Configuration
-    nsm_device_path: str
+    # NitroTPM Configuration
+    tpm_device_path: str
     
     @classmethod
     def from_env(cls) -> "ServerConfig":
@@ -70,9 +70,9 @@ class ServerConfig:
         if retention is None:
             missing_vars.append("OUTPUT_RETENTION_HOURS")
         
-        nsm_path = os.getenv("NSM_DEVICE_PATH")
-        if nsm_path is None:
-            missing_vars.append("NSM_DEVICE_PATH")
+        tpm_path = os.getenv("TPM_DEVICE_PATH")
+        if tpm_path is None:
+            missing_vars.append("TPM_DEVICE_PATH")
         
         if missing_vars:
             raise ValueError(
@@ -88,7 +88,7 @@ class ServerConfig:
             rate_limit_window_seconds=int(rate_window),
             temp_storage_path=temp_path,
             output_retention_hours=int(retention),
-            nsm_device_path=nsm_path,
+            tpm_device_path=tpm_path,
         )
     
     def validate(self) -> None:
@@ -131,8 +131,8 @@ class ServerConfig:
                 f"Invalid output_retention_hours: {self.output_retention_hours} (must be >= 1)"
             )
         
-        if not self.nsm_device_path:
-            errors.append("nsm_device_path cannot be empty")
+        if not self.tpm_device_path:
+            errors.append("tpm_device_path cannot be empty")
         
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")

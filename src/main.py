@@ -52,19 +52,19 @@ def main() -> int:
         logger.info(f"Rate limit: {config.rate_limit_per_ip} requests per {config.rate_limit_window_seconds}s")
         logger.info(f"Temp storage path: {config.temp_storage_path}")
         logger.info(f"Output retention: {config.output_retention_hours} hours")
-        logger.info(f"NSM device path: {config.nsm_device_path}")
+        logger.info(f"NitroTPM device path: {config.tpm_device_path}")
         
-        # Verify NSM device availability
-        logger.info("Verifying NSM device availability...")
-        attestation_generator = AttestationGenerator(config.nsm_device_path)
-        if not attestation_generator.verify_nsm_available():
+        # Verify NitroTPM device availability
+        logger.info("Verifying NitroTPM device availability...")
+        attestation_generator = AttestationGenerator(config.tpm_device_path)
+        if not attestation_generator.verify_tpm_available():
             logger.error(
-                f"NSM device not available at {config.nsm_device_path}. "
+                f"NitroTPM device not available at {config.tpm_device_path}. "
                 "Attestation functionality will not work."
             )
             logger.warning("Continuing startup, but attestation will fail at runtime.")
         else:
-            logger.info("NSM device verified and available")
+            logger.info("NitroTPM device verified and available")
         
         # Ensure temp storage directory exists
         if not os.path.exists(config.temp_storage_path):

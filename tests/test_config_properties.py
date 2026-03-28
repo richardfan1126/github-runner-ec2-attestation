@@ -90,7 +90,7 @@ def test_property_50_configuration_loading(
         RATE_LIMIT_WINDOW_SECONDS=rate_window,
         TEMP_STORAGE_PATH=temp_path,
         OUTPUT_RETENTION_HOURS=retention,
-        NSM_DEVICE_PATH=nsm_path,
+        TPM_DEVICE_PATH=nsm_path,
     ):
         # Configuration should load successfully
         config = ServerConfig.from_env()
@@ -104,7 +104,7 @@ def test_property_50_configuration_loading(
         assert config.rate_limit_window_seconds == rate_window
         assert config.temp_storage_path == temp_path
         assert config.output_retention_hours == retention
-        assert config.nsm_device_path == nsm_path
+        assert config.tpm_device_path == nsm_path
 
 
 # Feature: github-actions-remote-executor, Property 51: Port Configuration
@@ -128,7 +128,7 @@ def test_property_51_port_configuration(port):
         RATE_LIMIT_WINDOW_SECONDS=60,
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
-        NSM_DEVICE_PATH="/dev/nsm",
+        TPM_DEVICE_PATH="/dev/nsm",
     ):
         config = ServerConfig.from_env()
         
@@ -161,7 +161,7 @@ def test_property_52_timeout_configuration(timeout):
         RATE_LIMIT_WINDOW_SECONDS=60,
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
-        NSM_DEVICE_PATH="/dev/nsm",
+        TPM_DEVICE_PATH="/dev/nsm",
     ):
         config = ServerConfig.from_env()
         
@@ -194,7 +194,7 @@ def test_property_53_size_limit_configuration(max_size):
         RATE_LIMIT_WINDOW_SECONDS=60,
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
-        NSM_DEVICE_PATH="/dev/nsm",
+        TPM_DEVICE_PATH="/dev/nsm",
     ):
         config = ServerConfig.from_env()
         
@@ -230,7 +230,7 @@ def test_property_54_rate_limit_configuration(rate_limit, rate_window):
         RATE_LIMIT_WINDOW_SECONDS=rate_window,
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
-        NSM_DEVICE_PATH="/dev/nsm",
+        TPM_DEVICE_PATH="/dev/nsm",
     ):
         config = ServerConfig.from_env()
         
@@ -264,7 +264,7 @@ def test_property_55_storage_path_configuration(storage_path):
         RATE_LIMIT_WINDOW_SECONDS=60,
         TEMP_STORAGE_PATH=storage_path,
         OUTPUT_RETENTION_HOURS=24,
-        NSM_DEVICE_PATH="/dev/nsm",
+        TPM_DEVICE_PATH="/dev/nsm",
     ):
         config = ServerConfig.from_env()
         
@@ -297,7 +297,7 @@ def test_property_56_retention_period_configuration(retention_hours):
         RATE_LIMIT_WINDOW_SECONDS=60,
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=retention_hours,
-        NSM_DEVICE_PATH="/dev/nsm",
+        TPM_DEVICE_PATH="/dev/nsm",
     ):
         config = ServerConfig.from_env()
         
@@ -319,7 +319,7 @@ def test_property_56_retention_period_configuration(retention_hours):
         "RATE_LIMIT_WINDOW_SECONDS",
         "TEMP_STORAGE_PATH",
         "OUTPUT_RETENTION_HOURS",
-        "NSM_DEVICE_PATH",
+        "TPM_DEVICE_PATH",
     ])
 )
 @settings(max_examples=20)
@@ -342,7 +342,7 @@ def test_property_57_missing_configuration_failure(missing_var):
         "RATE_LIMIT_WINDOW_SECONDS": "60",
         "TEMP_STORAGE_PATH": "/tmp/test",
         "OUTPUT_RETENTION_HOURS": "24",
-        "NSM_DEVICE_PATH": "/dev/nsm",
+        "TPM_DEVICE_PATH": "/dev/nsm",
     }
     
     # Remove the selected variable
@@ -380,7 +380,7 @@ def test_property_invalid_port_validation(port):
         rate_limit_window_seconds=60,
         temp_storage_path="/tmp/test",
         output_retention_hours=24,
-        nsm_device_path="/dev/nsm",
+        tpm_device_path="/dev/nsm",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -408,7 +408,7 @@ def test_property_invalid_positive_int_validation(value):
         rate_limit_window_seconds=60,
         temp_storage_path="/tmp/test",
         output_retention_hours=24,
-        nsm_device_path="/dev/nsm",
+        tpm_device_path="/dev/nsm",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -437,7 +437,7 @@ def test_property_empty_path_validation(empty_path):
         rate_limit_window_seconds=60,
         temp_storage_path=empty_path,
         output_retention_hours=24,
-        nsm_device_path="/dev/nsm",
+        tpm_device_path="/dev/nsm",
     )
     
     with pytest.raises(ValueError) as exc_info:

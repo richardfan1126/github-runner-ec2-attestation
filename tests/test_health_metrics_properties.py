@@ -22,7 +22,7 @@ def get_test_config():
         rate_limit_window_seconds=60,
         temp_storage_path="/tmp/test",
         output_retention_hours=24,
-        nsm_device_path="/usr/bin/nitro-tpm-attest"
+        tpm_device_path="/usr/bin/nitro-tpm-attest"
     )
 
 
@@ -46,7 +46,7 @@ def test_health_check_attestation_status(attestation_available):
     with patch('shutil.disk_usage') as mock_disk_usage:
         mock_disk_usage.return_value = mock_usage
         
-        with patch.object(app.state.attestation_generator, 'verify_nsm_available') as mock_verify:
+        with patch.object(app.state.attestation_generator, 'verify_tpm_available') as mock_verify:
             mock_verify.return_value = attestation_available
             
             response = client.get("/health")
@@ -80,7 +80,7 @@ def test_health_check_disk_space(free_space_mb):
     with patch('shutil.disk_usage') as mock_disk_usage:
         mock_disk_usage.return_value = mock_usage
         
-        with patch.object(app.state.attestation_generator, 'verify_nsm_available') as mock_verify:
+        with patch.object(app.state.attestation_generator, 'verify_tpm_available') as mock_verify:
             mock_verify.return_value = True
             
             response = client.get("/health")

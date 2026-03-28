@@ -1,4 +1,4 @@
-"""AWS Nitro attestation document generation"""
+"""NitroTPM attestation document generation"""
 import json
 import os
 import subprocess
@@ -25,26 +25,26 @@ class AttestationError:
 
 
 class AttestationGenerator:
-    """Generates attestation documents using AWS Nitro Security Module"""
+    """Generates attestation documents using NitroTPM on the Attestable EC2 instance"""
     
-    def __init__(self, nsm_device_path: str = "/usr/bin/nitro-tpm-attest"):
+    def __init__(self, tpm_device_path: str = "/usr/bin/nitro-tpm-attest"):
         """
         Initialize the attestation generator.
         
         Args:
-            nsm_device_path: Path to the nitro-tpm-attest command-line tool
+            tpm_device_path: Path to the nitro-tpm-attest command-line tool
         """
-        self.nsm_device_path = nsm_device_path
+        self.tpm_device_path = tpm_device_path
     
-    def verify_nsm_available(self) -> bool:
+    def verify_tpm_available(self) -> bool:
         """
-        Check if NSM device is available.
+        Check if NitroTPM device is available.
         
         Returns:
-            True if NSM device is available, False otherwise
+            True if NitroTPM device is available, False otherwise
         """
-        return os.path.exists(self.nsm_device_path) and os.access(
-            self.nsm_device_path, os.X_OK
+        return os.path.exists(self.tpm_device_path) and os.access(
+            self.tpm_device_path, os.X_OK
         )
     
     def generate_attestation(
@@ -55,7 +55,7 @@ class AttestationGenerator:
         nonce: Optional[str] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
         """
-        Generate an attestation document using AWS Nitro attestation.
+        Generate an attestation document using NitroTPM attestation.
         
         This method:
         1. Creates user_data containing execution metadata (repository URL, commit hash, script path, timestamp)
@@ -103,7 +103,7 @@ class AttestationGenerator:
             user_data_fd = None  # Mark as closed
             
             # Build command
-            cmd = [self.nsm_device_path, "--user-data", user_data_path]
+            cmd = [self.tpm_device_path, "--user-data", user_data_path]
             
             # Write nonce to temporary file if provided
             if nonce is not None:
@@ -174,7 +174,7 @@ class AttestationGenerator:
             # Handle unexpected errors
             logger.error(f"Unexpected error during attestation generation: {type(e).__name__}: {e}", exc_info=True)
             return None, AttestationError(
-                command=self.nsm_device_path,
+                command=self.tpm_device_path,
                 exit_code=-1,
                 stdout="",
                 stderr=str(e),
