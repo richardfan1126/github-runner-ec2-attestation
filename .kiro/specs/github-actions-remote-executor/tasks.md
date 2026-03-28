@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation plan breaks down the GitHub Actions Remote Executor into discrete coding tasks. The system is an HTTP server running on AWS Nitro-based EC2 instances that executes scripts from GitHub repositories with cryptographic attestation. The implementation follows an asynchronous execution model with polling-based output retrieval.
+This implementation plan breaks down the GitHub Actions Remote Executor into discrete coding tasks. The system is an HTTP server running on an Attestable EC2 instance with NitroTPM that executes scripts from GitHub repositories with cryptographic attestation. The implementation follows an asynchronous execution model with polling-based output retrieval.
 
 ## Tasks
 
@@ -82,7 +82,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [x] 5. Implement AWS Nitro attestation generator
   - [x] 5.1 Create AttestationGenerator class
-    - Implement verify_nsm_available method to check NSM device at `/usr/bin/nitro-tpm-attest`
+    - Implement verify_tpm_available method to check NitroTPM device at `/usr/bin/nitro-tpm-attest`
     - Implement generate_attestation method that:
       1. Accepts optional user_data and nonce parameters for inclusion in attestation
       2. Writes user_data and nonce to temporary files if provided (using tempfile.mkstemp)
@@ -106,7 +106,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Validates: Requirements 4.1-4.6, 4.10**
 
   - [x] 5.3 Write unit tests for attestation generator
-    - Test with mocked NSM device
+    - Test with mocked NitroTPM device
     - Test attestation document structure
     - Test signature verification
     - _Requirements: 4.1-4.6_
@@ -304,7 +304,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 15. Integration and wiring
   - [x] 15.1 Create main application entry point
     - Load configuration on startup
-    - Verify NSM device availability
+    - Verify NitroTPM device availability
     - Initialize all components
     - Start HTTP server
     - Handle graceful shutdown
@@ -1137,15 +1137,82 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change "Nitro-based instances" to "NitroTPM-compatible instances"
     - _Requirements: 4.6, 9.1_
 
-- [ ] 52. Update tasks.md overview and notes sections
-  - [ ] 52.1 Update tasks.md self-references
+- [x] 52. Update tasks.md overview and notes sections
+  - [x] 52.1 Update tasks.md self-references
     - Change overview "AWS Nitro-based EC2 instances" to "an Attestable EC2 instance with NitroTPM"
     - Update task 5 references: `verify_nsm_available` → `verify_tpm_available`, `nsm_device_path` → `tpm_device_path`, "NSM device" → "NitroTPM device"
     - Update task 15.1: "Verify NSM device availability" → "Verify NitroTPM device availability"
     - Update Notes section: "AWS Nitro attestation requires running on a Nitro-based EC2 instance" → "NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM"
     - _Requirements: 4.1, 4.6_
 
-- [ ] 53. Final checkpoint - Ensure all tests pass after NitroTPM rename
+- [ ] 53. Fix TPM config variable name and default value
+  - [ ] 53.1 Update src/config.py
+    - Rename field `tpm_device_path` to `tpm_attest_path` in ServerConfig dataclass
+    - Change environment variable lookup from `TPM_DEVICE_PATH` to `TPM_ATTEST_PATH`
+    - Update validation message from "tpm_device_path cannot be empty" to "tpm_attest_path cannot be empty"
+    - Update `from_env()` local variable and return field accordingly
+    - _Requirements: 9.1, 9.7_
+
+  - [ ] 53.2 Update src/attestation.py
+    - Rename `__init__` parameter `tpm_device_path` to `tpm_attest_path`
+    - Rename `self.tpm_device_path` to `self.tpm_attest_path`
+    - Update docstring from "Path to the nitro-tpm-attest command-line tool" to match new parameter name
+    - Default value remains `/usr/bin/nitro-tpm-attest` (already correct)
+    - _Requirements: 4.1, 4.6_
+
+  - [ ] 53.3 Update src/main.py
+    - Change `config.tpm_device_path` to `config.tpm_attest_path` in AttestationGenerator constructor call
+    - _Requirements: 9.1_
+
+  - [ ] 53.4 Update src/server.py
+    - Change `config.tpm_device_path` to `config.tpm_attest_path` in AttestationGenerator constructor call
+    - _Requirements: 10.3_
+
+  - [ ] 53.5 Update .env.example
+    - Change `TPM_DEVICE_PATH=/dev/nsm` to `TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest`
+    - _Requirements: 9.1_
+
+  - [ ] 53.6 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
+    - Change `TPM_DEVICE_PATH=/dev/nsm` to `TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest`
+    - _Requirements: 9.1_
+
+  - [ ] 53.7 Update README.md
+    - Change `TPM_DEVICE_PATH` to `TPM_ATTEST_PATH` in configuration section
+    - Change "NitroTPM device path (default: /dev/nsm)" to "NitroTPM attestation tool path (default: /usr/bin/nitro-tpm-attest)"
+    - _Requirements: 9.1_
+
+- [ ] 54. Update tests for TPM config variable rename
+  - [ ] 54.1 Update tests/test_attestation.py
+    - Change `tpm_device_path=` to `tpm_attest_path=` in all AttestationGenerator constructor calls
+    - _Requirements: 4.1, 4.6_
+
+  - [ ] 54.2 Update tests/test_config_properties.py
+    - Change `TPM_DEVICE_PATH` to `TPM_ATTEST_PATH` in all environment variable references
+    - Change `tpm_device_path` to `tpm_attest_path` in all ServerConfig field assertions
+    - Update default value assertions from `/dev/nsm` to `/usr/bin/nitro-tpm-attest` if present
+    - _Requirements: 9.1_
+
+  - [ ] 54.3 Update tests/test_health_metrics_unit.py
+    - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
+    - _Requirements: 10.3_
+
+  - [ ] 54.4 Update tests/test_health_metrics_properties.py
+    - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
+    - _Requirements: 10.3_
+
+  - [ ] 54.5 Update tests/test_server_unit.py
+    - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
+    - _Requirements: 4.10, 10.3_
+
+  - [ ] 54.6 Update tests/test_integration.py
+    - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
+    - _Requirements: 4.1_
+
+  - [ ] 54.7 Update tests/test_logging_error_handling_properties.py
+    - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
+    - _Requirements: 7.1_
+
+- [ ] 55. Final checkpoint - Ensure all tests pass after TPM config fix
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
@@ -1171,7 +1238,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Dependency installation occurs during KIWI image build phase, before image finalization
 - Debug SSH feature requires coordination between build-time and deploy-time: both --enable-ssh flags must be used for SSH to work end-to-end
 - SSH key provisioning uses cloud-init and ec2-instance-connect (no baked-in keys)
-- AWS Nitro attestation requires running on a Nitro-based EC2 instance
+- NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM
 - Scripts execute as root with full system privileges
 - All 94 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation

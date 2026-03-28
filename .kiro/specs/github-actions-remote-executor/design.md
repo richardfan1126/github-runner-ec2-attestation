@@ -478,7 +478,7 @@ class ServerConfig:
     rate_limit_window_seconds: int
     temp_storage_path: str
     output_retention_hours: int
-    tpm_device_path: str
+    tpm_attest_path: str
 ```
 
 
