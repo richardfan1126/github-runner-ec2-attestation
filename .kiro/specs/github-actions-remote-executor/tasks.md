@@ -1085,8 +1085,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change `NSM_DEVICE_PATH=/dev/nsm` to `TPM_DEVICE_PATH=/dev/nsm`
     - _Requirements: 9.1_
 
-- [ ] 50. Update tests to match renamed APIs
-  - [ ] 50.1 Update tests/test_attestation.py
+- [x] 50. Update tests to match renamed APIs
+  - [x] 50.1 Update tests/test_attestation.py
     - Change fixture docstring "mocked NSM device path" to "mocked NitroTPM device path"
     - Change `nsm_device_path=` to `tpm_device_path=` in all AttestationGenerator constructor calls
     - Rename fixture `mock_nsm_device` to `mock_tpm_device`
@@ -1095,34 +1095,34 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change `verify_nsm_available()` calls to `verify_tpm_available()`
     - _Requirements: 4.1, 4.6_
 
-  - [ ] 50.2 Update tests/test_attestation_properties.py
+  - [x] 50.2 Update tests/test_attestation_properties.py
     - Change comments "CBOR-encoded attestation from NSM" to "from NitroTPM"
     - Rename function `test_nsm_device_availability_check` to `test_tpm_device_availability_check`
     - Update docstrings: "verify_nsm_available" to "verify_tpm_available"
     - Change `verify_nsm_available()` calls to `verify_tpm_available()`
     - _Requirements: 4.1, 4.6_
 
-  - [ ] 50.3 Update tests/test_health_metrics_unit.py
+  - [x] 50.3 Update tests/test_health_metrics_unit.py
     - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
     - Change `verify_nsm_available` mock references to `verify_tpm_available`
     - _Requirements: 10.3_
 
-  - [ ] 50.4 Update tests/test_health_metrics_properties.py
+  - [x] 50.4 Update tests/test_health_metrics_properties.py
     - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
     - Change `verify_nsm_available` mock references to `verify_tpm_available`
     - _Requirements: 10.3_
 
-  - [ ] 50.5 Update tests/test_server_unit.py
+  - [x] 50.5 Update tests/test_server_unit.py
     - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
     - Update error message string "NSM device not available" to "NitroTPM device not available" if present in test assertions
     - _Requirements: 4.10, 10.3_
 
-  - [ ] 50.6 Update tests/test_integration.py
+  - [x] 50.6 Update tests/test_integration.py
     - Change docstring "NSM device" to "NitroTPM device"
     - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
     - _Requirements: 4.1_
 
-  - [ ] 50.7 Update tests/test_logging_error_handling_properties.py
+  - [x] 50.7 Update tests/test_logging_error_handling_properties.py
     - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
     - _Requirements: 7.1_
 

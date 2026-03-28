@@ -19,18 +19,18 @@ def generator():
 
 
 @pytest.fixture
-def mock_nsm_device(tmp_path):
-    """Create a mock NitroTPM device executable"""
+def mock_tpm_device(tmp_path):
+    """Create a mocked NitroTPM device path"""
     mock_device = tmp_path / "nitro-tpm-attest"
     mock_device.write_text("#!/bin/bash\necho 'mock attestation'")
     mock_device.chmod(0o755)
     return str(mock_device)
 
 
-class TestNSMAvailability:
+class TestTPMAvailability:
     """Tests for NitroTPM device availability checking"""
     
-    def test_nsm_available_when_exists_and_executable(self, tmp_path):
+    def test_tpm_available_when_exists_and_executable(self, tmp_path):
         """Test NitroTPM is available when device exists and is executable"""
         mock_device = tmp_path / "nitro-tpm-attest"
         mock_device.write_text("#!/bin/bash\necho 'test'")
@@ -39,12 +39,12 @@ class TestNSMAvailability:
         generator = AttestationGenerator(tpm_device_path=str(mock_device))
         assert generator.verify_tpm_available() is True
     
-    def test_nsm_unavailable_when_not_exists(self):
+    def test_tpm_unavailable_when_not_exists(self):
         """Test NitroTPM is unavailable when device does not exist"""
         generator = AttestationGenerator(tpm_device_path="/nonexistent/path")
         assert generator.verify_tpm_available() is False
     
-    def test_nsm_unavailable_when_not_executable(self, tmp_path):
+    def test_tpm_unavailable_when_not_executable(self, tmp_path):
         """Test NitroTPM is unavailable when device exists but is not executable"""
         mock_device = tmp_path / "nitro-tpm-attest"
         mock_device.write_text("#!/bin/bash\necho 'test'")
@@ -120,8 +120,8 @@ class TestAttestationDocumentStructure:
         assert before <= doc.timestamp <= after
 
 
-class TestMockedNSMDevice:
-    """Tests with mocked NSM device subprocess calls"""
+class TestMockedTPMDevice:
+    """Tests with mocked NitroTPM device subprocess calls"""
     
     @patch("subprocess.run")
     def test_subprocess_called_with_correct_command(self, mock_run, generator):

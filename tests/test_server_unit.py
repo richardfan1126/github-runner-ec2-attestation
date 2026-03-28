@@ -360,8 +360,8 @@ class TestExecuteEndpoint:
                                 command="/usr/bin/nitro-tpm-attest",
                                 exit_code=-1,
                                 stdout="",
-                                stderr="NSM device not available",
-                                context="Failed to access /dev/nsm"
+                                stderr="NitroTPM device not available",
+                                context="Failed to access NitroTPM device"
                             )
                         )
                         

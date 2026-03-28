@@ -1,7 +1,7 @@
 """Integration tests for GitHub Actions Remote Executor
 
 Simplified integration tests focusing on core end-to-end flows.
-Tests use mocked external dependencies (GitHub API, NSM device).
+Tests use mocked external dependencies (GitHub API, NitroTPM device).
 """
 import time
 from datetime import datetime, timedelta, timezone

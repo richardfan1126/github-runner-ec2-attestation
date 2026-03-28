@@ -246,7 +246,7 @@ def test_property_17_attestation_document_signing(
         assert len(attestation_doc.signature) > 0, \
             "Signature should not be empty"
         
-        # Signature should be the CBOR-encoded attestation from NSM
+        # Signature should be the CBOR-encoded attestation from NitroTPM
         assert attestation_doc.signature == attestation_bytes, \
             "Signature should be the CBOR attestation from nitro-tpm-attest"
         
@@ -515,8 +515,8 @@ def test_temporary_file_cleanup_on_failure(repo_url, commit, path, nonce):
             tempfile.mkstemp = original_mkstemp
 
 
-# Additional test: NSM device availability check
-def test_nsm_device_availability_check():
+# Additional test: NitroTPM device availability check
+def test_tpm_device_availability_check():
     """
     Test that verify_tpm_available correctly checks for NitroTPM device.
     This is a prerequisite for attestation generation.
