@@ -2,7 +2,7 @@
 
 ## Overview
 
-The GitHub Actions Remote Executor is an HTTP server that runs on an AWS Nitro-based EC2 instance, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts asynchronously while allowing clients to poll for output and status.
+The GitHub Actions Remote Executor is an HTTP server that runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts asynchronously while allowing clients to poll for output and status.
 
 This design document covers five major aspects of the system:
 
@@ -21,7 +21,7 @@ This design document covers five major aspects of the system:
 1. **Asynchronous Execution Model**: Requests return immediately with an execution ID and attestation document, while script execution proceeds in the background
 2. **Polling-based Output Retrieval**: Clients poll a separate endpoint to retrieve incremental output rather than maintaining long HTTP connections
 3. **Root Execution**: Scripts execute as root with full system privileges for maximum flexibility
-4. **Attestable Environment**: AWS Nitro attestation provides cryptographic proof of the execution environment
+4. **Attestable Environment**: NitroTPM-based attestation on the Attestable EC2 instance provides cryptographic proof of the execution environment
 5. **Stateless Request Handling**: Each request is independent, with execution state stored separately
 
 ### Architecture Goals
@@ -123,9 +123,9 @@ The system consists of the following major components:
 - Caches authentication state
 
 **Attestation Generator**
-- Interfaces with AWS Nitro Security Module (NSM) via the `nitro-tpm-attest` command-line tool
+- Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
-- Signs documents using NSM cryptographic capabilities
+- Signs documents using NitroTPM cryptographic capabilities
 - Encodes attestation in standard format (CBOR)
 - Implementation approach (based on `demo_api.py::AttestationAPIHandler.generate_attestation_document()`):
   1. Accepts optional user_data and nonce parameters for inclusion in attestation
@@ -347,8 +347,8 @@ class AttestationGenerator:
         """Generates signed attestation document"""
         pass
     
-    def verify_nsm_available(self) -> bool:
-        """Checks if NSM device is available"""
+    def verify_tpm_available(self) -> bool:
+        """Checks if NitroTPM device is available"""
         pass
 ```
 
@@ -449,7 +449,7 @@ class AttestationDocument:
     commit_hash: str
     script_path: str
     timestamp: datetime
-    signature: bytes  # CBOR-encoded NSM attestation
+    signature: bytes  # CBOR-encoded NitroTPM attestation
 ```
 
 ### OutputData
@@ -478,7 +478,7 @@ class ServerConfig:
     rate_limit_window_seconds: int
     temp_storage_path: str
     output_retention_hours: int
-    nsm_device_path: str
+    tpm_device_path: str
 ```
 
 
@@ -584,7 +584,7 @@ class ServerConfig:
 
 ### Property 17: Attestation Document Signing
 
-*For any* generated attestation document, it should be signed using AWS Nitro attestation capabilities and the signature should be verifiable.
+*For any* generated attestation document, it should be signed using NitroTPM attestation capabilities on the Attestable EC2 instance and the signature should be verifiable.
 
 **Validates: Requirements 4.6**
 
@@ -869,7 +869,7 @@ All error responses follow a consistent JSON structure:
 - Retry transient errors with exponential backoff
 
 **Attestation Errors**
-- Verify NSM device availability at startup
+- Verify NitroTPM device availability at startup
 - Return 500 errors for attestation failures
 - Log detailed attestation error information
 - Include health check status for attestation capability
@@ -916,7 +916,7 @@ The system requires both unit testing and property-based testing for comprehensi
 - Edge cases (empty inputs, boundary values, special characters)
 - Error conditions and error response formats
 - Integration points between components
-- Mocking external dependencies (GitHub API, NSM device)
+- Mocking external dependencies (GitHub API, NitroTPM device)
 
 **Property-Based Tests** focus on:
 - Universal properties that hold for all inputs
@@ -960,7 +960,7 @@ def test_execution_id_uniqueness(requests):
 - Property tests: Random repository URLs, commit hashes, file paths
 
 **Attestation Testing**
-- Unit tests: Mock NSM device, specific attestation formats
+- Unit tests: Mock NitroTPM device, specific attestation formats
 - Property tests: Random execution metadata, attestation verification
 
 **Execution Testing**
@@ -990,7 +990,7 @@ def test_execution_id_uniqueness(requests):
 
 **External Dependencies**:
 - Mock GitHub API for predictable testing
-- Mock NSM device for attestation testing
+- Mock NitroTPM device for attestation testing
 - Use separate processes for execution testing
 
 ### Performance Testing

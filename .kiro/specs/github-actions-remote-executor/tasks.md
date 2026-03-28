@@ -1037,6 +1037,117 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 47. Final checkpoint - Ensure all debug SSH tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 48. Rename NSM references to NitroTPM in source code (src/)
+  - [ ] 48.1 Update src/attestation.py
+    - Change module docstring from "AWS Nitro attestation document generation" to "NitroTPM attestation document generation"
+    - Change class docstring from "Generates attestation documents using AWS Nitro Security Module" to "Generates attestation documents using NitroTPM on the Attestable EC2 instance"
+    - Rename `__init__` parameter `nsm_device_path` to `tpm_device_path`
+    - Rename `self.nsm_device_path` to `self.tpm_device_path`
+    - Rename method `verify_nsm_available()` to `verify_tpm_available()`
+    - Update method docstrings: "NSM device" → "NitroTPM device"
+    - Update `generate_attestation` docstring: "AWS Nitro attestation" → "NitroTPM attestation"
+    - Note: log messages referencing "nitro-tpm-attest" binary name should remain unchanged
+    - _Requirements: 4.1, 4.2, 4.6_
+
+  - [ ] 48.2 Update src/config.py
+    - Change comment "# AWS Nitro Configuration" to "# NitroTPM Configuration"
+    - Rename field `nsm_device_path` to `tpm_device_path`
+    - Change environment variable lookup from `NSM_DEVICE_PATH` to `TPM_DEVICE_PATH`
+    - Update validation message from "nsm_device_path cannot be empty" to "tpm_device_path cannot be empty"
+    - _Requirements: 9.1_
+
+  - [ ] 48.3 Update src/models.py
+    - Change comment `# CBOR-encoded NSM attestation` to `# CBOR-encoded NitroTPM attestation`
+    - _Requirements: 4.2_
+
+  - [ ] 48.4 Update src/main.py
+    - Change log message "NSM device path" to "NitroTPM device path"
+    - Change log message "Verifying NSM device availability" to "Verifying NitroTPM device availability"
+    - Change `verify_nsm_available()` calls to `verify_tpm_available()`
+    - Change `config.nsm_device_path` to `config.tpm_device_path`
+    - Change log "NSM device not available" to "NitroTPM device not available"
+    - Change log "NSM device verified and available" to "NitroTPM device verified and available"
+    - _Requirements: 9.1, 10.3_
+
+  - [ ] 48.5 Update src/server.py
+    - Change `config.nsm_device_path` to `config.tpm_device_path`
+    - Change `verify_nsm_available()` calls to `verify_tpm_available()`
+    - _Requirements: 10.3_
+
+- [ ] 49. Update configuration and environment files
+  - [ ] 49.1 Update .env.example
+    - Change comment "# AWS Nitro Configuration" to "# NitroTPM Configuration"
+    - Change `NSM_DEVICE_PATH=/dev/nsm` to `TPM_DEVICE_PATH=/dev/nsm`
+    - _Requirements: 9.1_
+
+  - [ ] 49.2 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
+    - Change comment "# AWS Nitro Configuration" to "# NitroTPM Configuration"
+    - Change `NSM_DEVICE_PATH=/dev/nsm` to `TPM_DEVICE_PATH=/dev/nsm`
+    - _Requirements: 9.1_
+
+- [ ] 50. Update tests to match renamed APIs
+  - [ ] 50.1 Update tests/test_attestation.py
+    - Change fixture docstring "mocked NSM device path" to "mocked NitroTPM device path"
+    - Change `nsm_device_path=` to `tpm_device_path=` in all AttestationGenerator constructor calls
+    - Rename fixture `mock_nsm_device` to `mock_tpm_device`
+    - Rename class `TestNSMAvailability` to `TestTPMAvailability`
+    - Update all docstrings referencing "NSM" to "NitroTPM"
+    - Change `verify_nsm_available()` calls to `verify_tpm_available()`
+    - _Requirements: 4.1, 4.6_
+
+  - [ ] 50.2 Update tests/test_attestation_properties.py
+    - Change comments "CBOR-encoded attestation from NSM" to "from NitroTPM"
+    - Rename function `test_nsm_device_availability_check` to `test_tpm_device_availability_check`
+    - Update docstrings: "verify_nsm_available" to "verify_tpm_available"
+    - Change `verify_nsm_available()` calls to `verify_tpm_available()`
+    - _Requirements: 4.1, 4.6_
+
+  - [ ] 50.3 Update tests/test_health_metrics_unit.py
+    - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
+    - Change `verify_nsm_available` mock references to `verify_tpm_available`
+    - _Requirements: 10.3_
+
+  - [ ] 50.4 Update tests/test_health_metrics_properties.py
+    - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
+    - Change `verify_nsm_available` mock references to `verify_tpm_available`
+    - _Requirements: 10.3_
+
+  - [ ] 50.5 Update tests/test_server_unit.py
+    - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
+    - Update error message string "NSM device not available" to "NitroTPM device not available" if present in test assertions
+    - _Requirements: 4.10, 10.3_
+
+  - [ ] 50.6 Update tests/test_integration.py
+    - Change docstring "NSM device" to "NitroTPM device"
+    - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
+    - _Requirements: 4.1_
+
+  - [ ] 50.7 Update tests/test_logging_error_handling_properties.py
+    - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
+    - _Requirements: 7.1_
+
+- [ ] 51. Update README and documentation
+  - [ ] 51.1 Update README.md
+    - Change "AWS Nitro-based EC2 instances" to "Attestable EC2 instance with NitroTPM" in overview
+    - Change "AWS Nitro-based EC2 instance (for attestation capabilities)" to "Attestable EC2 instance with NitroTPM" in requirements
+    - Change `NSM_DEVICE_PATH` to `TPM_DEVICE_PATH` in configuration section
+    - Change "AWS Nitro Security Module device path" to "NitroTPM device path"
+    - Update "AWS Nitro EC2 Deployment" section title to "Attestable EC2 Deployment"
+    - Change "AWS Nitro-based EC2 instance for attestation" to "Attestable EC2 instance with NitroTPM"
+    - Change "Nitro-based instances" to "NitroTPM-compatible instances"
+    - _Requirements: 4.6, 9.1_
+
+- [ ] 52. Update tasks.md overview and notes sections
+  - [ ] 52.1 Update tasks.md self-references
+    - Change overview "AWS Nitro-based EC2 instances" to "an Attestable EC2 instance with NitroTPM"
+    - Update task 5 references: `verify_nsm_available` → `verify_tpm_available`, `nsm_device_path` → `tpm_device_path`, "NSM device" → "NitroTPM device"
+    - Update task 15.1: "Verify NSM device availability" → "Verify NitroTPM device availability"
+    - Update Notes section: "AWS Nitro attestation requires running on a Nitro-based EC2 instance" → "NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM"
+    - _Requirements: 4.1, 4.6_
+
+- [ ] 53. Final checkpoint - Ensure all tests pass after NitroTPM rename
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
