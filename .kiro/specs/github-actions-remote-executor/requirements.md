@@ -36,6 +36,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **GHA_Secret_Token**: Secret token used to authenticate GitHub Actions requests
 - **Execution_Request**: JSON payload containing script location and execution parameters
 - **Script_Output**: Captured stdout, stderr, and exit code from script execution
+- **Output_Attestation_Document**: Cryptographic attestation document generated at output retrieval time, containing a digest of the Script_Output in the user_data field, enabling the client to verify output integrity
 
 ### Deployment Components
 - **Deploy_Terraform**: Terraform configuration in terraform/deploy/ that provisions the target EC2 instance and supporting network infrastructure
@@ -147,11 +148,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE GHA_Server SHALL provide an HTTP GET endpoint for retrieving execution results
 2. THE GHA_Server SHALL accept the Execution_ID as a URL parameter
 3. WHEN execution is in progress, THE GHA_Server SHALL return HTTP 202 Accepted with status "running"
-4. WHEN execution is complete, THE GHA_Server SHALL return HTTP 200 OK with Script_Output and Attestation_Document
+4. WHEN execution is complete, THE GHA_Server SHALL return HTTP 200 OK with Script_Output, Attestation_Document, and Output_Attestation_Document
 5. THE response SHALL include stdout, stderr, and exit code
 6. THE response SHALL include the Attestation_Document in base64 encoding
-7. IF the Execution_ID does not exist, THEN THE GHA_Server SHALL return HTTP 404 Not Found
-8. THE GHA_Server SHALL retain execution results for at least 1 hour after completion
+7. WHEN execution is complete, THE Attestation_Generator SHALL generate an Output_Attestation_Document containing a SHA-256 digest of the Script_Output in the user_data field
+8. THE response SHALL include the Output_Attestation_Document in base64 encoding
+9. THE Output_Attestation_Document SHALL enable the client to verify output integrity by comparing the digest in user_data against the SHA-256 digest of the returned Script_Output
+10. IF the Execution_ID does not exist, THEN THE GHA_Server SHALL return HTTP 404 Not Found
+11. IF Output_Attestation_Document generation fails, THEN THE GHA_Server SHALL return the Script_Output and Attestation_Document with an error field indicating attestation failure
+12. THE GHA_Server SHALL retain execution results for at least 1 hour after completion
 
 ### Requirement 7: Error Handling and Logging
 

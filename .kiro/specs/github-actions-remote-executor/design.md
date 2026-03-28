@@ -108,6 +108,9 @@ The system consists of the following major components:
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
 - Returns completion status and exit codes
+- When execution is complete, generates an Output_Attestation_Document containing a SHA-256 digest of the Script_Output in the user_data field
+- Returns Output_Attestation_Document in base64 encoding alongside Script_Output and Attestation_Document
+- If Output_Attestation_Document generation fails, still returns Script_Output and Attestation_Document with an error field
 
 **Request Validator**
 - Validates request structure and required fields
@@ -190,8 +193,11 @@ The system consists of the following major components:
 1. Client sends GET request to `/execution/{id}/output` with optional offset parameter
 2. Output Handler retrieves execution record by ID
 3. Output Collector returns current status, output from offset, and completion flag
-4. If complete, exit code is included
-5. Client repeats polling until execution completes
+4. If complete, Output Handler computes SHA-256 digest of the Script_Output and generates an Output_Attestation_Document with the digest in user_data
+5. If complete, response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code
+6. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
+7. Client repeats polling until execution completes
+8. Client can verify output integrity by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
 
 ### Concurrency Model
 
@@ -267,7 +273,24 @@ When complete:
   "stdout_offset": 2048,
   "stderr_offset": 512,
   "complete": true,
-  "exit_code": 0
+  "exit_code": 0,
+  "output_attestation_document": "base64-encoded-cbor"
+}
+```
+
+When complete but Output_Attestation_Document generation fails:
+```json
+{
+  "execution_id": "uuid-v4",
+  "status": "completed",
+  "stdout": "output text...",
+  "stderr": "error text...",
+  "stdout_offset": 2048,
+  "stderr_offset": 512,
+  "complete": true,
+  "exit_code": 0,
+  "output_attestation_document": null,
+  "attestation_error": "Failed to generate output attestation document"
 }
 ```
 
@@ -682,25 +705,25 @@ class ServerConfig:
 
 *For any* completed script execution, the output endpoint response should include the exit code.
 
-**Validates: Requirements 6.7**
+**Validates: Requirements 6.5**
 
 ### Property 34: Completion Flag Accuracy
 
 *For any* execution, the output endpoint response should include a boolean completion flag that accurately reflects whether execution is complete.
 
-**Validates: Requirements 6.8**
+**Validates: Requirements 6.4**
 
 ### Property 35: Invalid Execution ID Response
 
 *For any* non-existent execution ID, the output endpoint should return HTTP 404 with an execution not found error.
 
-**Validates: Requirements 6.9**
+**Validates: Requirements 6.10**
 
 ### Property 36: Output Retention Period
 
 *For any* completed execution, the output should be retained and accessible for the configured retention period, and removed after that period expires.
 
-**Validates: Requirements 6.10**
+**Validates: Requirements 6.12**
 
 ### Property 37: Error Logging with Context
 
@@ -828,6 +851,24 @@ class ServerConfig:
 
 **Validates: Requirements 10.6**
 
+### Property 44: Output Attestation Digest Integrity
+
+*For any* completed script execution with Script_Output, the Output_Attestation_Document's user_data field should contain a SHA-256 digest that matches the SHA-256 digest of the returned Script_Output, enabling the client to verify output integrity via round-trip comparison.
+
+**Validates: Requirements 6.7, 6.9**
+
+### Property 45: Output Attestation Base64 Encoding
+
+*For any* completed script execution where Output_Attestation_Document generation succeeds, the output_attestation_document field in the response should be a valid base64-encoded string.
+
+**Validates: Requirements 6.8**
+
+### Property 46: Output Attestation Failure Graceful Degradation
+
+*For any* completed script execution where Output_Attestation_Document generation fails, the response should still include the Script_Output and Attestation_Document, with an attestation_error field indicating the failure reason and output_attestation_document set to null.
+
+**Validates: Requirements 6.11**
+
 ### Error Categories
 
 The system handles errors in the following categories:
@@ -870,9 +911,15 @@ All error responses follow a consistent JSON structure:
 
 **Attestation Errors**
 - Verify NitroTPM device availability at startup
-- Return 500 errors for attestation failures
+- Return 500 errors for pre-execution attestation failures
 - Log detailed attestation error information
 - Include health check status for attestation capability
+
+**Output Attestation Errors**
+- When Output_Attestation_Document generation fails at output retrieval time, do NOT fail the entire response
+- Return Script_Output and Attestation_Document normally with an attestation_error field
+- Set output_attestation_document to null in the response
+- Log the output attestation failure with execution ID context
 
 **Execution Errors**
 - Capture script stderr for error diagnosis
@@ -962,6 +1009,10 @@ def test_execution_id_uniqueness(requests):
 **Attestation Testing**
 - Unit tests: Mock NitroTPM device, specific attestation formats
 - Property tests: Random execution metadata, attestation verification
+
+**Output Attestation Testing**
+- Unit tests: Mock NitroTPM for output attestation generation, verify graceful degradation on failure
+- Property tests: Random Script_Output content, SHA-256 digest round-trip verification, base64 encoding validation
 
 **Execution Testing**
 - Unit tests: Specific scripts with known output, timeout scenarios
