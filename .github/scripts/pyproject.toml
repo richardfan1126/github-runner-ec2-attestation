@@ -1,0 +1,16 @@
+[project]
+name = "gha-remote-executor-caller"
+version = "0.1.0"
+description = "GitHub Actions Remote Executor Caller - client-side caller for the Remote Executor system"
+requires-python = ">= 3.11"
+
+dependencies = [
+    "requests>=2.31.0",
+    "cbor2>=5.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "hypothesis>=6.0.0",
+    "pytest>=7.0.0",
+]

@@ -6,14 +6,14 @@ Implement the client-side caller for the Remote Executor system: a Python script
 
 ## Tasks
 
-- [ ] 1. Set up project structure and dependencies
-  - [ ] 1.1 Create `.github/scripts/pyproject.toml` with `requests` and `cbor2` dependencies
+- [x] 1. Set up project structure and dependencies
+  - [x] 1.1 Create `.github/scripts/pyproject.toml` with `requests` and `cbor2` dependencies
     - Define project metadata and `requires-python >= 3.11`
     - Add `requests>=2.31.0` and `cbor2>=5.6.0` to dependencies
     - Add `hypothesis>=6.0.0` and `pytest>=7.0.0` to optional dev dependencies
     - _Requirements: 3.1, 4.2, 6.2_
 
-  - [ ] 1.2 Create `.github/scripts/call_remote_executor.py` with `CallerError` exception and `RemoteExecutorCaller` class skeleton
+  - [x] 1.2 Create `.github/scripts/call_remote_executor.py` with `CallerError` exception and `RemoteExecutorCaller` class skeleton
     - Define `CallerError(Exception)` with `message`, `phase`, and `details` attributes
     - Define `RemoteExecutorCaller.__init__` accepting `server_url`, `timeout`, `poll_interval`, `max_poll_duration`, `max_retries` with defaults from the design
     - Add imports for `requests`, `cbor2`, `base64`, `hashlib`, `json`, `logging`, `time`, `sys`, `argparse`
