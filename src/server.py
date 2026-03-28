@@ -1,5 +1,6 @@
 """HTTP server for GitHub Actions Remote Executor"""
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -585,6 +586,7 @@ def add_routes(app: FastAPI) -> None:
 
             # Check disk space
             config = request.app.state.config
+            os.makedirs(config.temp_storage_path, exist_ok=True)
             disk_usage = shutil.disk_usage(config.temp_storage_path)
             disk_space_mb = disk_usage.free // (1024 * 1024)
 
