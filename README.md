@@ -1,15 +1,15 @@
 # GitHub Actions Remote Executor
 
-HTTP server for executing GitHub Actions scripts with AWS Nitro attestation.
+HTTP server for executing GitHub Actions scripts with NitroTPM attestation.
 
 ## Overview
 
-The GitHub Actions Remote Executor runs on AWS Nitro-based EC2 instances, providing a secure and attestable environment for executing scripts from GitHub repositories. The system generates cryptographic attestation documents proving the execution environment and executes scripts asynchronously while allowing clients to poll for output and status.
+The GitHub Actions Remote Executor runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system generates cryptographic attestation documents proving the execution environment and executes scripts asynchronously while allowing clients to poll for output and status.
 
 ## Requirements
 
 - Python 3.11+
-- AWS Nitro-based EC2 instance (for attestation capabilities)
+- Attestable EC2 instance with NitroTPM
 - GitHub personal access token
 
 ## Installation
@@ -44,7 +44,7 @@ All configuration is done through environment variables. See `.env.example` for 
 - `RATE_LIMIT_WINDOW_SECONDS`: Rate limit window (default: 60)
 - `TEMP_STORAGE_PATH`: Temporary file storage location (default: /tmp/gha-executor)
 - `OUTPUT_RETENTION_HOURS`: Output retention period (default: 24)
-- `NSM_DEVICE_PATH`: AWS Nitro Security Module device path (default: /dev/nsm)
+- `TPM_DEVICE_PATH`: NitroTPM device path (default: /dev/nsm)
 
 ## Usage
 
@@ -116,13 +116,13 @@ Run with hot reload:
 uv run uvicorn src.main:app --reload --port 8080
 ```
 
-## AWS Nitro EC2 Deployment
+## Attestable EC2 Deployment
 
-This application requires an AWS Nitro-based EC2 instance for attestation capabilities. Supported instance types include:
+This application requires an Attestable EC2 instance with NitroTPM for attestation capabilities. Supported instance types include:
 - C5, C5a, C5n, C6i, C6a, C7g
 - M5, M5a, M5n, M6i, M6a, M7g
 - R5, R5a, R5n, R6i, R6a, R7g
-- And other Nitro-based instances
+- And other NitroTPM-compatible instances
 
 ## Building the AMI
 

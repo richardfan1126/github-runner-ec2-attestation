@@ -1126,8 +1126,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change `nsm_device_path=` to `tpm_device_path=` in all ServerConfig constructor calls
     - _Requirements: 7.1_
 
-- [ ] 51. Update README and documentation
-  - [ ] 51.1 Update README.md
+- [x] 51. Update README and documentation
+  - [x] 51.1 Update README.md
     - Change "AWS Nitro-based EC2 instances" to "Attestable EC2 instance with NitroTPM" in overview
     - Change "AWS Nitro-based EC2 instance (for attestation capabilities)" to "Attestable EC2 instance with NitroTPM" in requirements
     - Change `NSM_DEVICE_PATH` to `TPM_DEVICE_PATH` in configuration section
