@@ -15,7 +15,7 @@ from src.models import AttestationDocument
 @pytest.fixture
 def generator():
     """Create an attestation generator with mocked NitroTPM device path"""
-    return AttestationGenerator(tpm_device_path="/usr/bin/nitro-tpm-attest")
+    return AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
 
 
 @pytest.fixture
@@ -36,12 +36,12 @@ class TestTPMAvailability:
         mock_device.write_text("#!/bin/bash\necho 'test'")
         mock_device.chmod(0o755)
         
-        generator = AttestationGenerator(tpm_device_path=str(mock_device))
+        generator = AttestationGenerator(tpm_attest_path=str(mock_device))
         assert generator.verify_tpm_available() is True
     
     def test_tpm_unavailable_when_not_exists(self):
         """Test NitroTPM is unavailable when device does not exist"""
-        generator = AttestationGenerator(tpm_device_path="/nonexistent/path")
+        generator = AttestationGenerator(tpm_attest_path="/nonexistent/path")
         assert generator.verify_tpm_available() is False
     
     def test_tpm_unavailable_when_not_executable(self, tmp_path):
@@ -50,7 +50,7 @@ class TestTPMAvailability:
         mock_device.write_text("#!/bin/bash\necho 'test'")
         mock_device.chmod(0o644)  # Not executable
         
-        generator = AttestationGenerator(tpm_device_path=str(mock_device))
+        generator = AttestationGenerator(tpm_attest_path=str(mock_device))
         assert generator.verify_tpm_available() is False
 
 

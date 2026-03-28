@@ -1181,38 +1181,38 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change "NitroTPM device path (default: /dev/nsm)" to "NitroTPM attestation tool path (default: /usr/bin/nitro-tpm-attest)"
     - _Requirements: 9.1_
 
-- [ ] 54. Update tests for TPM config variable rename
-  - [ ] 54.1 Update tests/test_attestation.py
+- [x] 54. Update tests for TPM config variable rename
+  - [x] 54.1 Update tests/test_attestation.py
     - Change `tpm_device_path=` to `tpm_attest_path=` in all AttestationGenerator constructor calls
     - _Requirements: 4.1, 4.6_
 
-  - [ ] 54.2 Update tests/test_config_properties.py
+  - [x] 54.2 Update tests/test_config_properties.py
     - Change `TPM_DEVICE_PATH` to `TPM_ATTEST_PATH` in all environment variable references
     - Change `tpm_device_path` to `tpm_attest_path` in all ServerConfig field assertions
     - Update default value assertions from `/dev/nsm` to `/usr/bin/nitro-tpm-attest` if present
     - _Requirements: 9.1_
 
-  - [ ] 54.3 Update tests/test_health_metrics_unit.py
+  - [x] 54.3 Update tests/test_health_metrics_unit.py
     - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
     - _Requirements: 10.3_
 
-  - [ ] 54.4 Update tests/test_health_metrics_properties.py
+  - [x] 54.4 Update tests/test_health_metrics_properties.py
     - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
     - _Requirements: 10.3_
 
-  - [ ] 54.5 Update tests/test_server_unit.py
+  - [x] 54.5 Update tests/test_server_unit.py
     - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
     - _Requirements: 4.10, 10.3_
 
-  - [ ] 54.6 Update tests/test_integration.py
+  - [x] 54.6 Update tests/test_integration.py
     - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
     - _Requirements: 4.1_
 
-  - [ ] 54.7 Update tests/test_logging_error_handling_properties.py
+  - [x] 54.7 Update tests/test_logging_error_handling_properties.py
     - Change `tpm_device_path=` to `tpm_attest_path=` in all ServerConfig constructor calls
     - _Requirements: 7.1_
 
-- [ ] 55. Final checkpoint - Ensure all tests pass after TPM config fix
+- [x] 55. Final checkpoint - Ensure all tests pass after TPM config fix
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

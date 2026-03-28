@@ -14,7 +14,7 @@ def test_config_from_env_success(monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_WINDOW_SECONDS", "60")
     monkeypatch.setenv("TEMP_STORAGE_PATH", "/tmp/gha-executor")
     monkeypatch.setenv("OUTPUT_RETENTION_HOURS", "24")
-    monkeypatch.setenv("TPM_DEVICE_PATH", "/dev/nsm")
+    monkeypatch.setenv("TPM_ATTEST_PATH", "/dev/nsm")
     
     config = ServerConfig.from_env()
     
@@ -26,7 +26,7 @@ def test_config_from_env_success(monkeypatch):
     assert config.rate_limit_window_seconds == 60
     assert config.temp_storage_path == "/tmp/gha-executor"
     assert config.output_retention_hours == 24
-    assert config.tpm_device_path == "/dev/nsm"
+    assert config.tpm_attest_path == "/dev/nsm"
 
 
 def test_config_missing_required_vars(monkeypatch):
@@ -41,7 +41,7 @@ def test_config_missing_required_vars(monkeypatch):
         "RATE_LIMIT_WINDOW_SECONDS",
         "TEMP_STORAGE_PATH",
         "OUTPUT_RETENTION_HOURS",
-        "TPM_DEVICE_PATH",
+        "TPM_ATTEST_PATH",
     ]:
         monkeypatch.delenv(var, raising=False)
     
@@ -62,7 +62,7 @@ def test_config_validation_invalid_port():
         rate_limit_window_seconds=60,
         temp_storage_path="/tmp/gha-executor",
         output_retention_hours=24,
-        tpm_device_path="/dev/nsm",
+        tpm_attest_path="/dev/nsm",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -82,7 +82,7 @@ def test_config_validation_success():
         rate_limit_window_seconds=60,
         temp_storage_path="/tmp/gha-executor",
         output_retention_hours=24,
-        tpm_device_path="/dev/nsm",
+        tpm_attest_path="/dev/nsm",
     )
     
     # Should not raise

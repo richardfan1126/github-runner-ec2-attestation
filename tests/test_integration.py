@@ -35,7 +35,7 @@ def test_config(temp_dir):
         rate_limit_window_seconds=60,
         temp_storage_path=temp_dir,
         output_retention_hours=1,
-        tpm_device_path="/usr/bin/nitro-tpm-attest"
+        tpm_attest_path="/usr/bin/nitro-tpm-attest"
     )
 
 

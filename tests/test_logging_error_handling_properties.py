@@ -33,7 +33,7 @@ def create_test_config() -> ServerConfig:
         rate_limit_window_seconds=60,
         temp_storage_path="/tmp/test_executor",
         output_retention_hours=24,
-        tpm_device_path="/usr/bin/nitro-tpm-attest"
+        tpm_attest_path="/usr/bin/nitro-tpm-attest"
     )
 
 
