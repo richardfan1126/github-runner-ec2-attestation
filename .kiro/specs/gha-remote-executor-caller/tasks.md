@@ -1,0 +1,179 @@
+# Implementation Plan: GitHub Actions Remote Executor Caller
+
+## Overview
+
+Implement the client-side caller for the Remote Executor system: a Python script (`RemoteExecutorCaller` class), a GitHub Actions workflow, and a sample build script. The implementation follows the sequence: project setup → core class with error handling → attestation validation → HTTP methods (health check, execute, polling) → output attestation → orchestration and reporting → workflow YAML → sample script → tests.
+
+## Tasks
+
+- [ ] 1. Set up project structure and dependencies
+  - [ ] 1.1 Create `.github/scripts/pyproject.toml` with `requests` and `cbor2` dependencies
+    - Define project metadata and `requires-python >= 3.11`
+    - Add `requests>=2.31.0` and `cbor2>=5.6.0` to dependencies
+    - Add `hypothesis>=6.0.0` and `pytest>=7.0.0` to optional dev dependencies
+    - _Requirements: 3.1, 4.2, 6.2_
+
+  - [ ] 1.2 Create `.github/scripts/call_remote_executor.py` with `CallerError` exception and `RemoteExecutorCaller` class skeleton
+    - Define `CallerError(Exception)` with `message`, `phase`, and `details` attributes
+    - Define `RemoteExecutorCaller.__init__` accepting `server_url`, `timeout`, `poll_interval`, `max_poll_duration`, `max_retries` with defaults from the design
+    - Add imports for `requests`, `cbor2`, `base64`, `hashlib`, `json`, `logging`, `time`, `sys`, `argparse`
+    - Define `EXPECTED_ATTESTATION_FIELDS` constant list
+    - _Requirements: 3.7, 5.2, 5.5, 5.7, 8.5_
+
+- [ ] 2. Implement attestation validation methods
+  - [ ] 2.1 Implement `validate_attestation` method
+    - Base64-decode the attestation string to binary
+    - CBOR-decode the binary to a Python dict using `cbor2`
+    - Verify all `EXPECTED_ATTESTATION_FIELDS` are present as keys
+    - Log attestation document fields for audit
+    - Raise `CallerError(phase="attestation")` on base64 decode failure, CBOR parse failure, or missing fields
+    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
+
+  - [ ] 2.2 Write property test for attestation decode round-trip
+    - **Property 1: Attestation decode round-trip**
+    - **Validates: Requirements 4.1, 4.2, 6.1, 6.2**
+
+  - [ ] 2.3 Write property test for attestation structural field validation
+    - **Property 2: Attestation structural field validation**
+    - **Validates: Requirements 4.6**
+
+  - [ ] 2.4 Write unit tests for attestation validation edge cases
+    - Test invalid base64 raises `CallerError` with phase "attestation" (Req 4.3)
+    - Test invalid CBOR raises `CallerError` with phase "attestation" (Req 4.4)
+    - _Requirements: 4.3, 4.4_
+
+- [ ] 3. Implement health check and execute methods
+  - [ ] 3.1 Implement `health_check` method
+    - Send HTTP GET to `{server_url}/health` with configurable timeout
+    - On HTTP 200 with `status == "healthy"`, return parsed JSON
+    - On non-200 or `status != "healthy"`, raise `CallerError(phase="health_check")`
+    - On connection error, raise `CallerError(phase="health_check")` with connection error message
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
+
+  - [ ] 3.2 Implement `execute` method
+    - Send HTTP POST to `{server_url}/execute` with JSON body containing `repository_url`, `commit_hash`, `script_path`, `github_token`
+    - On HTTP 200, extract and return `execution_id` and `attestation_document` from response
+    - On HTTP error status, raise `CallerError(phase="execute")` with status code and error details
+    - On connection error, raise `CallerError(phase="execute")` with connection error message
+    - Use configurable timeout for the request
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+  - [ ] 3.3 Write property test for health check acceptance
+    - **Property 4: Health check acceptance**
+    - **Validates: Requirements 8.2, 8.3**
+
+  - [ ] 3.4 Write property test for execute HTTP error propagation
+    - **Property 5: Execute HTTP error propagation**
+    - **Validates: Requirements 3.5**
+
+  - [ ] 3.5 Write unit tests for health check and execute edge cases
+    - Test connection refused raises `CallerError` with phase "health_check" (Req 8.4)
+    - Test connection refused raises `CallerError` with phase "execute" (Req 3.6)
+    - _Requirements: 8.4, 3.6_
+
+- [ ] 4. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 5. Implement polling and output attestation
+  - [ ] 5.1 Implement `poll_output` method
+    - Send HTTP GET to `{server_url}/execution/{execution_id}/output` in a loop
+    - While `complete` is false, sleep for `poll_interval` seconds and retry
+    - When `complete` is true, extract and return `stdout`, `stderr`, `exit_code`, `output_attestation_document`
+    - Enforce `max_poll_duration` timeout, raise `CallerError(phase="polling")` if exceeded
+    - On HTTP error, retry up to `max_retries` consecutive times before raising `CallerError(phase="polling")`
+    - Log incremental output during polling for real-time feedback
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8_
+
+  - [ ] 5.2 Implement `validate_output_attestation` method
+    - Base64-decode the output attestation string to binary
+    - CBOR-decode the binary to a Python dict using `cbor2`
+    - Extract the `user_data` field (SHA-256 hex digest)
+    - Reconstruct canonical output: `stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`
+    - Compute SHA-256 hex digest of canonical output
+    - Compare computed digest against `user_data` digest
+    - Return True if match, raise `CallerError(phase="output_attestation")` if mismatch
+    - Raise `CallerError(phase="output_attestation")` on base64/CBOR decode failures
+    - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.9_
+
+  - [ ] 5.3 Write property test for output integrity verification
+    - **Property 3: Output integrity verification**
+    - **Validates: Requirements 6.3, 6.4, 6.5, 6.7**
+
+  - [ ] 5.4 Write property test for polling termination on completion
+    - **Property 6: Polling termination on completion**
+    - **Validates: Requirements 5.3, 5.4**
+
+  - [ ] 5.5 Write property test for polling retry on transient errors
+    - **Property 7: Polling retry on transient errors**
+    - **Validates: Requirements 5.7**
+
+  - [ ] 5.6 Write unit tests for polling and output attestation edge cases
+    - Test null `output_attestation_document` logs warning and continues (Req 6.8)
+    - Test poll timeout raises `CallerError` after configured duration (Req 5.5, 5.6)
+    - Test default poll interval is 5 seconds (Req 5.2)
+    - Test default max poll duration is 600 seconds (Req 5.5)
+    - _Requirements: 6.8, 5.2, 5.5, 5.6_
+
+- [ ] 6. Implement orchestration, reporting, and CLI entry point
+  - [ ] 6.1 Implement `run` method and summary generation
+    - Orchestrate full flow: `health_check` → `execute` → `validate_attestation` → `poll_output` → `validate_output_attestation` → report results
+    - Handle `CallerError` exceptions: print formatted error with phase and details, exit with code 1
+    - Handle null/missing `output_attestation_document`: log warning, set verification status to "skipped"
+    - Log stdout, stderr, exit code, attestation validation result, and output integrity result
+    - Generate GitHub Actions job summary string containing all execution results and verification status
+    - Return remote script exit code
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7_
+
+  - [ ] 6.2 Implement `__main__` CLI entry point with `argparse`
+    - Parse `--server-url` (required), `--script-path`, `--commit-hash`, `--github-token` arguments
+    - Support environment variable overrides for timeout configuration (`CALLER_HTTP_TIMEOUT`, `CALLER_POLL_INTERVAL`, `CALLER_MAX_POLL_DURATION`, `CALLER_MAX_RETRIES`)
+    - Write job summary to `$GITHUB_STEP_SUMMARY` file if the environment variable is set
+    - Call `sys.exit()` with the return value of `run()`
+    - _Requirements: 1.5, 3.1, 3.2, 3.3, 7.7_
+
+  - [ ] 6.3 Write property test for exit code propagation
+    - **Property 8: Exit code propagation**
+    - **Validates: Requirements 7.6**
+
+  - [ ] 6.4 Write property test for summary contains execution results
+    - **Property 9: Summary contains execution results**
+    - **Validates: Requirements 7.7**
+
+- [ ] 7. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 8. Create GitHub Actions workflow and sample build script
+  - [ ] 8.1 Create `.github/workflows/call-remote-executor.yml`
+    - Define `workflow_dispatch` trigger with inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`)
+    - Validate `server_url` is not empty, fail with clear error if it is
+    - Check out the repository
+    - Set up Python and install dependencies from `.github/scripts/pyproject.toml`
+    - Invoke `call_remote_executor.py` with `--server-url`, `--script-path`, `--commit-hash`, and `--github-token` from `${{ secrets.GITHUB_TOKEN }}`
+    - Write `$GITHUB_STEP_SUMMARY` from the caller script output
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 7.7_
+
+  - [ ] 8.2 Create `.github/scripts/sample-build.sh`
+    - Create shell script with `#!/usr/bin/env bash` and `set -euo pipefail`
+    - Output hostname, date, kernel version, user, and working directory
+    - Exit with code 0
+    - Ensure the file is executable
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+
+  - [ ] 8.3 Write unit tests for workflow and sample script
+    - Test sample build script file exists and is executable (Req 2.1)
+    - Test sample build script contains system info commands (Req 2.4)
+    - Test empty `server_url` raises error (Req 1.5)
+    - _Requirements: 1.5, 2.1, 2.4_
+
+- [ ] 9. Final checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties from the design document
+- Unit tests validate specific examples and edge cases
+- All test files go in `tests/test_caller_properties.py` and `tests/test_caller_unit.py`
+- The caller's `pyproject.toml` at `.github/scripts/pyproject.toml` is separate from the existing `scripts/pyproject.toml`
