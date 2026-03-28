@@ -1215,15 +1215,15 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 55. Final checkpoint - Ensure all tests pass after TPM config fix
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 56. Implement Output_Attestation_Document generation
-  - [ ] 56.1 Add output attestation helper to AttestationGenerator
+- [x] 56. Implement Output_Attestation_Document generation
+  - [x] 56.1 Add output attestation helper to AttestationGenerator
     - Create a `generate_output_attestation` method on `AttestationGenerator` that accepts the full Script_Output (stdout + stderr + exit code) as a string
     - Compute the SHA-256 digest of the Script_Output
     - Pass the hex-encoded digest as `user_data` to the existing `generate_attestation` flow (invoke `nitro-tpm-attest --user-data`)
     - Return the attestation document bytes on success, or `None` plus an error message on failure
     - _Requirements: 6.7, 6.9_
 
-  - [ ] 56.2 Update GET /execution/{id}/output endpoint to include Output_Attestation_Document
+  - [x] 56.2 Update GET /execution/{id}/output endpoint to include Output_Attestation_Document
     - In `get_execution_output` in `src/server.py`, when `output_data.complete` is `True`:
       1. Concatenate stdout, stderr, and exit_code into a canonical Script_Output string
       2. Call `attestation_generator.generate_output_attestation(script_output)`
@@ -1232,29 +1232,29 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - When execution is not complete, omit `output_attestation_document` from the response
     - _Requirements: 6.7, 6.8, 6.9, 6.11_
 
-  - [ ] 56.3 Write property test for Output Attestation Digest Integrity
+  - [x] 56.3 Write property test for Output Attestation Digest Integrity
     - **Property 44: Output Attestation Digest Integrity**
     - Verify that for any Script_Output, the user_data passed to nitro-tpm-attest matches the SHA-256 hex digest of that Script_Output
     - **Validates: Requirements 6.7, 6.9**
 
-  - [ ] 56.4 Write property test for Output Attestation Base64 Encoding
+  - [x] 56.4 Write property test for Output Attestation Base64 Encoding
     - **Property 45: Output Attestation Base64 Encoding**
     - Verify that when output attestation generation succeeds, the `output_attestation_document` field is a valid base64-encoded string
     - **Validates: Requirements 6.8**
 
-  - [ ] 56.5 Write property test for Output Attestation Failure Graceful Degradation
+  - [x] 56.5 Write property test for Output Attestation Failure Graceful Degradation
     - **Property 46: Output Attestation Failure Graceful Degradation**
     - Verify that when output attestation generation fails, the response still includes Script_Output and Attestation_Document, with `output_attestation_document` set to `null` and `attestation_error` present
     - **Validates: Requirements 6.11**
 
-  - [ ] 56.6 Write unit tests for output attestation
+  - [x] 56.6 Write unit tests for output attestation
     - Test `generate_output_attestation` with mocked nitro-tpm-attest (success and failure paths)
     - Test GET /output endpoint returns `output_attestation_document` when execution is complete
     - Test GET /output endpoint returns `attestation_error` when output attestation fails
     - Test GET /output endpoint omits `output_attestation_document` when execution is still running
     - _Requirements: 6.7, 6.8, 6.9, 6.11_
 
-- [ ] 57. Checkpoint - Ensure all output attestation tests pass
+- [x] 57. Checkpoint - Ensure all output attestation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

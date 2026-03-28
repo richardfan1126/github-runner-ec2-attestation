@@ -1,4 +1,5 @@
 """NitroTPM attestation document generation"""
+import hashlib
 import json
 import os
 import subprocess
@@ -204,5 +205,82 @@ class AttestationGenerator:
             if nonce_path is not None:
                 try:
                     os.unlink(nonce_path)
+                except OSError:
+                    pass
+
+    def generate_output_attestation(
+        self,
+        script_output: str,
+    ) -> tuple[Optional[bytes], Optional[str]]:
+        """
+        Generate an output attestation document for a completed script execution.
+
+        Computes the SHA-256 digest of the Script_Output and passes the hex-encoded
+        digest as user_data to nitro-tpm-attest.
+
+        Args:
+            script_output: The canonical Script_Output string (stdout + stderr + exit_code)
+
+        Returns:
+            Tuple of (attestation_bytes, None) on success or (None, error_message) on failure
+        """
+        user_data_fd = None
+        user_data_path = None
+
+        try:
+            # Compute SHA-256 hex digest of the script output
+            digest = hashlib.sha256(script_output.encode("utf-8")).hexdigest()
+
+            logger.info(f"Generating output attestation document (digest={digest[:16]}...)")
+
+            # Write hex digest as user_data to temporary file
+            user_data_fd, user_data_path = tempfile.mkstemp(
+                prefix="output_attestation_user_data_", suffix=".txt"
+            )
+            os.write(user_data_fd, digest.encode("utf-8"))
+            os.close(user_data_fd)
+            user_data_fd = None  # Mark as closed
+
+            # Build command
+            cmd = [self.tpm_attest_path, "--user-data", user_data_path]
+
+            # Invoke nitro-tpm-attest with timeout
+            try:
+                logger.debug(f"Invoking nitro-tpm-attest for output attestation: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                logger.error("Output attestation generation timed out after 30 seconds")
+                return None, "Output attestation generation timed out after 30 seconds"
+            except OSError as e:
+                logger.error(f"OS error during output attestation generation: {e}")
+                return None, f"OS error during output attestation generation: {e}"
+
+            if result.returncode != 0:
+                stderr_text = result.stderr.decode("utf-8", errors="replace")
+                logger.error(f"Output attestation failed with exit code {result.returncode}: {stderr_text}")
+                return None, f"Output attestation failed with exit code {result.returncode}: {stderr_text}"
+
+            attestation_bytes = result.stdout
+            logger.info(f"Output attestation document generated successfully ({len(attestation_bytes)} bytes)")
+            return attestation_bytes, None
+
+        except Exception as e:
+            logger.error(f"Unexpected error during output attestation generation: {e}", exc_info=True)
+            return None, f"Unexpected error during output attestation generation: {e}"
+
+        finally:
+            if user_data_fd is not None:
+                try:
+                    os.close(user_data_fd)
+                except OSError:
+                    pass
+            if user_data_path is not None:
+                try:
+                    os.unlink(user_data_path)
                 except OSError:
                     pass
