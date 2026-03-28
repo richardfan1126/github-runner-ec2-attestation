@@ -27,14 +27,14 @@ class AttestationError:
 class AttestationGenerator:
     """Generates attestation documents using NitroTPM on the Attestable EC2 instance"""
     
-    def __init__(self, tpm_device_path: str = "/usr/bin/nitro-tpm-attest"):
+    def __init__(self, tpm_attest_path: str = "/usr/bin/nitro-tpm-attest"):
         """
         Initialize the attestation generator.
         
         Args:
-            tpm_device_path: Path to the nitro-tpm-attest command-line tool
+            tpm_attest_path: Path to the nitro-tpm-attest command-line tool
         """
-        self.tpm_device_path = tpm_device_path
+        self.tpm_attest_path = tpm_attest_path
     
     def verify_tpm_available(self) -> bool:
         """
@@ -43,8 +43,8 @@ class AttestationGenerator:
         Returns:
             True if NitroTPM device is available, False otherwise
         """
-        return os.path.exists(self.tpm_device_path) and os.access(
-            self.tpm_device_path, os.X_OK
+        return os.path.exists(self.tpm_attest_path) and os.access(
+            self.tpm_attest_path, os.X_OK
         )
     
     def generate_attestation(
@@ -103,7 +103,7 @@ class AttestationGenerator:
             user_data_fd = None  # Mark as closed
             
             # Build command
-            cmd = [self.tpm_device_path, "--user-data", user_data_path]
+            cmd = [self.tpm_attest_path, "--user-data", user_data_path]
             
             # Write nonce to temporary file if provided
             if nonce is not None:
@@ -174,7 +174,7 @@ class AttestationGenerator:
             # Handle unexpected errors
             logger.error(f"Unexpected error during attestation generation: {type(e).__name__}: {e}", exc_info=True)
             return None, AttestationError(
-                command=self.tpm_device_path,
+                command=self.tpm_attest_path,
                 exit_code=-1,
                 stdout="",
                 stderr=str(e),

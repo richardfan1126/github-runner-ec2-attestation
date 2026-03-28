@@ -1145,38 +1145,38 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Update Notes section: "AWS Nitro attestation requires running on a Nitro-based EC2 instance" → "NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM"
     - _Requirements: 4.1, 4.6_
 
-- [ ] 53. Fix TPM config variable name and default value
-  - [ ] 53.1 Update src/config.py
+- [x] 53. Fix TPM config variable name and default value
+  - [x] 53.1 Update src/config.py
     - Rename field `tpm_device_path` to `tpm_attest_path` in ServerConfig dataclass
     - Change environment variable lookup from `TPM_DEVICE_PATH` to `TPM_ATTEST_PATH`
     - Update validation message from "tpm_device_path cannot be empty" to "tpm_attest_path cannot be empty"
     - Update `from_env()` local variable and return field accordingly
     - _Requirements: 9.1, 9.7_
 
-  - [ ] 53.2 Update src/attestation.py
+  - [x] 53.2 Update src/attestation.py
     - Rename `__init__` parameter `tpm_device_path` to `tpm_attest_path`
     - Rename `self.tpm_device_path` to `self.tpm_attest_path`
     - Update docstring from "Path to the nitro-tpm-attest command-line tool" to match new parameter name
     - Default value remains `/usr/bin/nitro-tpm-attest` (already correct)
     - _Requirements: 4.1, 4.6_
 
-  - [ ] 53.3 Update src/main.py
+  - [x] 53.3 Update src/main.py
     - Change `config.tpm_device_path` to `config.tpm_attest_path` in AttestationGenerator constructor call
     - _Requirements: 9.1_
 
-  - [ ] 53.4 Update src/server.py
+  - [x] 53.4 Update src/server.py
     - Change `config.tpm_device_path` to `config.tpm_attest_path` in AttestationGenerator constructor call
     - _Requirements: 10.3_
 
-  - [ ] 53.5 Update .env.example
+  - [x] 53.5 Update .env.example
     - Change `TPM_DEVICE_PATH=/dev/nsm` to `TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest`
     - _Requirements: 9.1_
 
-  - [ ] 53.6 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
+  - [x] 53.6 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
     - Change `TPM_DEVICE_PATH=/dev/nsm` to `TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest`
     - _Requirements: 9.1_
 
-  - [ ] 53.7 Update README.md
+  - [x] 53.7 Update README.md
     - Change `TPM_DEVICE_PATH` to `TPM_ATTEST_PATH` in configuration section
     - Change "NitroTPM device path (default: /dev/nsm)" to "NitroTPM attestation tool path (default: /usr/bin/nitro-tpm-attest)"
     - _Requirements: 9.1_

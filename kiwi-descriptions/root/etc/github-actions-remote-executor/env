@@ -18,4 +18,4 @@ TEMP_STORAGE_PATH=/tmp/gha-executor
 OUTPUT_RETENTION_HOURS=24
 
 # NitroTPM Configuration
-TPM_DEVICE_PATH=/dev/nsm
+TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest

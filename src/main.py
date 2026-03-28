@@ -52,14 +52,14 @@ def main() -> int:
         logger.info(f"Rate limit: {config.rate_limit_per_ip} requests per {config.rate_limit_window_seconds}s")
         logger.info(f"Temp storage path: {config.temp_storage_path}")
         logger.info(f"Output retention: {config.output_retention_hours} hours")
-        logger.info(f"NitroTPM device path: {config.tpm_device_path}")
+        logger.info(f"NitroTPM device path: {config.tpm_attest_path}")
         
         # Verify NitroTPM device availability
         logger.info("Verifying NitroTPM device availability...")
-        attestation_generator = AttestationGenerator(config.tpm_device_path)
+        attestation_generator = AttestationGenerator(config.tpm_attest_path)
         if not attestation_generator.verify_tpm_available():
             logger.error(
-                f"NitroTPM device not available at {config.tpm_device_path}. "
+                f"NitroTPM device not available at {config.tpm_attest_path}. "
                 "Attestation functionality will not work."
             )
             logger.warning("Continuing startup, but attestation will fail at runtime.")

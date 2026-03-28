@@ -44,7 +44,7 @@ All configuration is done through environment variables. See `.env.example` for 
 - `RATE_LIMIT_WINDOW_SECONDS`: Rate limit window (default: 60)
 - `TEMP_STORAGE_PATH`: Temporary file storage location (default: /tmp/gha-executor)
 - `OUTPUT_RETENTION_HOURS`: Output retention period (default: 24)
-- `TPM_DEVICE_PATH`: NitroTPM device path (default: /dev/nsm)
+- `TPM_ATTEST_PATH`: NitroTPM attestation tool path (default: /usr/bin/nitro-tpm-attest)
 
 ## Usage
 
