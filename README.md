@@ -55,54 +55,193 @@ uv run python -m src.main
 
 ## API Endpoints
 
-### POST /execute
+All endpoints are rate-limited per source IP (configurable via `RATE_LIMIT_PER_IP` and `RATE_LIMIT_WINDOW_SECONDS`). Rate limit headers are included on every response:
 
-Initiates script execution and returns attestation document.
+| Header | Description |
+|---|---|
+| `X-RateLimit-Limit` | Maximum requests allowed in the window |
+| `X-RateLimit-Remaining` | Requests remaining in the current window |
+| `X-RateLimit-Window` | Window duration in seconds |
 
-**Request:**
+When the limit is exceeded the server returns `429 Too Many Requests` with a `retry_after_seconds` hint.
+
+All error responses share a consistent structure:
+
 ```json
 {
-  "repository_url": "https://github.com/owner/repo",
-  "commit_hash": "abc123def456...",
-  "script_path": "scripts/build.sh",
-  "github_token": "ghp_..."
+  "error": "error_code",
+  "message": "Human-readable description",
+  "details": {}
 }
 ```
 
-**Response:**
+---
+
+### POST /execute
+
+Fetches a script from a GitHub repository at a specific commit, generates a NitroTPM attestation document binding the request parameters to the execution environment, and starts asynchronous execution. The response is returned immediately without waiting for the script to finish.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `repository_url` | string | Yes | GitHub repository URL (e.g. `https://github.com/owner/repo`) |
+| `commit_hash` | string | Yes | Full 40-character hex SHA of the commit |
+| `script_path` | string | Yes | Path to the script inside the repository (no path traversal) |
+| `github_token` | string | Yes | GitHub personal access token for repository access |
+
+**Success response (200):**
+
 ```json
 {
-  "execution_id": "uuid-v4",
+  "execution_id": "550e8400-e29b-41d4-a716-446655440000",
   "attestation_document": "base64-encoded-cbor",
   "status": "queued"
 }
 ```
 
+The `attestation_document` is a base64-encoded CBOR document produced by NitroTPM. Its `user_data` contains the repository URL, commit hash, script path, and a timestamp.
+
+**Error responses:**
+
+| Status | Error code | Cause |
+|---|---|---|
+| 400 | `malformed_request` | Request body is not valid JSON |
+| 400 | `validation_failed` | Missing or invalid fields (details include per-field errors) |
+| 401 | `authentication_failed` | GitHub token is invalid or lacks access |
+| 404 | `github_api_error` | Repository, commit, or file not found |
+| 413 | `file_too_large` | Script exceeds `MAX_SCRIPT_SIZE_BYTES` |
+| 429 | `rate_limit_exceeded` | Too many requests from this IP |
+| 500 | `attestation_failed` | NitroTPM attestation generation failed |
+| 500 | `internal_server_error` | Unexpected server error |
+
+---
+
 ### GET /execution/{execution_id}/output
 
-Retrieves execution status and output.
+Retrieves execution status and output. Supports incremental polling via the `offset` query parameter — pass the `stdout_offset` / `stderr_offset` from the previous response to receive only new output.
 
-**Response:**
+When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `offset` | int | 0 | Byte offset to start retrieving output from |
+
+**Response fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `execution_id` | string | UUID of the execution |
+| `status` | string | One of: `queued`, `running`, `completed`, `failed`, `timed_out` |
+| `stdout` | string | Standard output (from offset) |
+| `stderr` | string | Standard error (from offset) |
+| `stdout_offset` | int | Next byte offset for stdout (use in subsequent polls) |
+| `stderr_offset` | int | Next byte offset for stderr (use in subsequent polls) |
+| `complete` | bool | `true` when execution has finished |
+| `exit_code` | int \| null | Process exit code (present only when complete) |
+| `output_attestation_document` | string \| null | Base64-encoded CBOR attestation of the output (present only when complete) |
+| `attestation_error` | string | Error message if output attestation failed (present only on failure) |
+
+**Response (in-progress):**
 ```json
 {
-  "execution_id": "uuid-v4",
-  "status": "running|completed|failed|timed_out",
+  "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "running",
   "stdout": "output text...",
-  "stderr": "error text...",
+  "stderr": "",
   "stdout_offset": 1024,
-  "stderr_offset": 256,
+  "stderr_offset": 0,
   "complete": false,
   "exit_code": null
 }
 ```
 
+**Response (complete):**
+```json
+{
+  "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "stdout": "final output...",
+  "stderr": "",
+  "stdout_offset": 2048,
+  "stderr_offset": 0,
+  "complete": true,
+  "exit_code": 0,
+  "output_attestation_document": "base64-encoded-cbor"
+}
+```
+
+**Error responses:**
+
+| Status | Error code | Cause |
+|---|---|---|
+| 400 | `invalid_offset` | Negative offset value |
+| 404 | `execution_not_found` | No execution with this ID exists |
+| 429 | `rate_limit_exceeded` | Too many requests from this IP |
+| 500 | `internal_server_error` | Unexpected server error |
+
+---
+
 ### GET /health
 
-Health check endpoint.
+Returns operational status of the server. This endpoint is exempt from rate limiting.
+
+**Response (healthy):**
+```json
+{
+  "status": "healthy",
+  "attestation_available": true,
+  "disk_space_mb": 10240,
+  "active_executions": 3
+}
+```
+
+**Response (degraded):**
+
+If the health check itself encounters an error, the server still returns 200 with a degraded status:
+
+```json
+{
+  "status": "degraded",
+  "attestation_available": false,
+  "disk_space_mb": 0,
+  "active_executions": 0
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | string | `healthy` or `degraded` |
+| `attestation_available` | bool | Whether the NitroTPM device is accessible |
+| `disk_space_mb` | int | Free disk space in MB at the temp storage path |
+| `active_executions` | int | Number of currently running executions |
+
+---
 
 ### GET /metrics
 
-Metrics endpoint for monitoring.
+Returns aggregate execution metrics for monitoring.
+
+**Response (200):**
+```json
+{
+  "total_executions": 1523,
+  "successful_executions": 1450,
+  "failed_executions": 73,
+  "average_duration_ms": 3421,
+  "active_executions": 3
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `total_executions` | int | Total executions since server start |
+| `successful_executions` | int | Executions that completed with exit code 0 |
+| `failed_executions` | int | Executions that failed, timed out, or exited non-zero |
+| `average_duration_ms` | int | Average execution duration in milliseconds |
+| `active_executions` | int | Currently running executions |
 
 ## Development
 
