@@ -1074,13 +1074,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change `verify_nsm_available()` calls to `verify_tpm_available()`
     - _Requirements: 10.3_
 
-- [ ] 49. Update configuration and environment files
-  - [ ] 49.1 Update .env.example
+- [x] 49. Update configuration and environment files
+  - [x] 49.1 Update .env.example
     - Change comment "# AWS Nitro Configuration" to "# NitroTPM Configuration"
     - Change `NSM_DEVICE_PATH=/dev/nsm` to `TPM_DEVICE_PATH=/dev/nsm`
     - _Requirements: 9.1_
 
-  - [ ] 49.2 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
+  - [x] 49.2 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
     - Change comment "# AWS Nitro Configuration" to "# NitroTPM Configuration"
     - Change `NSM_DEVICE_PATH=/dev/nsm` to `TPM_DEVICE_PATH=/dev/nsm`
     - _Requirements: 9.1_
