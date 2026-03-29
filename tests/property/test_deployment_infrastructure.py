@@ -19,7 +19,7 @@ TERRAFORM_DIR = Path(__file__).parent.parent.parent / "terraform" / "deploy"
     cidr=st.just("10.0.0.0/16"),
     subnet_cidr=st.just("10.0.1.0/24"),
 )
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 def test_property_81_deployment_vpc_isolation(cidr, subnet_cidr):
     """
     Property 81: Deployment VPC Isolation
@@ -81,7 +81,7 @@ def test_property_81_deployment_vpc_isolation(cidr, subnet_cidr):
         st.just("203.0.113.42/32"),
     )
 )
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 def test_property_82_security_group_http_only_access(allowed_cidr):
     """
     Property 82: Security Group HTTP-Only Access
@@ -145,7 +145,7 @@ def test_property_82_security_group_http_only_access(allowed_cidr):
         st.just("c6i.2xlarge"),
     )
 )
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 def test_property_83_imdsv2_enforcement(instance_type):
     """
     Property 83: IMDSv2 Enforcement

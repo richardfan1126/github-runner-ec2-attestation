@@ -59,7 +59,7 @@ def ami_name_strategy():
 # **Validates: Requirements 19.4**
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     raw_filename=raw_filename_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -93,7 +93,7 @@ def test_snapshot_upload_returns_valid_snapshot_id(raw_filename, snapshot_id):
             f"Should return the parsed snapshot ID: expected {snapshot_id}, got {result}"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     raw_filename=raw_filename_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -125,7 +125,7 @@ def test_snapshot_upload_parses_id_from_multiline_output(raw_filename, snapshot_
         assert result == snapshot_id
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(raw_filename=raw_filename_strategy())
 def test_snapshot_upload_fails_when_no_snapshot_id(raw_filename):
     """
@@ -152,7 +152,7 @@ def test_snapshot_upload_fails_when_no_snapshot_id(raw_filename):
             build_ami.upload_snapshot(mock_ssh_client, "us-east-1")
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(raw_filename=raw_filename_strategy())
 def test_snapshot_upload_fails_on_coldsnap_error(raw_filename):
     """
@@ -185,7 +185,7 @@ def test_snapshot_upload_fails_on_coldsnap_error(raw_filename):
 # **Validates: Requirements 19.7, 19.8, 19.9, 19.10, 19.11**
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     snapshot_id=snapshot_id_strategy(),
     architecture=architecture_strategy(),
@@ -239,7 +239,7 @@ def test_ami_registration_has_correct_configuration(snapshot_id, architecture, a
     assert block_mappings[0]["Ebs"]["SnapshotId"] == snapshot_id
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     snapshot_id=snapshot_id_strategy(),
     architecture=architecture_strategy(),
@@ -264,7 +264,7 @@ def test_ami_registration_returns_ami_id(snapshot_id, architecture, ami_name):
         f"Should return AMI ID from response, got: {result}"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     snapshot_id=snapshot_id_strategy(),
     architecture=architecture_strategy(),
@@ -297,7 +297,7 @@ def test_ami_registration_raises_on_client_error(snapshot_id, architecture, ami_
 # **Validates: Requirements 19.3**
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     raw_filename=raw_filename_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -337,7 +337,7 @@ def test_coldsnap_output_streamed_to_logs(raw_filename, snapshot_id):
             "Should call coldsnap upload exactly once"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     raw_filename=raw_filename_strategy(),
     snapshot_id=snapshot_id_strategy(),

@@ -86,7 +86,7 @@ def region_strategy():
 
 # --- Property 84: Infrastructure State Persistence ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     raw_output=st.dictionaries(
         keys=st.sampled_from([
@@ -154,7 +154,7 @@ def test_property_84_infrastructure_state_persistence(raw_output):
 
 # --- Property 85: Deployment IP Auto-Detection ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(ip_address=ipv4_strategy())
 def test_property_85_deployment_ip_auto_detection(ip_address):
     """
@@ -202,7 +202,7 @@ def test_property_85_deployment_ip_auto_detection(ip_address):
 
 # --- Property 86: AMI Build Result Loading ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),

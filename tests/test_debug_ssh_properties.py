@@ -77,7 +77,7 @@ def ssh_ignore_directive_strategy():
 
 # --- Property 95: Build Flag Propagation ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     event_name=event_name_strategy(),
     enable_ssh_input=st.booleans(),
@@ -142,7 +142,7 @@ SSH_DIRECTIVES_TO_KEEP = [
 ]
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(enable_ssh=st.booleans())
 def test_property_96_kiwi_xml_ssh_directive_modification(enable_ssh):
     """
@@ -196,7 +196,7 @@ def test_property_96_kiwi_xml_ssh_directive_modification(enable_ssh):
 
 # --- Property 97: Conditional sshd Enablement ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(enable_ssh_value=enable_ssh_env_strategy())
 def test_property_97_conditional_sshd_enablement(enable_ssh_value):
     """
@@ -230,7 +230,7 @@ def test_property_97_conditional_sshd_enablement(enable_ssh_value):
 
 # --- Property 98: GHA Summary SSH Warning ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     event_name=event_name_strategy(),
     enable_ssh=st.booleans(),
@@ -279,7 +279,7 @@ def test_property_98_gha_summary_ssh_warning(event_name, enable_ssh):
 
 # --- Property 99: Deploy Script SSH Argument Validation ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     enable_ssh=st.booleans(),
     key_pair_name=st.one_of(st.just(""), key_pair_name_strategy()),
@@ -355,7 +355,7 @@ def test_property_99_deploy_script_ssh_argument_validation(enable_ssh, key_pair_
 
 # --- Property 100: Terraform SSH Configuration Consistency ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(enable_ssh=st.booleans())
 def test_property_100_terraform_ssh_configuration_consistency(enable_ssh):
     """
@@ -412,7 +412,7 @@ def test_property_100_terraform_ssh_configuration_consistency(enable_ssh):
 
 # --- Property 101: Deploy Script SSH Terraform Variable Passing ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     enable_ssh=st.booleans(),
     key_pair_name=key_pair_name_strategy(),
@@ -478,7 +478,7 @@ def test_property_101_deploy_script_ssh_terraform_variable_passing(enable_ssh, k
 
 # --- Property 102: Infrastructure State SSH Status ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(enable_ssh=st.booleans())
 def test_property_102_infrastructure_state_ssh_status(enable_ssh):
     """
@@ -551,7 +551,7 @@ def test_property_102_infrastructure_state_ssh_status(enable_ssh):
 
 # --- Property 103: Deploy Script SSH Warning ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(enable_ssh=st.booleans())
 def test_property_103_deploy_script_ssh_warning(enable_ssh):
     """

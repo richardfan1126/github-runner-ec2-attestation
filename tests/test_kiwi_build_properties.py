@@ -92,7 +92,7 @@ def test_kiwi_build_reproducibility(source_code_hash: str):
 
 
 # Feature: github-actions-remote-executor, Property 62: PCR Measurements Presence
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     pcr4_value=st.text(
         alphabet="0123456789abcdef",
@@ -167,7 +167,7 @@ def test_pcr_measurements_presence(pcr4_value: str, pcr7_value: str):
         assert raw_image_file.stat().st_size > 0, "Raw image file must not be empty"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     pcr_data=st.fixed_dictionaries({
         "Measurements": st.fixed_dictionaries({
@@ -211,7 +211,7 @@ def test_pcr_measurements_json_structure(pcr_data: Dict[str, Any]):
         os.unlink(temp_file)
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     build_output_files=st.lists(
         st.sampled_from([

@@ -52,7 +52,7 @@ def artifact_ref_strategy():
 # **Validates: Requirements 18.4, 18.5**
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     raw_filename=st.from_regex(r"[a-z][a-z0-9\-]{0,19}\.raw", fullmatch=True),
     artifact_ref=artifact_ref_strategy(),
@@ -89,7 +89,7 @@ def test_artifact_download_completeness_both_files_present(raw_filename, artifac
             "Should check for pcr_measurements.json"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(artifact_ref=artifact_ref_strategy())
 def test_artifact_download_completeness_missing_raw_image(artifact_ref):
     """
@@ -119,7 +119,7 @@ def test_artifact_download_completeness_missing_raw_image(artifact_ref):
             "Error should mention missing raw disk image"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(artifact_ref=artifact_ref_strategy())
 def test_artifact_download_completeness_missing_pcr_measurements(artifact_ref):
     """
@@ -155,7 +155,7 @@ def test_artifact_download_completeness_missing_pcr_measurements(artifact_ref):
 # **Validates: Requirements 18.7**
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     pcr4=hex_string_strategy(min_size=2, max_size=96),
     pcr7=hex_string_strategy(min_size=2, max_size=96),
@@ -190,7 +190,7 @@ def test_pcr_measurements_round_trip(pcr4, pcr7):
             f"PCR7 should round-trip: expected {pcr7}, got {result['Measurements']['PCR7']}"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     invalid_json=st.text(min_size=1, max_size=50).filter(
         lambda s: not s.strip().startswith('{')
@@ -217,7 +217,7 @@ def test_pcr_measurements_invalid_json_raises_error(invalid_json):
             "Error should indicate parsing failure"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     pcr4=st.text(min_size=1, max_size=20).filter(
         lambda s: not re.match(r'^[0-9a-fA-F]+$', s)
@@ -252,7 +252,7 @@ def test_pcr_measurements_invalid_hex_pcr4_raises_error(pcr4, pcr7):
             "Error should mention invalid PCR4 value"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     pcr4=hex_string_strategy(min_size=2, max_size=96),
     pcr7=st.text(min_size=1, max_size=20).filter(

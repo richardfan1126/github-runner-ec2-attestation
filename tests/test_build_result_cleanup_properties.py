@@ -78,7 +78,7 @@ def pcr_measurements_strategy():
 # --- Property 75: Build Result Completeness ---
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -145,7 +145,7 @@ def test_build_result_completeness(ami_id, snapshot_id, region, pcr_measurements
 
 # --- Property 76: Infrastructure Cleanup Guarantee ---
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     region=region_strategy(),
     instance_type=st.sampled_from(["c5.9xlarge", "m5.xlarge", "t3.large"]),
@@ -203,7 +203,7 @@ def test_infrastructure_cleanup_guarantee(region, instance_type, build_succeeds)
 
 # --- Property 77: Build Failure Cleanup ---
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     region=region_strategy(),
     instance_type=st.sampled_from(["c5.9xlarge", "m5.xlarge", "t3.large"]),

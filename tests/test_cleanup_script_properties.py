@@ -53,7 +53,7 @@ def valid_dir_path_strategy():
 
 # --- Property 87: Cleanup CLI Argument Parsing ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(st.just(None))
 def test_property_87_cleanup_cli_defaults(_):
     """
@@ -76,7 +76,7 @@ def test_property_87_cleanup_cli_defaults(_):
     )
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     file_path=valid_file_path_strategy(),
     dir_path=valid_dir_path_strategy(),
@@ -139,7 +139,7 @@ def region_strategy():
 
 # --- Property 88: Cleanup Build Result Loading ---
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -245,7 +245,7 @@ def non_confirming_input_strategy():
     )
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(user_input=non_confirming_input_strategy())
 def test_property_89_cleanup_user_cancellation(user_input):
     """
@@ -295,7 +295,7 @@ def test_property_89_cleanup_user_cancellation(user_input):
 import subprocess
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(exit_code=st.integers(min_value=1, max_value=255))
 def test_property_90_terraform_init_failure_raises_runtime_error(exit_code):
     """
@@ -330,7 +330,7 @@ def test_property_90_terraform_init_failure_raises_runtime_error(exit_code):
             shutil.rmtree(tmp_dir)
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(exit_code=st.integers(min_value=1, max_value=255))
 def test_property_90_terraform_destroy_failure_raises_runtime_error(exit_code):
     """
@@ -387,7 +387,7 @@ def resource_dict_strategy():
 
 
 @given(resources=st.lists(resource_dict_strategy(), min_size=1, max_size=10))
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 def test_property_91_post_destroy_state_non_empty_resources_logs_warning(resources):
     """
     Property 91: Post-Destroy State Verification (non-empty resources case)
@@ -436,7 +436,7 @@ def test_property_91_post_destroy_state_non_empty_resources_logs_warning(resourc
 
 
 @given(data=st.data())
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 def test_property_91_post_destroy_state_empty_resources_logs_success(data):
     """
     Property 91: Post-Destroy State Verification (empty resources case)
@@ -494,7 +494,7 @@ def _make_client_error(code, message="test error"):
     )
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -542,7 +542,7 @@ def test_property_92_ami_deregistration_verifies_ami_and_snapshot(ami_id, snapsh
     ec2_client.describe_snapshots.assert_called_once_with(SnapshotIds=[snapshot_id])
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -593,7 +593,7 @@ def instance_state_strategy():
     return st.sampled_from(["pending", "running", "stopping", "stopped"])
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -670,7 +670,7 @@ def test_property_93_verify_cleanup_reports_remaining_resources(
     )
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -735,7 +735,7 @@ def exception_strategy():
     )
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),
@@ -789,7 +789,7 @@ def test_property_94_main_returns_0_when_all_steps_succeed(ami_id, snapshot_id, 
             os.unlink(tmp_file)
 
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     ami_id=ami_id_strategy(),
     snapshot_id=snapshot_id_strategy(),

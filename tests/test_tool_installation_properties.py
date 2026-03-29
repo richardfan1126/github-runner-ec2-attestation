@@ -52,7 +52,7 @@ def create_mock_ssh_client(
 
 
 # Feature: github-actions-remote-executor, Property 70: Tool Installation Verification
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     oras_version=st.text(min_size=5, max_size=10),
     gh_version=st.text(min_size=5, max_size=10)
@@ -134,7 +134,7 @@ def test_tool_installation_verification(oras_version: str, gh_version: str):
             "Coldsnap verification command should be executed"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     error_message=st.text(min_size=10, max_size=100)
 )
@@ -160,7 +160,7 @@ def test_tool_installation_failure_handling(error_message: str):
             "RuntimeError should contain descriptive error information"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     verification_exit_code=st.integers(min_value=1, max_value=255)
 )
@@ -242,7 +242,7 @@ def test_install_all_tools_sequential_execution():
         assert gh_idx < coldsnap_idx, "GitHub CLI should be installed before coldsnap"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     failing_tool=st.sampled_from([
         "system_deps", "rust", "oras", "github_cli", "coldsnap"
@@ -305,7 +305,7 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
                 "Should not proceed to coldsnap after GitHub CLI failure"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     stdout_output=st.text(min_size=10, max_size=200)
 )

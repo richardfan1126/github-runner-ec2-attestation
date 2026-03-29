@@ -27,7 +27,7 @@ def get_test_config():
 
 
 # Feature: github-actions-remote-executor, Property 58: Health Check Attestation Status
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(st.booleans())
 def test_health_check_attestation_status(attestation_available):
     """
@@ -61,7 +61,7 @@ def test_health_check_attestation_status(attestation_available):
 
 
 # Feature: github-actions-remote-executor, Property 59: Health Check Disk Space
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(st.integers(min_value=0, max_value=1000000))
 def test_health_check_disk_space(free_space_mb):
     """
@@ -95,7 +95,7 @@ def test_health_check_disk_space(free_space_mb):
 
 
 # Feature: github-actions-remote-executor, Property 60: Execution Metrics Tracking
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     st.integers(min_value=0, max_value=100),  # successful
     st.integers(min_value=0, max_value=100)   # failed

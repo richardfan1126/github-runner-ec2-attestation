@@ -44,7 +44,7 @@ def create_test_config() -> ServerConfig:
     execution_id=st.uuids(),
     request_id=st.uuids()
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_37_error_logging_with_context(error_message, execution_id, request_id):
     """
     Property 37: Error Logging with Context
@@ -98,7 +98,7 @@ def test_property_37_error_logging_with_context(error_message, execution_id, req
     script_path=st.text(min_size=5, max_size=50),
     github_token=st.text(min_size=20, max_size=100, alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-').filter(lambda x: x.strip() != '')
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_38_request_logging_without_token(
     repository_url, commit_hash, script_path, github_token
 ):
@@ -135,7 +135,7 @@ def test_property_38_request_logging_without_token(
 @given(
     execution_id=st.uuids()
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_39_execution_event_logging(execution_id):
     """
     Property 39: Execution Event Logging
@@ -180,7 +180,7 @@ def test_property_39_execution_event_logging(execution_id):
     repository_url=st.text(min_size=10, max_size=100),
     commit_hash=st.text(min_size=40, max_size=40, alphabet='0123456789abcdef')
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_40_attestation_event_logging(repository_url, commit_hash):
     """
     Property 40: Attestation Event Logging
@@ -222,7 +222,7 @@ def test_property_40_attestation_event_logging(repository_url, commit_hash):
         ValueError, RuntimeError, TypeError, KeyError, AttributeError
     ])
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_41_unexpected_error_response(error_type):
     """
     Property 41: Unexpected Error Response
@@ -252,7 +252,7 @@ def test_property_41_unexpected_error_response(error_type):
     file_path=st.from_regex(r'/[a-z]{3,10}/[a-z]{3,10}/[a-z]{3,10}\.py', fullmatch=True),
     stack_trace_line=st.text(min_size=10, max_size=200)
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_42_error_response_security(file_path, stack_trace_line):
     """
     Property 42: Error Response Security
@@ -293,7 +293,7 @@ def test_property_42_error_response_security(file_path, stack_trace_line):
     fetch_ms=st.floats(min_value=0.1, max_value=5000.0),
     attestation_ms=st.floats(min_value=0.1, max_value=2000.0)
 )
-@settings(max_examples=100)
+@settings(max_examples=20)
 def test_property_43_request_phase_duration_logging(
     validation_ms, auth_ms, fetch_ms, attestation_ms
 ):

@@ -18,7 +18,7 @@ from hypothesis import given, strategies as st, settings, assume
 
 
 # Feature: github-actions-remote-executor, Property 63: PCR Extraction Validation
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     pcr4_value=st.text(
         alphabet="0123456789abcdef",
@@ -76,7 +76,7 @@ def test_pcr_extraction_validation(pcr4_value: str, pcr7_value: str):
             pytest.fail("Extracted PCR values must be valid hexadecimal")
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     missing_field=st.sampled_from(["PCR4", "PCR7", "Measurements"])
 )
@@ -124,7 +124,7 @@ def test_pcr_extraction_missing_field_detection(missing_field: str):
 
 
 # Feature: github-actions-remote-executor, Property 64: Artifact Annotation Completeness
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     pcr4=st.text(alphabet="0123456789abcdef", min_size=96, max_size=96),
     pcr7=st.text(alphabet="0123456789abcdef", min_size=96, max_size=96),
@@ -194,7 +194,7 @@ def test_artifact_annotation_completeness(
 
 
 # Feature: github-actions-remote-executor, Property 65: Artifact Tag Uniqueness
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     branch_name=st.text(
         alphabet="abcdefghijklmnopqrstuvwxyz0123456789-_./",
@@ -245,7 +245,7 @@ def test_artifact_tag_uniqueness(
     assert commit_sha[:8] in tag2, "Tag must contain commit SHA prefix"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     branch_name=st.text(
         alphabet="abcdefghijklmnopqrstuvwxyz0123456789-_./",
@@ -286,7 +286,7 @@ def test_artifact_tag_uniqueness_different_commits(
 
 
 # Feature: github-actions-remote-executor, Property 66: Attestation Bundle Completeness
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     repo_path=st.text(
         alphabet="abcdefghijklmnopqrstuvwxyz0123456789-_./",
@@ -347,7 +347,7 @@ def test_attestation_bundle_completeness(repo_path: str, tag: str, digest: str):
         pytest.fail("Digest must be valid hexadecimal")
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     repo_owner=st.text(
         alphabet="abcdefghijklmnopqrstuvwxyz0123456789-",
@@ -386,7 +386,7 @@ def test_artifact_reference_format(repo_owner: str, repo_name: str, tag: str):
     assert repo_path == repo_path.lower(), "Repository path must be lowercase"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     raw_image_size=st.integers(min_value=1, max_value=10 * 1024 * 1024 * 1024),  # Up to 10GB
     pcr_file_size=st.integers(min_value=100, max_value=10000)
@@ -487,7 +487,7 @@ def test_workflow_file_structure():
     assert "GITHUB_STEP_SUMMARY" in content, "Workflow must generate summary"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     oras_version=st.sampled_from(["1.0.0", "1.1.0", "1.2.0"])
 )

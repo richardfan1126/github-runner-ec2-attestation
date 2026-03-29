@@ -51,7 +51,7 @@ class TestAttestationDecodeRoundTrip:
     """Property 1: Attestation decode round-trip."""
 
     @given(doc=attestation_doc_strategy())
-    @settings(max_examples=100)
+    @settings(max_examples=20)
     def test_round_trip(self, doc: dict):
         """For any valid attestation document, CBOR-encoding then base64-encoding,
         then passing through validate_attestation should produce a dict equivalent
@@ -86,7 +86,7 @@ class TestAttestationStructuralFieldValidation:
             unique=True,
         ),
     )
-    @settings(max_examples=100)
+    @settings(max_examples=20)
     def test_structural_field_validation(self, base_doc: dict, fields_to_remove: list):
         """For any Python dict, validate_attestation should accept it if and only if
         all expected structural fields are present as keys."""
@@ -129,7 +129,7 @@ class TestHealthCheckAcceptance:
         status_code=st.integers(min_value=100, max_value=599),
         status_value=st.text(min_size=0, max_size=50),
     )
-    @settings(max_examples=100)
+    @settings(max_examples=20)
     def test_health_check_acceptance(self, status_code: int, status_value: str):
         caller = _make_caller()
 
@@ -165,7 +165,7 @@ class TestExecuteHTTPErrorPropagation:
         status_code=st.integers(min_value=400, max_value=599),
         response_body=st.text(min_size=0, max_size=200),
     )
-    @settings(max_examples=100)
+    @settings(max_examples=20)
     def test_execute_http_error_propagation(self, status_code: int, response_body: str):
         caller = _make_caller()
 

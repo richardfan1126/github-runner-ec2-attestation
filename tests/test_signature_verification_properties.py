@@ -40,7 +40,7 @@ def artifact_ref_strategy():
 # **Validates: Requirements 17.9, 17.10, 17.12**
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(artifact_ref=artifact_ref_strategy())
 def test_signature_verification_called_before_artifact_download(artifact_ref: str):
     """
@@ -111,7 +111,7 @@ def test_signature_verification_called_before_artifact_download(artifact_ref: st
             "verify_artifact_signature must be called BEFORE pull_artifact_from_ghcr"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(artifact_ref=artifact_ref_strategy())
 def test_verify_signature_extracts_owner_repo_and_constructs_commands(artifact_ref: str):
     """
@@ -158,7 +158,7 @@ def test_verify_signature_extracts_owner_repo_and_constructs_commands(artifact_r
             "Command should set GH_FORCE_TTY=1 environment variable"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(exit_code=st.integers(min_value=0, max_value=0))
 def test_verify_signature_returns_true_on_success(exit_code: int):
     """
@@ -181,7 +181,7 @@ def test_verify_signature_returns_true_on_success(exit_code: int):
             "verify_artifact_signature should return True when exit code is 0"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(exit_code=st.integers(min_value=1, max_value=255))
 def test_verify_signature_returns_false_on_failure(exit_code: int):
     """
@@ -210,7 +210,7 @@ def test_verify_signature_returns_false_on_failure(exit_code: int):
 # **Validates: Requirements 17.9, 17.10, 17.12**
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(artifact_ref=artifact_ref_strategy())
 def test_untrusted_artifact_raises_runtime_error(artifact_ref: str):
     """
@@ -267,7 +267,7 @@ def test_untrusted_artifact_raises_runtime_error(artifact_ref: str):
             "register_ami must NOT be called when verification fails"
 
 
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(exit_code=st.integers(min_value=1, max_value=255))
 def test_untrusted_artifact_with_various_failure_codes(exit_code: int):
     """

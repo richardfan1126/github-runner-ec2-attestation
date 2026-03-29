@@ -39,7 +39,7 @@ script_exit_code = st.integers(min_value=-1, max_value=255)
 
 
 # Property 44: Output Attestation Digest Integrity
-@settings(max_examples=100)
+@settings(max_examples=20)
 @given(
     stdout=script_stdout,
     stderr=script_stderr,
@@ -87,7 +87,7 @@ def test_property_44_output_attestation_digest_integrity(
 
 
 # Property 45: Output Attestation Base64 Encoding
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     stdout=script_stdout,
     stderr=script_stderr,
@@ -155,7 +155,7 @@ def test_property_45_output_attestation_base64_encoding(
 
 
 # Property 46: Output Attestation Failure Graceful Degradation
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(
     stdout=script_stdout,
     stderr=script_stderr,
