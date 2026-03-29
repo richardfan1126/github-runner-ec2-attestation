@@ -15,6 +15,16 @@ import time
 
 import cbor2
 import requests
+from pycose.messages import Sign1Message
+from pycose.keys import EC2Key
+from pycose.headers import Algorithm, KID
+from pycose.algorithms import Es384
+from pycose.keys.keyparam import EC2KpCurve, EC2KpX, EC2KpY
+from pycose.keys.curves import P384
+from OpenSSL import crypto as ossl_crypto
+from Crypto.Util.number import long_to_bytes
+from cryptography.x509 import load_der_x509_certificate
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +58,16 @@ class RemoteExecutorCaller:
         poll_interval: int = 5,
         max_poll_duration: int = 600,
         max_retries: int = 3,
+        root_cert_pem: str = "",
+        expected_pcrs: dict[int, str] | None = None,
     ):
         self.server_url = server_url.rstrip("/")
         self.timeout = timeout
         self.poll_interval = poll_interval
         self.max_poll_duration = max_poll_duration
         self.max_retries = max_retries
+        self.root_cert_pem = root_cert_pem
+        self.expected_pcrs = expected_pcrs
 
     def health_check(self) -> dict:
         """GET /health - verify server is healthy.
@@ -144,10 +158,10 @@ class RemoteExecutorCaller:
         return response.json()
 
     def validate_attestation(self, attestation_b64: str) -> dict:
-        """Decode base64 -> binary -> CBOR. Validate structural fields.
+        """Decode base64 -> CBOR -> COSE Sign1 array. Validate and verify.
 
-        Returns parsed attestation document as dict.
-        Raises CallerError on decode/parse/validation failures.
+        Returns parsed attestation payload dict.
+        Raises CallerError on decode/parse/validation/verification failures.
         """
         # Base64-decode the attestation string to binary
         try:
@@ -159,9 +173,9 @@ class RemoteExecutorCaller:
                 details={"error": str(exc)},
             )
 
-        # CBOR-decode the binary to a Python dict
+        # CBOR-decode the binary — expect a 4-element COSE Sign1 array
         try:
-            doc = cbor2.loads(raw_bytes)
+            cose_array = cbor2.loads(raw_bytes)
         except Exception as exc:
             raise CallerError(
                 message=f"Failed to CBOR-decode attestation document: {exc}",
@@ -169,15 +183,32 @@ class RemoteExecutorCaller:
                 details={"error": str(exc)},
             )
 
-        if not isinstance(doc, dict):
+        if not isinstance(cose_array, (list, tuple)) or len(cose_array) != 4:
             raise CallerError(
-                message=f"Attestation document is not a map, got {type(doc).__name__}",
+                message="CBOR result is not a valid COSE Sign1 structure (expected 4-element array)",
                 phase="attestation",
-                details={"type": type(doc).__name__},
+                details={"type": type(cose_array).__name__, "length": len(cose_array) if isinstance(cose_array, (list, tuple)) else None},
+            )
+
+        # CBOR-decode the payload (index 2) to extract attestation fields
+        try:
+            payload_doc = cbor2.loads(cose_array[2])
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to CBOR-decode attestation payload: {exc}",
+                phase="attestation",
+                details={"error": str(exc)},
+            )
+
+        if not isinstance(payload_doc, dict):
+            raise CallerError(
+                message=f"Attestation payload is not a map, got {type(payload_doc).__name__}",
+                phase="attestation",
+                details={"type": type(payload_doc).__name__},
             )
 
         # Verify all expected structural fields are present
-        missing = [f for f in EXPECTED_ATTESTATION_FIELDS if f not in doc]
+        missing = [f for f in EXPECTED_ATTESTATION_FIELDS if f not in payload_doc]
         if missing:
             raise CallerError(
                 message=f"Attestation document missing fields: {missing}",
@@ -185,11 +216,118 @@ class RemoteExecutorCaller:
                 details={"missing_fields": missing},
             )
 
+        # Validate certificate chain (PKI)
+        self._verify_certificate_chain(payload_doc["certificate"], payload_doc["cabundle"])
+
+        # Verify COSE Sign1 signature
+        self._verify_cose_signature(cose_array)
+
+        # Validate PCR values
+        self._validate_pcrs(payload_doc["pcrs"])
+
         # Log attestation document fields for audit
         for field in EXPECTED_ATTESTATION_FIELDS:
-            logger.info("Attestation field %s: %s", field, doc[field])
+            logger.info("Attestation field %s: %s", field, payload_doc[field])
 
-        return doc
+        return payload_doc
+
+    def _verify_certificate_chain(self, cert_der: bytes, cabundle: list[bytes]) -> None:
+        """Validate the signing certificate against the CA bundle and root certificate.
+
+        Raises CallerError if certificate chain validation fails.
+        """
+        if not self.root_cert_pem:
+            return
+
+        try:
+            store = ossl_crypto.X509Store()
+            store.add_cert(ossl_crypto.load_certificate(ossl_crypto.FILETYPE_PEM, self.root_cert_pem))
+
+            for der_cert in cabundle[1:]:
+                store.add_cert(ossl_crypto.load_certificate(ossl_crypto.FILETYPE_ASN1, der_cert))
+
+            signing_cert = ossl_crypto.load_certificate(ossl_crypto.FILETYPE_ASN1, cert_der)
+            store_ctx = ossl_crypto.X509StoreContext(store, signing_cert)
+            store_ctx.verify_certificate()
+        except Exception as exc:
+            raise CallerError(
+                message=f"Certificate chain validation failed: {exc}",
+                phase="attestation",
+                details={"error": str(exc)},
+            )
+
+    def _verify_cose_signature(self, cose_array: list) -> None:
+        """Verify the COSE Sign1 signature using the signing certificate's public key.
+
+        Raises CallerError if signature verification fails.
+        """
+        if not self.root_cert_pem:
+            return
+
+        try:
+            payload_doc = cbor2.loads(cose_array[2])
+            cert_der = payload_doc["certificate"]
+
+            cert = load_der_x509_certificate(cert_der)
+            pub_numbers = cert.public_key().public_numbers()
+
+            x_bytes = long_to_bytes(pub_numbers.x)
+            y_bytes = long_to_bytes(pub_numbers.y)
+
+            # Pad to 48 bytes (P-384 coordinate size)
+            x_bytes = x_bytes.rjust(48, b'\x00')
+            y_bytes = y_bytes.rjust(48, b'\x00')
+
+            cose_key = EC2Key.from_dict({
+                EC2KpCurve: P384,
+                EC2KpX: x_bytes,
+                EC2KpY: y_bytes,
+            })
+
+            msg = Sign1Message(
+                phdr=cbor2.loads(cose_array[0]),
+                uhdr=cose_array[1] if cose_array[1] else {},
+                payload=cose_array[2],
+            )
+            msg.signature = cose_array[3]
+
+            if not msg.verify_signature(cose_key):
+                raise CallerError(
+                    message="COSE Sign1 signature verification failed",
+                    phase="attestation",
+                )
+        except CallerError:
+            raise
+        except Exception as exc:
+            raise CallerError(
+                message=f"COSE signature verification error: {exc}",
+                phase="attestation",
+                details={"error": str(exc)},
+            )
+
+    def _validate_pcrs(self, document_pcrs: dict) -> None:
+        """Compare expected PCR values against those in the attestation document.
+
+        Raises CallerError if any expected PCR is missing or mismatched.
+        """
+        if not self.expected_pcrs:
+            return
+
+        for index, expected_hex in self.expected_pcrs.items():
+            idx = int(index)
+            if idx not in document_pcrs or document_pcrs[idx] is None:
+                raise CallerError(
+                    message=f"PCR index {idx} not found in attestation document",
+                    phase="attestation",
+                    details={"missing_pcr_index": idx},
+                )
+            actual_hex = document_pcrs[idx].hex()
+            if actual_hex != expected_hex:
+                raise CallerError(
+                    message=f"PCR {idx} mismatch: expected {expected_hex}, got {actual_hex}",
+                    phase="attestation",
+                    details={"pcr_index": idx, "expected": expected_hex, "actual": actual_hex},
+                )
 
     def poll_output(self, execution_id: str) -> dict:
         """Poll GET /execution/{id}/output until complete or timeout.

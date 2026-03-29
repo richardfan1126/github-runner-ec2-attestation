@@ -15,6 +15,10 @@ dev = [
     "boto3>=1.42.77",
     "paramiko>=4.0.0",
     "cbor2>=5.9.0",
+    "pycose>=1.0.0",
+    "pyOpenSSL>=23.0.0",
+    "pycryptodome>=3.19.0",
+    "cryptography>=41.0.0",
 ]
 
 [build-system]

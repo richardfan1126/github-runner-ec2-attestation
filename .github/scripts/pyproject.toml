@@ -7,6 +7,10 @@ requires-python = ">= 3.11"
 dependencies = [
     "requests>=2.31.0",
     "cbor2>=5.6.0",
+    "pycose>=1.0.0",
+    "pyOpenSSL>=23.0.0",
+    "pycryptodome>=3.19.0",
+    "cryptography>=41.0.0",
 ]
 
 [project.optional-dependencies]

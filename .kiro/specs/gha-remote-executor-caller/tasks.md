@@ -74,19 +74,19 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 4. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Upgrade dependencies, class skeleton, and attestation validation for COSE Sign1 / PKI / PCR changes
-  - [ ] 5.1 Update `.github/scripts/pyproject.toml` with new cryptographic dependencies
+- [x] 5. Upgrade dependencies, class skeleton, and attestation validation for COSE Sign1 / PKI / PCR changes
+  - [x] 5.1 Update `.github/scripts/pyproject.toml` with new cryptographic dependencies
     - Add `pycose>=1.0.0`, `pyOpenSSL>=23.0.0`, `pycryptodome>=3.19.0`, `cryptography>=41.0.0` to dependencies
     - _Requirements: 4A.2, 4B.8, 4C.13, 4C.15_
 
-  - [ ] 5.2 Update `RemoteExecutorCaller.__init__` to accept `root_cert_pem` and `expected_pcrs` parameters
+  - [x] 5.2 Update `RemoteExecutorCaller.__init__` to accept `root_cert_pem` and `expected_pcrs` parameters
     - Add `root_cert_pem: str = ""` parameter (PEM string, always provided by workflow)
     - Add `expected_pcrs: dict[int, str] | None = None` parameter (PCR4/PCR7 map, always provided by workflow)
     - Store both as instance attributes
     - Add imports for `pycose`, `OpenSSL.crypto`, `Crypto.Util.number.long_to_bytes`
     - _Requirements: 1.6, 1.7, 4B.8, 4D.17_
 
-  - [ ] 5.3 Rewrite `validate_attestation` for COSE Sign1 format with full cryptographic verification
+  - [x] 5.3 Rewrite `validate_attestation` for COSE Sign1 format with full cryptographic verification
     - Parse decoded CBOR as a 4-element COSE Sign1 array `[protected_header, unprotected_header, payload, signature]` instead of a flat dict
     - CBOR-decode the payload (index 2) to extract attestation fields
     - Validate structural fields on the decoded payload dict
@@ -97,26 +97,26 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Raise `CallerError(phase="attestation")` if payload CBOR decoding fails
     - _Requirements: 4A.1–4A.7, 4B.8–4B.12, 4C.13–4C.16, 4D.17–4D.19, 4E.20_
 
-  - [ ] 5.4 Implement `_verify_certificate_chain` private method
+  - [x] 5.4 Implement `_verify_certificate_chain` private method
     - Create `OpenSSL.crypto.X509Store` with `root_cert_pem` (PEM) and intermediate certs from `cabundle[1:]` (DER)
     - Load signing certificate from payload's `certificate` field (DER)
     - Verify via `X509StoreContext.verify_certificate()`
     - Raise `CallerError(phase="attestation")` on failure
     - _Requirements: 4B.8, 4B.9, 4B.10, 4B.11, 4B.12_
 
-  - [ ] 5.5 Implement `_verify_cose_signature` private method
+  - [x] 5.5 Implement `_verify_cose_signature` private method
     - Extract EC2 public key (x, y on P-384) from signing certificate using `long_to_bytes`
     - Construct `pycose.EC2` key with `alg=ES384`, `crv=P_384`
     - Build `pycose.Sign1Message` from protected header, unprotected header, payload, and signature
     - Call `msg.verify_signature(key)`, raise `CallerError(phase="attestation")` if False
     - _Requirements: 4C.13, 4C.14, 4C.15, 4C.16_
 
-  - [ ] 5.6 Implement `_validate_pcrs` private method
+  - [x] 5.6 Implement `_validate_pcrs` private method
     - For each `(index, expected_hex)` in `expected_pcrs`, verify index exists in document PCRs and hex value matches
     - Raise `CallerError(phase="attestation")` on missing index or mismatch
     - _Requirements: 4D.17, 4D.18, 4D.19_
 
-  - [ ] 5.7 Update property tests for COSE Sign1 attestation format
+  - [x] 5.7 Update property tests for COSE Sign1 attestation format
     - Update Property 1 (decode round-trip) to wrap payloads in COSE Sign1 structure signed with test P-384 key
     - Update Property 2 (structural field validation) to use COSE Sign1 wrapping
     - Add Property 10 (COSE signature rejects tampered payloads)
@@ -124,7 +124,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Add Property 12 (certificate chain validation rejects untrusted certs)
     - _Requirements: 4A.1–4A.7, 4B.8–4B.12, 4C.15–4C.16, 4D.17–4D.19_
 
-  - [ ] 5.8 Update unit tests for COSE Sign1 attestation edge cases
+  - [x] 5.8 Update unit tests for COSE Sign1 attestation edge cases
     - Update existing invalid base64 and invalid CBOR tests for COSE Sign1 format
     - Add test: CBOR result not a 4-element array raises `CallerError` with COSE structure error (Req 4A.5)
     - Add test: payload CBOR decode failure raises `CallerError` (Req 4A.6)

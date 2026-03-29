@@ -1,12 +1,18 @@
 """Unit tests for the GitHub Actions Remote Executor Caller."""
 
 import base64
+import datetime
 import sys
 import os
 from unittest.mock import patch
 
+import cbor2
 import pytest
 import requests
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.x509.oid import NameOID
+from cryptography import x509
 
 # Add the caller script directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".github", "scripts"))
@@ -42,6 +48,204 @@ class TestAttestationValidationEdgeCases:
         with pytest.raises(CallerError) as exc_info:
             caller.validate_attestation(invalid_cbor_b64)
         assert exc_info.value.phase == "attestation"
+
+    def test_cbor_not_4_element_array_raises_caller_error(self):
+        """CBOR result that is not a 4-element array raises CallerError with phase 'attestation'.
+        Validates: Requirement 4A.5"""
+        caller = _make_caller()
+        # Encode a 3-element array (not valid COSE Sign1)
+        invalid_cose = cbor2.dumps([b'\x00', {}, b'\x00'])
+        b64_str = base64.b64encode(invalid_cose).decode("ascii")
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str)
+        assert exc_info.value.phase == "attestation"
+        assert "COSE Sign1" in exc_info.value.message or "4-element" in exc_info.value.message
+
+    def test_cbor_dict_not_array_raises_caller_error(self):
+        """CBOR result that is a dict (not an array) raises CallerError with phase 'attestation'.
+        Validates: Requirement 4A.5"""
+        caller = _make_caller()
+        # Encode a dict (old format, no longer valid)
+        invalid_cose = cbor2.dumps({"module_id": "test"})
+        b64_str = base64.b64encode(invalid_cose).decode("ascii")
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str)
+        assert exc_info.value.phase == "attestation"
+
+    def test_payload_cbor_decode_failure_raises_caller_error(self):
+        """When the payload (index 2) is not valid CBOR, raises CallerError with phase 'attestation'.
+        Validates: Requirement 4A.6"""
+        caller = _make_caller()
+        # Create a valid 4-element array but with invalid CBOR as payload
+        protected_header = cbor2.dumps({1: -35})
+        invalid_payload = b'\xff\xfe\xfd'  # Not valid CBOR
+        cose_array = [protected_header, {}, invalid_payload, b'\x00' * 96]
+        b64_str = base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str)
+        assert exc_info.value.phase == "attestation"
+        assert "payload" in exc_info.value.message.lower()
+
+
+class TestCOSESign1EdgeCases:
+    """Unit tests for PKI, COSE signature, and PCR validation edge cases."""
+
+    def test_certificate_chain_validation_failure_raises_caller_error(self):
+        """Certificate chain validation failure raises CallerError with phase 'attestation'.
+        Validates: Requirement 4B.12"""
+        # Generate a root CA
+        ca_key = ec.generate_private_key(ec.SECP384R1())
+        ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Unit Test CA")])
+        ca_cert = (
+            x509.CertificateBuilder()
+            .subject_name(ca_name)
+            .issuer_name(ca_name)
+            .public_key(ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+            .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(ca_key, hashes.SHA384())
+        )
+        ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM).decode()
+
+        # Generate a DIFFERENT CA and signing cert (not chained to the first CA)
+        other_ca_key = ec.generate_private_key(ec.SECP384R1())
+        other_ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Other CA")])
+        other_ca_cert = (
+            x509.CertificateBuilder()
+            .subject_name(other_ca_name)
+            .issuer_name(other_ca_name)
+            .public_key(other_ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+            .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(other_ca_key, hashes.SHA384())
+        )
+        other_ca_der = other_ca_cert.public_bytes(serialization.Encoding.DER)
+
+        sign_key = ec.generate_private_key(ec.SECP384R1())
+        sign_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Unit Test Signer")])
+        sign_cert = (
+            x509.CertificateBuilder()
+            .subject_name(sign_name)
+            .issuer_name(other_ca_name)  # Signed by OTHER CA, not the root
+            .public_key(sign_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+            .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+            .sign(other_ca_key, hashes.SHA384())
+        )
+        sign_cert_der = sign_cert.public_bytes(serialization.Encoding.DER)
+
+        # Build a valid COSE Sign1 structure with the untrusted cert
+        payload_dict = {
+            "module_id": "test",
+            "digest": "SHA384",
+            "timestamp": 1700000000000,
+            "pcrs": {0: b'\x00' * 48},
+            "certificate": sign_cert_der,
+            "cabundle": [other_ca_der],
+        }
+        payload_bytes = cbor2.dumps(payload_dict)
+        protected_header = cbor2.dumps({1: -35})
+        cose_array = [protected_header, {}, payload_bytes, b'\x00' * 96]
+        b64_str = base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+
+        # Use the FIRST CA as root — cert is signed by OTHER CA, so chain fails
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            root_cert_pem=ca_pem,
+        )
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str)
+        assert exc_info.value.phase == "attestation"
+        assert "certificate" in exc_info.value.message.lower() or "chain" in exc_info.value.message.lower()
+
+    def test_cose_signature_verification_failure_raises_caller_error(self):
+        """COSE signature verification failure raises CallerError with phase 'attestation'.
+        Validates: Requirement 4C.16"""
+        # Generate CA and signing cert
+        ca_key = ec.generate_private_key(ec.SECP384R1())
+        ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Sig Test CA")])
+        ca_cert = (
+            x509.CertificateBuilder()
+            .subject_name(ca_name)
+            .issuer_name(ca_name)
+            .public_key(ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+            .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(ca_key, hashes.SHA384())
+        )
+        ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM).decode()
+        ca_der = ca_cert.public_bytes(serialization.Encoding.DER)
+
+        sign_key = ec.generate_private_key(ec.SECP384R1())
+        sign_cert = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Sig Test Signer")]))
+            .issuer_name(ca_name)
+            .public_key(sign_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+            .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+            .sign(ca_key, hashes.SHA384())
+        )
+        sign_cert_der = sign_cert.public_bytes(serialization.Encoding.DER)
+
+        # Build payload with the real cert but use a WRONG/dummy signature
+        payload_dict = {
+            "module_id": "test",
+            "digest": "SHA384",
+            "timestamp": 1700000000000,
+            "pcrs": {0: b'\x00' * 48},
+            "certificate": sign_cert_der,
+            "cabundle": [ca_der],
+        }
+        payload_bytes = cbor2.dumps(payload_dict)
+        protected_header = cbor2.dumps({1: -35})
+        # Dummy signature — will not verify against the cert's public key
+        cose_array = [protected_header, {}, payload_bytes, b'\xde\xad' * 48]
+        b64_str = base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            root_cert_pem=ca_pem,
+        )
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str)
+        assert exc_info.value.phase == "attestation"
+
+    def test_pcr_index_missing_raises_caller_error(self):
+        """PCR index missing from attestation document raises CallerError with phase 'attestation'.
+        Validates: Requirement 4D.18"""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            expected_pcrs={4: "aa" * 48},
+        )
+        # Document has PCR 0 but not PCR 4
+        document_pcrs = {0: b'\x00' * 48}
+        with pytest.raises(CallerError) as exc_info:
+            caller._validate_pcrs(document_pcrs)
+        assert exc_info.value.phase == "attestation"
+        assert "4" in exc_info.value.message
+
+    def test_pcr_value_mismatch_raises_caller_error(self):
+        """PCR value mismatch raises CallerError with phase 'attestation'.
+        Validates: Requirement 4D.19"""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            expected_pcrs={4: "aa" * 48},
+        )
+        # Document has PCR 4 but with different value
+        document_pcrs = {4: b'\xbb' * 48}
+        with pytest.raises(CallerError) as exc_info:
+            caller._validate_pcrs(document_pcrs)
+        assert exc_info.value.phase == "attestation"
+        assert "mismatch" in exc_info.value.message.lower()
 
 
 class TestHealthCheckAndExecuteEdgeCases:

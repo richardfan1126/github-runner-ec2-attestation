@@ -1,14 +1,26 @@
 """Property-based tests for the GitHub Actions Remote Executor Caller."""
 
 import base64
+import datetime
 import sys
 import os
 from unittest.mock import patch, MagicMock
 
 import cbor2
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.x509.oid import NameOID
+from cryptography import x509
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
+from pycose.messages import Sign1Message
+from pycose.keys import EC2Key
+from pycose.keys.keyparam import EC2KpCurve, EC2KpX, EC2KpY, EC2KpD
+from pycose.keys.curves import P384
+from pycose.headers import Algorithm
+from pycose.algorithms import Es384
+from Crypto.Util.number import long_to_bytes
 
 # Add the caller script directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".github", "scripts"))
@@ -20,9 +32,122 @@ from call_remote_executor import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Test CA and signing certificate generation (module-level, generated once)
+# ---------------------------------------------------------------------------
+
+def _generate_test_ca_and_cert():
+    """Generate a test root CA and signing certificate for property tests."""
+    ca_key = ec.generate_private_key(ec.SECP384R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Root CA")])
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+        .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA384())
+    )
+
+    sign_key = ec.generate_private_key(ec.SECP384R1())
+    sign_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Signer")])
+    sign_cert = (
+        x509.CertificateBuilder()
+        .subject_name(sign_name)
+        .issuer_name(ca_name)
+        .public_key(sign_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+        .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+        .sign(ca_key, hashes.SHA384())
+    )
+
+    ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM).decode()
+    ca_der = ca_cert.public_bytes(serialization.Encoding.DER)
+    sign_cert_der = sign_cert.public_bytes(serialization.Encoding.DER)
+
+    return ca_pem, ca_der, sign_key, sign_cert_der
+
+
+_TEST_CA_PEM, _TEST_CA_DER, _TEST_SIGN_KEY, _TEST_SIGN_CERT_DER = _generate_test_ca_and_cert()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _make_caller() -> RemoteExecutorCaller:
-    """Create a caller instance for testing."""
+    """Create a caller instance for testing (no root_cert_pem/expected_pcrs => crypto skipped)."""
     return RemoteExecutorCaller(server_url="http://localhost:8080")
+
+
+def _wrap_cose_sign1(payload_dict: dict) -> str:
+    """Wrap a payload dict in a COSE Sign1 structure and return base64 string."""
+    payload_bytes = cbor2.dumps(payload_dict)
+    protected_header = cbor2.dumps({1: -35})  # ES384
+    cose_array = [protected_header, {}, payload_bytes, b'\x00' * 96]
+    return base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+
+
+def _make_signed_cose(payload_dict: dict) -> tuple[str, list]:
+    """Create a properly signed COSE Sign1 structure. Returns (base64_str, cose_array).
+
+    pycose encodes Sign1 with CBOR tag 18. The production code expects a plain
+    4-element array (no tag), so we unwrap the tag and re-encode as a plain list.
+    """
+    payload_bytes = cbor2.dumps(payload_dict)
+
+    priv_numbers = _TEST_SIGN_KEY.private_numbers()
+    pub_numbers = priv_numbers.public_numbers
+
+    d_bytes = long_to_bytes(priv_numbers.private_value).rjust(48, b'\x00')
+    x_bytes = long_to_bytes(pub_numbers.x).rjust(48, b'\x00')
+    y_bytes = long_to_bytes(pub_numbers.y).rjust(48, b'\x00')
+
+    cose_key = EC2Key.from_dict({
+        EC2KpCurve: P384,
+        EC2KpX: x_bytes,
+        EC2KpY: y_bytes,
+        EC2KpD: d_bytes,
+    })
+
+    msg = Sign1Message(
+        phdr={Algorithm: Es384},
+        uhdr={},
+        payload=payload_bytes,
+    )
+    msg.key = cose_key
+    encoded = msg.encode()
+
+    # pycose produces CBORTag(18, [...]); unwrap to plain list
+    decoded = cbor2.loads(encoded)
+    if hasattr(decoded, 'value'):
+        cose_array = list(decoded.value)
+    else:
+        cose_array = list(decoded)
+
+    # Re-encode as a plain 4-element array (no CBOR tag)
+    plain_encoded = cbor2.dumps(cose_array)
+    b64_str = base64.b64encode(plain_encoded).decode("ascii")
+    return b64_str, cose_array
+
+
+def _make_test_payload(extra_fields: dict | None = None) -> dict:
+    """Create a valid attestation payload dict using test certificates."""
+    doc = {
+        "module_id": "test-module",
+        "digest": "SHA384",
+        "timestamp": 1700000000000,
+        "pcrs": {0: b'\x00' * 48, 4: b'\xaa' * 48, 7: b'\xbb' * 48},
+        "certificate": _TEST_SIGN_CERT_DER,
+        "cabundle": [_TEST_CA_DER],
+    }
+    if extra_fields:
+        doc.update(extra_fields)
+    return doc
 
 
 # Strategy for generating valid attestation document dicts
@@ -45,35 +170,39 @@ def attestation_doc_strategy():
     )
 
 
+# ---------------------------------------------------------------------------
+# Property 1: Attestation decode round-trip
+# ---------------------------------------------------------------------------
+
 # Feature: gha-remote-executor-caller, Property 1: Attestation decode round-trip
-# **Validates: Requirements 4.1, 4.2, 6.1, 6.2**
+# **Validates: Requirements 4A.1, 4A.2, 4A.3, 6A.1, 6A.2, 6A.3**
 class TestAttestationDecodeRoundTrip:
     """Property 1: Attestation decode round-trip."""
 
     @given(doc=attestation_doc_strategy())
     @settings(max_examples=20)
     def test_round_trip(self, doc: dict):
-        """For any valid attestation document, CBOR-encoding then base64-encoding,
-        then passing through validate_attestation should produce a dict equivalent
-        to the original for the fields the validator inspects."""
+        """For any valid attestation document, wrapping in COSE Sign1, CBOR-encoding,
+        base64-encoding, then passing through validate_attestation should produce a
+        dict equivalent to the original for the fields the validator inspects."""
         caller = _make_caller()
 
-        # Encode: dict -> CBOR -> base64
-        cbor_bytes = cbor2.dumps(doc)
-        b64_str = base64.b64encode(cbor_bytes).decode("ascii")
+        b64_str = _wrap_cose_sign1(doc)
 
-        # Decode through validate_attestation
         result = caller.validate_attestation(b64_str)
 
-        # Verify all expected fields match
         for field in EXPECTED_ATTESTATION_FIELDS:
             assert result[field] == doc[field], (
                 f"Field {field} mismatch: {result[field]!r} != {doc[field]!r}"
             )
 
 
+# ---------------------------------------------------------------------------
+# Property 2: Attestation structural field validation
+# ---------------------------------------------------------------------------
+
 # Feature: gha-remote-executor-caller, Property 2: Attestation structural field validation
-# **Validates: Requirements 4.6**
+# **Validates: Requirements 4A.7**
 class TestAttestationStructuralFieldValidation:
     """Property 2: Attestation structural field validation."""
 
@@ -92,38 +221,31 @@ class TestAttestationStructuralFieldValidation:
         all expected structural fields are present as keys."""
         caller = _make_caller()
 
-        # Remove selected fields
         doc = dict(base_doc)
         for field in fields_to_remove:
             doc.pop(field, None)
 
-        # Encode: dict -> CBOR -> base64
-        cbor_bytes = cbor2.dumps(doc)
-        b64_str = base64.b64encode(cbor_bytes).decode("ascii")
+        b64_str = _wrap_cose_sign1(doc)
 
         all_present = len(fields_to_remove) == 0
 
         if all_present:
-            # Should succeed without raising
             result = caller.validate_attestation(b64_str)
             assert isinstance(result, dict)
         else:
-            # Should raise CallerError with phase "attestation"
             with pytest.raises(CallerError) as exc_info:
                 caller.validate_attestation(b64_str)
             assert exc_info.value.phase == "attestation"
 
 
+# ---------------------------------------------------------------------------
+# Property 4: Health check acceptance
+# ---------------------------------------------------------------------------
+
 # Feature: gha-remote-executor-caller, Property 4: Health check acceptance
 # **Validates: Requirements 8.2, 8.3**
 class TestHealthCheckAcceptance:
-    """Property 4: Health check acceptance.
-
-    For any health response JSON, health_check should succeed (not raise) if and
-    only if the HTTP status is 200 and the status field equals 'healthy'. For all
-    other combinations of HTTP status or status field value, it should raise a
-    CallerError.
-    """
+    """Property 4: Health check acceptance."""
 
     @given(
         status_code=st.integers(min_value=100, max_value=599),
@@ -140,26 +262,23 @@ class TestHealthCheckAcceptance:
 
         with patch("call_remote_executor.requests.get", return_value=mock_response):
             if status_code == 200 and status_value == "healthy":
-                # Should succeed without raising
                 result = caller.health_check()
                 assert isinstance(result, dict)
                 assert result["status"] == "healthy"
             else:
-                # Should raise CallerError
                 with pytest.raises(CallerError) as exc_info:
                     caller.health_check()
                 assert exc_info.value.phase == "health_check"
 
 
+# ---------------------------------------------------------------------------
+# Property 5: Execute HTTP error propagation
+# ---------------------------------------------------------------------------
+
 # Feature: gha-remote-executor-caller, Property 5: Execute HTTP error propagation
 # **Validates: Requirements 3.5**
 class TestExecuteHTTPErrorPropagation:
-    """Property 5: Execute HTTP error propagation.
-
-    For any HTTP error status code (4xx or 5xx), when the /execute endpoint
-    returns that status, the execute method should raise a CallerError
-    containing the status code and error details.
-    """
+    """Property 5: Execute HTTP error propagation."""
 
     @given(
         status_code=st.integers(min_value=400, max_value=599),
@@ -183,3 +302,158 @@ class TestExecuteHTTPErrorPropagation:
                 )
             assert exc_info.value.phase == "execute"
             assert exc_info.value.details["status_code"] == status_code
+
+
+# ---------------------------------------------------------------------------
+# Property 10: COSE signature rejects tampered payloads
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 10: COSE signature verification rejects tampered payloads
+# **Validates: Requirements 4C.15, 4C.16**
+class TestCOSESignatureRejectsTamperedPayloads:
+    """Property 10: COSE signature verification rejects tampered payloads."""
+
+    @given(tamper_byte=st.integers(min_value=0, max_value=255))
+    @settings(max_examples=20)
+    def test_tampered_payload_rejected(self, tamper_byte: int):
+        """Modifying the payload after signing should cause signature verification to fail."""
+        payload_dict = _make_test_payload()
+        b64_str, cose_array = _make_signed_cose(payload_dict)
+
+        # Tamper at the semantic level: modify a field in the payload dict,
+        # then re-CBOR-encode. This keeps CBOR structure valid so structural
+        # checks pass, but the COSE signature will no longer match.
+        tampered_dict = dict(payload_dict)
+        tampered_dict["timestamp"] = payload_dict["timestamp"] + 1 + tamper_byte
+        cose_array[2] = cbor2.dumps(tampered_dict)
+
+        # Re-encode the tampered COSE array
+        tampered_b64 = base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            root_cert_pem=_TEST_CA_PEM,
+        )
+
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(tampered_b64)
+        assert exc_info.value.phase == "attestation"
+
+
+# ---------------------------------------------------------------------------
+# Property 11: PCR validation accepts matching, rejects mismatching
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 11: PCR validation accepts matching and rejects mismatching values
+# **Validates: Requirements 4D.17, 4D.18, 4D.19**
+class TestPCRValidation:
+    """Property 11: PCR validation accepts matching and rejects mismatching values."""
+
+    @given(
+        pcr_values=st.dictionaries(
+            st.integers(min_value=0, max_value=15),
+            st.binary(min_size=48, max_size=48),
+            min_size=1,
+            max_size=5,
+        ),
+    )
+    @settings(max_examples=20)
+    def test_matching_pcrs_accepted(self, pcr_values: dict):
+        """When expected PCRs match document PCRs, validation should pass."""
+        expected = {idx: val.hex() for idx, val in pcr_values.items()}
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            expected_pcrs=expected,
+        )
+        # Should not raise
+        caller._validate_pcrs(pcr_values)
+
+    @given(
+        pcr_values=st.dictionaries(
+            st.integers(min_value=0, max_value=15),
+            st.binary(min_size=48, max_size=48),
+            min_size=1,
+            max_size=5,
+        ),
+    )
+    @settings(max_examples=20)
+    def test_mismatching_pcrs_rejected(self, pcr_values: dict):
+        """When expected PCRs don't match document PCRs, validation should fail."""
+        expected = {}
+        for idx, val in pcr_values.items():
+            flipped = bytes((b + 1) % 256 for b in val)
+            expected[idx] = flipped.hex()
+            break  # Only need one mismatch
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            expected_pcrs=expected,
+        )
+        with pytest.raises(CallerError) as exc_info:
+            caller._validate_pcrs(pcr_values)
+        assert exc_info.value.phase == "attestation"
+
+    @given(
+        missing_idx=st.integers(min_value=0, max_value=15),
+    )
+    @settings(max_examples=20)
+    def test_missing_pcr_index_rejected(self, missing_idx: int):
+        """When an expected PCR index is missing from the document, validation should fail."""
+        document_pcrs = {}  # Empty — no PCRs present
+        expected = {missing_idx: "aa" * 48}
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            expected_pcrs=expected,
+        )
+        with pytest.raises(CallerError) as exc_info:
+            caller._validate_pcrs(document_pcrs)
+        assert exc_info.value.phase == "attestation"
+
+
+# ---------------------------------------------------------------------------
+# Property 12: Certificate chain validation rejects untrusted certs
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 12: Certificate chain validation rejects untrusted certificates
+# **Validates: Requirements 4B.8, 4B.11, 4B.12**
+class TestCertificateChainValidation:
+    """Property 12: Certificate chain validation rejects untrusted certificates."""
+
+    def test_valid_chain_accepted(self):
+        """A certificate properly chained to the root CA should pass validation."""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            root_cert_pem=_TEST_CA_PEM,
+        )
+        # Should not raise
+        caller._verify_certificate_chain(_TEST_SIGN_CERT_DER, [_TEST_CA_DER])
+
+    @given(data=st.data())
+    @settings(max_examples=20)
+    def test_untrusted_cert_rejected(self, data):
+        """A certificate not chained to the configured root CA should fail validation."""
+        # Generate a completely different CA
+        other_ca_key = ec.generate_private_key(ec.SECP384R1())
+        other_ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Other CA")])
+        other_ca_cert = (
+            x509.CertificateBuilder()
+            .subject_name(other_ca_name)
+            .issuer_name(other_ca_name)
+            .public_key(other_ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+            .not_valid_after(datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(other_ca_key, hashes.SHA384())
+        )
+        other_ca_pem = other_ca_cert.public_bytes(serialization.Encoding.PEM).decode()
+
+        # Use the test signing cert (signed by _TEST_CA) but verify against the other CA
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            root_cert_pem=other_ca_pem,
+        )
+        with pytest.raises(CallerError) as exc_info:
+            caller._verify_certificate_chain(_TEST_SIGN_CERT_DER, [_TEST_CA_DER])
+        assert exc_info.value.phase == "attestation"
