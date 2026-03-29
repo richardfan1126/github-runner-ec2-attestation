@@ -76,14 +76,14 @@ Implement the client-side caller for the Remote Executor system: a Python script
 
 - [ ] 5. Upgrade dependencies, class skeleton, and attestation validation for COSE Sign1 / PKI / PCR changes
   - [ ] 5.1 Update `.github/scripts/pyproject.toml` with new cryptographic dependencies
-    - Add `cose>=1.0.0`, `pyOpenSSL>=23.0.0`, `pycryptodome>=3.19.0`, `cryptography>=41.0.0` to dependencies
+    - Add `pycose>=1.0.0`, `pyOpenSSL>=23.0.0`, `pycryptodome>=3.19.0`, `cryptography>=41.0.0` to dependencies
     - _Requirements: 4A.2, 4B.8, 4C.13, 4C.15_
 
   - [ ] 5.2 Update `RemoteExecutorCaller.__init__` to accept `root_cert_pem` and `expected_pcrs` parameters
     - Add `root_cert_pem: str = ""` parameter (PEM string, always provided by workflow)
     - Add `expected_pcrs: dict[int, str] | None = None` parameter (PCR4/PCR7 map, always provided by workflow)
     - Store both as instance attributes
-    - Add imports for `cose`, `OpenSSL.crypto`, `Crypto.Util.number.long_to_bytes`
+    - Add imports for `pycose`, `OpenSSL.crypto`, `Crypto.Util.number.long_to_bytes`
     - _Requirements: 1.6, 1.7, 4B.8, 4D.17_
 
   - [ ] 5.3 Rewrite `validate_attestation` for COSE Sign1 format with full cryptographic verification
@@ -106,8 +106,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
 
   - [ ] 5.5 Implement `_verify_cose_signature` private method
     - Extract EC2 public key (x, y on P-384) from signing certificate using `long_to_bytes`
-    - Construct `cose.EC2` key with `alg=ES384`, `crv=P_384`
-    - Build `cose.Sign1Message` from protected header, unprotected header, payload, and signature
+    - Construct `pycose.EC2` key with `alg=ES384`, `crv=P_384`
+    - Build `pycose.Sign1Message` from protected header, unprotected header, payload, and signature
     - Call `msg.verify_signature(key)`, raise `CallerError(phase="attestation")` if False
     - _Requirements: 4C.13, 4C.14, 4C.15, 4C.16_
 

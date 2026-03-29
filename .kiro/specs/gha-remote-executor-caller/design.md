@@ -10,7 +10,7 @@ The caller is designed to be triggered manually via `workflow_dispatch`, targeti
 
 1. **Single Python script**: All client logic (HTTP calls, COSE Sign1 verification, attestation validation, polling) lives in one `.github/scripts/call_remote_executor.py` file to keep the caller self-contained and easy to audit.
 2. **`cbor2` for CBOR decoding**: The attestation documents are COSE Sign1 structures encoded in CBOR. We use the `cbor2` library (pure Python) for decoding both the outer COSE structure and the inner attestation payload.
-3. **`cose` for COSE Sign1 verification**: The `cose` library provides `Sign1Message` and `EC2` key types for verifying the COSE signature using the signing certificate's public key.
+3. **`pycose` for COSE Sign1 verification**: The `pycose` library provides `Sign1Message` and `EC2` key types for verifying the COSE signature using the signing certificate's public key.
 4. **`pyOpenSSL` for certificate chain validation**: The `OpenSSL.crypto` module provides `X509Store` and `X509StoreContext` for validating the signing certificate against the CA bundle and root certificate, matching the AWS Nitro Enclaves attestation verification pattern.
 5. **`pycryptodome` for key parameter extraction**: The `Crypto.Util.number.long_to_bytes` utility converts the EC public key coordinates from integers to bytes for COSE key construction.
 6. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (health check → execute → poll loop).
@@ -57,7 +57,7 @@ sequenceDiagram
   scripts/
     sample-build.sh             # sample build script for remote execution
     call_remote_executor.py     # Python caller script
-    pyproject.toml              # caller dependencies (requests, cbor2, cose, pyOpenSSL, pycryptodome, cryptography)
+    pyproject.toml              # caller dependencies (requests, cbor2, pycose, pyOpenSSL, pycryptodome, cryptography)
 ```
 
 ## Components and Interfaces
@@ -246,9 +246,9 @@ Validation steps for server identity attestation (`validate_attestation`):
 **Step 3: COSE Signature Verification**
 1. Load the signing certificate and extract its public key's `public_numbers()` (x, y coordinates)
 2. Convert x and y from integers to bytes using `long_to_bytes`
-3. Construct a `cose.EC2` key with `alg=ES384`, `crv=P_384`, and the x/y bytes
+3. Construct a `pycose.EC2` key with `alg=ES384`, `crv=P_384`, and the x/y bytes
 4. CBOR-decode the protected header from `cose_array[0]`
-5. Construct a `cose.Sign1Message` with `phdr`, `uhdr=cose_array[1]`, `payload=cose_array[2]`
+5. Construct a `pycose.Sign1Message` with `phdr`, `uhdr=cose_array[1]`, `payload=cose_array[2]`
 6. Set `msg.signature = cose_array[3]`
 7. Call `msg.verify_signature(key)` — raise CallerError if it returns False
 
@@ -509,7 +509,7 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 
 - **Library**: [Hypothesis](https://hypothesis.readthedocs.io/) (already in project dev dependencies)
 - **CBOR library**: `cbor2` for encoding/decoding in tests
-- **COSE library**: `cose` for constructing test COSE Sign1 messages
+- **COSE library**: `pycose` for constructing test COSE Sign1 messages
 - **Crypto libraries**: `pyOpenSSL`, `cryptography` for generating test certificates and keys
 - **Minimum iterations**: 100 per property test (via `@settings(max_examples=100)`)
 - **Each property test references its design property** with a tag comment in the format:
