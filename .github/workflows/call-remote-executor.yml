@@ -17,6 +17,11 @@ on:
         required: false
         default: ""
         type: string
+      repository_url:
+        description: "Git repository URL to execute against (defaults to current repository)"
+        required: false
+        default: ""
+        type: string
 
 env:
   # AWS Nitro Attestation PKI root CA certificate (used by NitroTPM)
@@ -72,6 +77,7 @@ jobs:
             --server-url "${{ inputs.server_url }}" \
             --script-path "${{ inputs.script_path || '.github/scripts/sample-build.sh' }}" \
             --commit-hash "${{ inputs.commit_hash || github.sha }}" \
+            --repository-url "${{ inputs.repository_url || format('https://github.com/{0}', github.repository) }}" \
             --github-token "$GITHUB_TOKEN" \
             --root-cert-pem "$ROOT_CERT_PEM" \
             --expected-pcrs "$EXPECTED_PCRS"

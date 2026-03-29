@@ -622,6 +622,7 @@ def main():
     parser.add_argument("--server-url", required=True, help="Base URL of the Remote Executor server")
     parser.add_argument("--script-path", default=".github/scripts/sample-build.sh", help="Path to script in the repository")
     parser.add_argument("--commit-hash", default="", help="Git commit SHA to execute")
+    parser.add_argument("--repository-url", default="", help="Git repository URL to execute against")
     parser.add_argument("--github-token", default="", help="GitHub token for authentication")
     parser.add_argument("--root-cert-pem", required=True, help="AWS NitroTPM attestation root CA certificate PEM string")
     parser.add_argument("--expected-pcrs", required=True, help="JSON string mapping PCR index to expected hex value")
@@ -653,7 +654,7 @@ def main():
 
     try:
         exit_code = caller.run(
-            repository_url="",  # Will be set by workflow
+            repository_url=args.repository_url,
             commit_hash=args.commit_hash,
             script_path=args.script_path,
             github_token=args.github_token,
