@@ -42,15 +42,15 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test invalid CBOR raises `CallerError` with phase "attestation" (Req 4.4)
     - _Requirements: 4.3, 4.4_
 
-- [ ] 3. Implement health check and execute methods
-  - [ ] 3.1 Implement `health_check` method
+- [x] 3. Implement health check and execute methods
+  - [x] 3.1 Implement `health_check` method
     - Send HTTP GET to `{server_url}/health` with configurable timeout
     - On HTTP 200 with `status == "healthy"`, return parsed JSON
     - On non-200 or `status != "healthy"`, raise `CallerError(phase="health_check")`
     - On connection error, raise `CallerError(phase="health_check")` with connection error message
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
-  - [ ] 3.2 Implement `execute` method
+  - [x] 3.2 Implement `execute` method
     - Send HTTP POST to `{server_url}/execute` with JSON body containing `repository_url`, `commit_hash`, `script_path`, `github_token`
     - On HTTP 200, extract and return `execution_id` and `attestation_document` from response
     - On HTTP error status, raise `CallerError(phase="execute")` with status code and error details
@@ -58,20 +58,20 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Use configurable timeout for the request
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
 
-  - [ ] 3.3 Write property test for health check acceptance
+  - [x] 3.3 Write property test for health check acceptance
     - **Property 4: Health check acceptance**
     - **Validates: Requirements 8.2, 8.3**
 
-  - [ ] 3.4 Write property test for execute HTTP error propagation
+  - [x] 3.4 Write property test for execute HTTP error propagation
     - **Property 5: Execute HTTP error propagation**
     - **Validates: Requirements 3.5**
 
-  - [ ] 3.5 Write unit tests for health check and execute edge cases
+  - [x] 3.5 Write unit tests for health check and execute edge cases
     - Test connection refused raises `CallerError` with phase "health_check" (Req 8.4)
     - Test connection refused raises `CallerError` with phase "execute" (Req 3.6)
     - _Requirements: 8.4, 3.6_
 
-- [ ] 4. Checkpoint - Ensure all tests pass
+- [x] 4. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 5. Implement polling and output attestation

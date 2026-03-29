@@ -3,6 +3,7 @@
 import base64
 import sys
 import os
+from unittest.mock import patch, MagicMock
 
 import cbor2
 import pytest
@@ -111,3 +112,74 @@ class TestAttestationStructuralFieldValidation:
             with pytest.raises(CallerError) as exc_info:
                 caller.validate_attestation(b64_str)
             assert exc_info.value.phase == "attestation"
+
+
+# Feature: gha-remote-executor-caller, Property 4: Health check acceptance
+# **Validates: Requirements 8.2, 8.3**
+class TestHealthCheckAcceptance:
+    """Property 4: Health check acceptance.
+
+    For any health response JSON, health_check should succeed (not raise) if and
+    only if the HTTP status is 200 and the status field equals 'healthy'. For all
+    other combinations of HTTP status or status field value, it should raise a
+    CallerError.
+    """
+
+    @given(
+        status_code=st.integers(min_value=100, max_value=599),
+        status_value=st.text(min_size=0, max_size=50),
+    )
+    @settings(max_examples=100)
+    def test_health_check_acceptance(self, status_code: int, status_value: str):
+        caller = _make_caller()
+
+        mock_response = MagicMock()
+        mock_response.status_code = status_code
+        mock_response.json.return_value = {"status": status_value}
+        mock_response.text = f'{{"status": "{status_value}"}}'
+
+        with patch("call_remote_executor.requests.get", return_value=mock_response):
+            if status_code == 200 and status_value == "healthy":
+                # Should succeed without raising
+                result = caller.health_check()
+                assert isinstance(result, dict)
+                assert result["status"] == "healthy"
+            else:
+                # Should raise CallerError
+                with pytest.raises(CallerError) as exc_info:
+                    caller.health_check()
+                assert exc_info.value.phase == "health_check"
+
+
+# Feature: gha-remote-executor-caller, Property 5: Execute HTTP error propagation
+# **Validates: Requirements 3.5**
+class TestExecuteHTTPErrorPropagation:
+    """Property 5: Execute HTTP error propagation.
+
+    For any HTTP error status code (4xx or 5xx), when the /execute endpoint
+    returns that status, the execute method should raise a CallerError
+    containing the status code and error details.
+    """
+
+    @given(
+        status_code=st.integers(min_value=400, max_value=599),
+        response_body=st.text(min_size=0, max_size=200),
+    )
+    @settings(max_examples=100)
+    def test_execute_http_error_propagation(self, status_code: int, response_body: str):
+        caller = _make_caller()
+
+        mock_response = MagicMock()
+        mock_response.status_code = status_code
+        mock_response.text = response_body
+
+        with patch("call_remote_executor.requests.post", return_value=mock_response):
+            with pytest.raises(CallerError) as exc_info:
+                caller.execute(
+                    repository_url="https://github.com/owner/repo",
+                    commit_hash="abc123",
+                    script_path=".github/scripts/sample-build.sh",
+                    github_token="ghp_test_token",
+                )
+            assert exc_info.value.phase == "execute"
+            assert exc_info.value.details["status_code"] == status_code

@@ -61,7 +61,41 @@ class RemoteExecutorCaller:
         Returns parsed JSON response.
         Raises CallerError if unhealthy or unreachable.
         """
-        raise NotImplementedError
+        url = f"{self.server_url}/health"
+        try:
+            response = requests.get(url, timeout=self.timeout)
+        except requests.ConnectionError as exc:
+            raise CallerError(
+                message=f"Failed to connect to server health endpoint: {exc}",
+                phase="health_check",
+                details={"url": url, "error": str(exc)},
+            )
+        except requests.RequestException as exc:
+            raise CallerError(
+                message=f"Health check request failed: {exc}",
+                phase="health_check",
+                details={"url": url, "error": str(exc)},
+            )
+
+        if response.status_code != 200:
+            raise CallerError(
+                message=f"Health check failed with HTTP {response.status_code}",
+                phase="health_check",
+                details={
+                    "status_code": response.status_code,
+                    "body": response.text,
+                },
+            )
+
+        data = response.json()
+        if data.get("status") != "healthy":
+            raise CallerError(
+                message=f"Server is not healthy: status={data.get('status')}",
+                phase="health_check",
+                details={"response": data},
+            )
+
+        return data
 
     def execute(
         self,
@@ -75,7 +109,39 @@ class RemoteExecutorCaller:
         Returns parsed JSON response with execution_id and attestation_document.
         Raises CallerError on HTTP errors or connection failures.
         """
-        raise NotImplementedError
+        url = f"{self.server_url}/execute"
+        payload = {
+            "repository_url": repository_url,
+            "commit_hash": commit_hash,
+            "script_path": script_path,
+            "github_token": github_token,
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=self.timeout)
+        except requests.ConnectionError as exc:
+            raise CallerError(
+                message=f"Failed to connect to server execute endpoint: {exc}",
+                phase="execute",
+                details={"url": url, "error": str(exc)},
+            )
+        except requests.RequestException as exc:
+            raise CallerError(
+                message=f"Execute request failed: {exc}",
+                phase="execute",
+                details={"url": url, "error": str(exc)},
+            )
+
+        if response.status_code != 200:
+            raise CallerError(
+                message=f"Execute failed with HTTP {response.status_code}",
+                phase="execute",
+                details={
+                    "status_code": response.status_code,
+                    "body": response.text,
+                },
+            )
+
+        return response.json()
 
     def validate_attestation(self, attestation_b64: str) -> dict:
         """Decode base64 -> binary -> CBOR. Validate structural fields.

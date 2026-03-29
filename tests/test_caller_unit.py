@@ -3,8 +3,10 @@
 import base64
 import sys
 import os
+from unittest.mock import patch
 
 import pytest
+import requests
 
 # Add the caller script directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".github", "scripts"))
@@ -40,3 +42,30 @@ class TestAttestationValidationEdgeCases:
         with pytest.raises(CallerError) as exc_info:
             caller.validate_attestation(invalid_cbor_b64)
         assert exc_info.value.phase == "attestation"
+
+
+class TestHealthCheckAndExecuteEdgeCases:
+    """Unit tests for health check and execute connection error edge cases."""
+
+    def test_health_check_connection_refused_raises_caller_error(self):
+        """Connection refused on health_check raises CallerError with phase 'health_check'.
+        Validates: Requirement 8.4"""
+        caller = _make_caller()
+        with patch("call_remote_executor.requests.get", side_effect=requests.ConnectionError("Connection refused")):
+            with pytest.raises(CallerError) as exc_info:
+                caller.health_check()
+            assert exc_info.value.phase == "health_check"
+
+    def test_execute_connection_refused_raises_caller_error(self):
+        """Connection refused on execute raises CallerError with phase 'execute'.
+        Validates: Requirement 3.6"""
+        caller = _make_caller()
+        with patch("call_remote_executor.requests.post", side_effect=requests.ConnectionError("Connection refused")):
+            with pytest.raises(CallerError) as exc_info:
+                caller.execute(
+                    repository_url="https://github.com/owner/repo",
+                    commit_hash="abc123",
+                    script_path=".github/scripts/sample-build.sh",
+                    github_token="ghp_fake_token",
+                )
+            assert exc_info.value.phase == "execute"
