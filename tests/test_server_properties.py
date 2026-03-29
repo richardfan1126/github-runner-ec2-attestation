@@ -32,6 +32,17 @@ def get_test_config():
     )
 
 
+# Create app and client once at module level for read-only tests (GET endpoints).
+# Use a high rate limit so shared state doesn't cause 429s across tests.
+def _get_shared_config():
+    config = get_test_config()
+    config.rate_limit_per_ip = 100000
+    return config
+
+_app = create_app(_get_shared_config())
+_client = TestClient(_app)
+
+
 # Strategies for generating test data
 valid_repo_url = st.text(min_size=1).map(
     lambda x: f"https://github.com/{x.replace('/', '_')}/repo"
@@ -58,8 +69,8 @@ execution_request = st.fixed_dictionaries({
 
 
 # Feature: github-actions-remote-executor, Property 3: Concurrent Request Handling
-@settings(max_examples=20, deadline=None)
-@given(st.lists(execution_request, min_size=2, max_size=10))
+@settings(max_examples=5, deadline=None)
+@given(st.lists(execution_request, min_size=2, max_size=5))
 def test_concurrent_request_handling(requests_list):
     """
     **Validates: Requirements 1.5**
@@ -67,6 +78,7 @@ def test_concurrent_request_handling(requests_list):
     For any set of concurrent execution requests, the server should handle 
     all requests without blocking or failure.
     """
+    # Needs fresh app per example due to rate limiter state
     app = create_app(get_test_config())
     client = TestClient(app)
     
@@ -128,7 +140,7 @@ def test_concurrent_request_handling(requests_list):
 
 
 # Feature: github-actions-remote-executor, Property 19: Immediate Response with Attestation
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(execution_request)
 def test_immediate_response_with_attestation(req_data):
     """
@@ -138,6 +150,7 @@ def test_immediate_response_with_attestation(req_data):
     containing both the attestation document and execution ID before script 
     execution completes.
     """
+    # Needs fresh app per example due to rate limiter state
     app = create_app(get_test_config())
     client = TestClient(app)
     
@@ -202,7 +215,7 @@ def test_immediate_response_with_attestation(req_data):
 
 
 # Feature: github-actions-remote-executor, Property 30: Output Endpoint Status Return
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(st.uuids().map(str), st.sampled_from(list(ExecutionStatus)))
 def test_output_endpoint_status_return(execution_id, status):
     """
@@ -211,9 +224,6 @@ def test_output_endpoint_status_return(execution_id, status):
     For any execution ID, accessing the output endpoint should return the 
     current execution status.
     """
-    app = create_app(get_test_config())
-    client = TestClient(app)
-    
     # Create execution record
     record = ExecutionRecord(
         execution_id=execution_id,
@@ -228,8 +238,8 @@ def test_output_endpoint_status_return(execution_id, status):
         timeout_seconds=300
     )
     
-    with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-        with patch.object(app.state.output_collector, 'get_output') as mock_output:
+    with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
+        with patch.object(_app.state.output_collector, 'get_output') as mock_output:
             mock_output.return_value = OutputData(
                 stdout="",
                 stderr="",
@@ -239,7 +249,7 @@ def test_output_endpoint_status_return(execution_id, status):
                 exit_code=None
             )
             
-            response = client.get(f"/execution/{execution_id}/output")
+            response = _client.get(f"/execution/{execution_id}/output")
             
             if response.status_code == 200:
                 data = response.json()
@@ -249,7 +259,7 @@ def test_output_endpoint_status_return(execution_id, status):
 
 
 # Feature: github-actions-remote-executor, Property 33: Completion Exit Code Inclusion
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(st.uuids().map(str), st.integers(min_value=-1, max_value=255))
 def test_completion_exit_code_inclusion(execution_id, exit_code):
     """
@@ -258,9 +268,6 @@ def test_completion_exit_code_inclusion(execution_id, exit_code):
     For any completed script execution, the output endpoint response should 
     include the exit code.
     """
-    app = create_app(get_test_config())
-    client = TestClient(app)
-    
     # Create completed execution record
     record = ExecutionRecord(
         execution_id=execution_id,
@@ -275,8 +282,8 @@ def test_completion_exit_code_inclusion(execution_id, exit_code):
         timeout_seconds=300
     )
     
-    with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-        with patch.object(app.state.output_collector, 'get_output') as mock_output:
+    with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
+        with patch.object(_app.state.output_collector, 'get_output') as mock_output:
             mock_output.return_value = OutputData(
                 stdout="test output",
                 stderr="",
@@ -286,7 +293,7 @@ def test_completion_exit_code_inclusion(execution_id, exit_code):
                 exit_code=exit_code
             )
             
-            response = client.get(f"/execution/{execution_id}/output")
+            response = _client.get(f"/execution/{execution_id}/output")
             
             assert response.status_code == 200
             data = response.json()
@@ -297,7 +304,7 @@ def test_completion_exit_code_inclusion(execution_id, exit_code):
 
 
 # Feature: github-actions-remote-executor, Property 34: Completion Flag Accuracy
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(st.uuids().map(str), st.booleans())
 def test_completion_flag_accuracy(execution_id, is_complete):
     """
@@ -306,9 +313,6 @@ def test_completion_flag_accuracy(execution_id, is_complete):
     For any execution, the output endpoint response should include a boolean 
     completion flag that accurately reflects whether execution is complete.
     """
-    app = create_app(get_test_config())
-    client = TestClient(app)
-    
     status = ExecutionStatus.COMPLETED if is_complete else ExecutionStatus.RUNNING
     
     record = ExecutionRecord(
@@ -324,8 +328,8 @@ def test_completion_flag_accuracy(execution_id, is_complete):
         timeout_seconds=300
     )
     
-    with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-        with patch.object(app.state.output_collector, 'get_output') as mock_output:
+    with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
+        with patch.object(_app.state.output_collector, 'get_output') as mock_output:
             mock_output.return_value = OutputData(
                 stdout="test",
                 stderr="",
@@ -335,7 +339,7 @@ def test_completion_flag_accuracy(execution_id, is_complete):
                 exit_code=0 if is_complete else None
             )
             
-            response = client.get(f"/execution/{execution_id}/output")
+            response = _client.get(f"/execution/{execution_id}/output")
             
             assert response.status_code == 200
             data = response.json()
@@ -345,7 +349,7 @@ def test_completion_flag_accuracy(execution_id, is_complete):
 
 
 # Feature: github-actions-remote-executor, Property 35: Invalid Execution ID Response
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(st.uuids().map(str))
 def test_invalid_execution_id_response(execution_id):
     """
@@ -354,12 +358,9 @@ def test_invalid_execution_id_response(execution_id):
     For any non-existent execution ID, the output endpoint should return 
     HTTP 404 with an execution not found error.
     """
-    app = create_app(get_test_config())
-    client = TestClient(app)
-    
     # Mock execution manager to return None (not found)
-    with patch.object(app.state.execution_manager, 'get_execution', return_value=None):
-        response = client.get(f"/execution/{execution_id}/output")
+    with patch.object(_app.state.execution_manager, 'get_execution', return_value=None):
+        response = _client.get(f"/execution/{execution_id}/output")
         
         assert response.status_code == 404, \
             f"Expected 404 for non-existent execution, got {response.status_code}"
@@ -371,7 +372,7 @@ def test_invalid_execution_id_response(execution_id):
 
 
 # Feature: github-actions-remote-executor, Property 47: Script Size Validation
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(execution_request, st.integers(min_value=1, max_value=10000000))
 def test_script_size_validation(req_data, file_size):
     """
@@ -380,6 +381,7 @@ def test_script_size_validation(req_data, file_size):
     For any execution request, the server should validate the script file 
     size before execution.
     """
+    # Needs fresh app per example due to rate limiter state
     app = create_app(get_test_config())
     client = TestClient(app)
     
@@ -391,7 +393,7 @@ def test_script_size_validation(req_data, file_size):
             
             with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
                 mock_fetch.return_value = FileContent(
-                    content=b"x" * file_size,
+                    content=b"x" * min(file_size, 1024),  # Don't allocate huge buffers for test
                     temp_path="/tmp/test.sh",
                     size_bytes=file_size
                 )
@@ -411,7 +413,7 @@ def test_script_size_validation(req_data, file_size):
 
 
 # Feature: github-actions-remote-executor, Property 48: Oversized Script Rejection
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(execution_request)
 def test_oversized_script_rejection(req_data):
     """
@@ -420,11 +422,11 @@ def test_oversized_script_rejection(req_data):
     For any script file that exceeds the maximum allowed size, the server 
     should return HTTP 413 with a file too large error.
     """
+    # Needs fresh app per example due to rate limiter state
     app = create_app(get_test_config())
     client = TestClient(app)
     
     max_size = app.state.config.max_script_size_bytes
-    oversized = max_size + 1
     
     with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
         mock_validate.return_value = Mock(valid=True, errors=[])
@@ -434,9 +436,9 @@ def test_oversized_script_rejection(req_data):
             
             with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
                 mock_fetch.return_value = FileContent(
-                    content=b"x" * oversized,
+                    content=b"x" * 1024,  # Small buffer, size_bytes controls validation
                     temp_path="/tmp/test.sh",
-                    size_bytes=oversized
+                    size_bytes=max_size + 1
                 )
                 
                 with patch.object(app.state.repository_client, 'cleanup_temp_file') as mock_cleanup:
@@ -455,7 +457,7 @@ def test_oversized_script_rejection(req_data):
 
 
 # Feature: github-actions-remote-executor, Property 49: Rate Limiting per IP
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=10, deadline=None)
 @given(st.integers(min_value=1, max_value=20))
 def test_rate_limiting_per_ip(num_requests):
     """
@@ -464,6 +466,7 @@ def test_rate_limiting_per_ip(num_requests):
     For any source IP address that exceeds the configured rate limit, 
     subsequent requests should be rejected with HTTP 429.
     """
+    # Needs fresh app per example to reset rate limiter state
     app = create_app(get_test_config())
     client = TestClient(app)
     

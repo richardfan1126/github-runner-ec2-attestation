@@ -134,7 +134,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Add test: PCR value mismatch raises `CallerError` (Req 4D.19)
     - _Requirements: 4A.4, 4A.5, 4A.6, 4B.12, 4C.16, 4D.18, 4D.19_
 
-- [ ] 6. Checkpoint - Ensure all attestation tests pass
+- [x] 6. Checkpoint - Ensure all attestation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 7. Implement polling and output attestation
