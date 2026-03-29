@@ -20,8 +20,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Define `EXPECTED_ATTESTATION_FIELDS` constant list
     - _Requirements: 3.7, 5.2, 5.5, 5.7, 8.5_
 
-- [ ] 2. Implement attestation validation methods
-  - [ ] 2.1 Implement `validate_attestation` method
+- [x] 2. Implement attestation validation methods
+  - [x] 2.1 Implement `validate_attestation` method
     - Base64-decode the attestation string to binary
     - CBOR-decode the binary to a Python dict using `cbor2`
     - Verify all `EXPECTED_ATTESTATION_FIELDS` are present as keys
@@ -29,15 +29,15 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Raise `CallerError(phase="attestation")` on base64 decode failure, CBOR parse failure, or missing fields
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
 
-  - [ ] 2.2 Write property test for attestation decode round-trip
+  - [x] 2.2 Write property test for attestation decode round-trip
     - **Property 1: Attestation decode round-trip**
     - **Validates: Requirements 4.1, 4.2, 6.1, 6.2**
 
-  - [ ] 2.3 Write property test for attestation structural field validation
+  - [x] 2.3 Write property test for attestation structural field validation
     - **Property 2: Attestation structural field validation**
     - **Validates: Requirements 4.6**
 
-  - [ ] 2.4 Write unit tests for attestation validation edge cases
+  - [x] 2.4 Write unit tests for attestation validation edge cases
     - Test invalid base64 raises `CallerError` with phase "attestation" (Req 4.3)
     - Test invalid CBOR raises `CallerError` with phase "attestation" (Req 4.4)
     - _Requirements: 4.3, 4.4_

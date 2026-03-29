@@ -83,7 +83,47 @@ class RemoteExecutorCaller:
         Returns parsed attestation document as dict.
         Raises CallerError on decode/parse/validation failures.
         """
-        raise NotImplementedError
+        # Base64-decode the attestation string to binary
+        try:
+            raw_bytes = base64.b64decode(attestation_b64)
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to base64-decode attestation document: {exc}",
+                phase="attestation",
+                details={"error": str(exc)},
+            )
+
+        # CBOR-decode the binary to a Python dict
+        try:
+            doc = cbor2.loads(raw_bytes)
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to CBOR-decode attestation document: {exc}",
+                phase="attestation",
+                details={"error": str(exc)},
+            )
+
+        if not isinstance(doc, dict):
+            raise CallerError(
+                message=f"Attestation document is not a map, got {type(doc).__name__}",
+                phase="attestation",
+                details={"type": type(doc).__name__},
+            )
+
+        # Verify all expected structural fields are present
+        missing = [f for f in EXPECTED_ATTESTATION_FIELDS if f not in doc]
+        if missing:
+            raise CallerError(
+                message=f"Attestation document missing fields: {missing}",
+                phase="attestation",
+                details={"missing_fields": missing},
+            )
+
+        # Log attestation document fields for audit
+        for field in EXPECTED_ATTESTATION_FIELDS:
+            logger.info("Attestation field %s: %s", field, doc[field])
+
+        return doc
 
     def poll_output(self, execution_id: str) -> dict:
         """Poll GET /execution/{id}/output until complete or timeout.
