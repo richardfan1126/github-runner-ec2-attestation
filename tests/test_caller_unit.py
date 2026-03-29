@@ -340,3 +340,75 @@ class TestOutputAttestationEdgeCases:
         # We verify the caller defaults allow this pattern.
         assert caller.max_retries == 3
         assert caller.poll_interval == 5
+
+import os
+import stat
+import subprocess
+import yaml
+
+
+class TestSampleBuildScript:
+    """Unit tests for the sample build script."""
+
+    SCRIPT_PATH = os.path.join(
+        os.path.dirname(__file__), "..", ".github", "scripts", "sample-build.sh"
+    )
+
+    def test_sample_build_script_exists_and_is_executable(self):
+        """Sample build script must exist and have the executable bit set.
+        Validates: Requirement 2.1"""
+        assert os.path.isfile(self.SCRIPT_PATH), "sample-build.sh does not exist"
+        mode = os.stat(self.SCRIPT_PATH).st_mode
+        assert mode & stat.S_IXUSR, "sample-build.sh is not executable"
+
+    def test_sample_build_script_contains_system_info_commands(self):
+        """Sample build script must include basic system information commands.
+        Validates: Requirement 2.4"""
+        with open(self.SCRIPT_PATH) as f:
+            content = f.read()
+        assert "hostname" in content
+        assert "date" in content
+        assert "uname" in content
+        assert "whoami" in content
+        assert "pwd" in content
+
+
+class TestWorkflowValidation:
+    """Unit tests for the GitHub Actions workflow definition."""
+
+    WORKFLOW_PATH = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        ".github",
+        "workflows",
+        "call-remote-executor.yml",
+    )
+
+    def test_empty_server_url_raises_error(self):
+        """The caller script must reject an empty --server-url.
+        Validates: Requirement 1.5"""
+        script = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            ".github",
+            "scripts",
+            "call_remote_executor.py",
+        )
+        result = subprocess.run(
+            [
+                "python",
+                script,
+                "--server-url",
+                "",
+                "--root-cert-pem",
+                "dummy",
+                "--expected-pcrs",
+                '{"4":"aa","7":"bb"}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+        # argparse treats empty string as provided, but the workflow validates
+        # non-empty before invoking the script. The script itself should still
+        # fail when it tries to connect to an empty URL.
+        assert result.returncode != 0

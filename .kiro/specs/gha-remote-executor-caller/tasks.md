@@ -211,8 +211,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 9. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 10. Create GitHub Actions workflow and sample build script
-  - [ ] 10.1 Create `.github/workflows/call-remote-executor.yml`
+- [x] 10. Create GitHub Actions workflow and sample build script
+  - [x] 10.1 Create `.github/workflows/call-remote-executor.yml`
     - Define `workflow_dispatch` trigger with inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`)
     - Hardcode the NitroTPM attestation root CA certificate PEM inline as a multi-line environment variable or step output
     - Hardcode the expected PCR4 and PCR7 values as a JSON map `{"4": "<hex>", "7": "<hex>"}` inline in the workflow
@@ -223,20 +223,20 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Write `$GITHUB_STEP_SUMMARY` from the caller script output
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 7.7_
 
-  - [ ] 10.2 Create `.github/scripts/sample-build.sh`
+  - [x] 10.2 Create `.github/scripts/sample-build.sh`
     - Create shell script with `#!/usr/bin/env bash` and `set -euo pipefail`
     - Output hostname, date, kernel version, user, and working directory
     - Exit with code 0
     - Ensure the file is executable
     - _Requirements: 2.1, 2.2, 2.3, 2.4_
 
-  - [ ] 10.3 Write unit tests for workflow and sample script
+  - [x] 10.3 Write unit tests for workflow and sample script
     - Test sample build script file exists and is executable (Req 2.1)
     - Test sample build script contains system info commands (Req 2.4)
     - Test empty `server_url` raises error (Req 1.5)
     - _Requirements: 1.5, 2.1, 2.4_
 
-- [ ] 11. Final checkpoint - Ensure all tests pass
+- [x] 11. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

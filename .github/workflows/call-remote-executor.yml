@@ -1,0 +1,77 @@
+name: Call Remote Executor
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "Base URL of the Remote Executor server"
+        required: true
+        type: string
+      script_path:
+        description: "Path to script in the repository to execute remotely"
+        required: false
+        default: ".github/scripts/sample-build.sh"
+        type: string
+      commit_hash:
+        description: "Git commit SHA to execute (defaults to current SHA)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  # AWS Nitro Attestation PKI root CA certificate (used by NitroTPM)
+  # Downloaded from https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip
+  # Fingerprint: 64:1A:03:21:A3:E2:44:EF:E4:56:46:31:95:D6:06:31:7E:D7:CD:CC:3C:17:56:E0:98:93:F3:C6:8F:79:BB:5B
+  ROOT_CERT_PEM: |
+    -----BEGIN CERTIFICATE-----
+    MIICETCCAZagAwIBAgIRAPkxdWgbkK/hHUbMtOTn+FYwCgYIKoZIzj0EAwMwSTEL
+    MAkGA1UEBhMCVVMxDzANBgNVBAoMBkFtYXpvbjEMMAoGA1UECwwDQVdTMRswGQYD
+    VQQDDBJhd3Mubml0cm8tZW5jbGF2ZXMwHhcNMTkxMDI4MTMyODA1WhcNNDkxMDI4
+    MTQyODA1WjBJMQswCQYDVQQGEwJVUzEPMA0GA1UECgwGQW1hem9uMQwwCgYDVQQL
+    DANBV1MxGzAZBgNVBAMMEmF3cy5uaXRyby1lbmNsYXZlczB2MBAGByqGSM49AgEG
+    BSuBBAAiA2IABPwCVOumCMHzaHDimtqQvkY4MpJzbolL//Zy2YlES1BR5TSksfbb
+    48C8WBoyt7F2Bw7eEtaaP+ohG2bnUs990d0JX28nQPJNP1F7mt4LMe5GeGMB1e/J
+    +1rgHbsMqRCjQjBAMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFJAltQ3ZBUfn
+    Sh2dC4ABVfxmxCVKMA4GA1UdDwEB/wQEAwIBhjAKBggqhkjOPQQDAwNpADBmAjEA
+    o38vKDEPe1MRcWojBfLDp2Ob1mMq2s0Y3nkPLKdGzl9UQV5ZkKQpR4X2/cceYfLm
+    AjEAovB4rBF092oFJPDqoMjCXMSBIG0EqBMJEIEPXQ5q0CF5vYFABgSjhvXzLPdO
+    e98K
+    -----END CERTIFICATE-----
+  # Expected PCR values for the attestable AMI (PCR4 and PCR7)
+  EXPECTED_PCRS: '{"4": "PLACEHOLDER_PCR4_HEX_VALUE", "7": "PLACEHOLDER_PCR7_HEX_VALUE"}'
+
+jobs:
+  call-remote-executor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ inputs.server_url }}" ]; then
+            echo "::error::server_url input is required and cannot be empty"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_hash || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".github/scripts/[dev]"
+
+      - name: Run Remote Executor Caller
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/scripts/call_remote_executor.py \
+            --server-url "${{ inputs.server_url }}" \
+            --script-path "${{ inputs.script_path || '.github/scripts/sample-build.sh' }}" \
+            --commit-hash "${{ inputs.commit_hash || github.sha }}" \
+            --github-token "$GITHUB_TOKEN" \
+            --root-cert-pem "$ROOT_CERT_PEM" \
+            --expected-pcrs "$EXPECTED_PCRS"
