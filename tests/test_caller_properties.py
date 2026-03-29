@@ -692,3 +692,113 @@ class TestPollingRetryOnTransientErrors:
                 result = caller.poll_output("test-exec-id")
 
         assert result["stdout"] == "recovered"
+
+# ---------------------------------------------------------------------------
+# Property 8: Exit code propagation
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 8: Exit code propagation
+# **Validates: Requirements 7.6**
+class TestExitCodePropagation:
+    """Property 8: For any integer exit code returned by the remote script,
+    the run method should return that same exit code."""
+
+    @given(
+        exit_code=st.integers(min_value=0, max_value=255),
+    )
+    @settings(max_examples=100)
+    def test_exit_code_propagated(self, exit_code: int):
+        """run() returns the same exit code as the remote script."""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,
+            max_poll_duration=9999,
+        )
+
+        health_response = MagicMock()
+        health_response.status_code = 200
+        health_response.json.return_value = {"status": "healthy"}
+
+        exec_response = MagicMock()
+        exec_response.status_code = 200
+        exec_response.json.return_value = {
+            "execution_id": "test-id",
+            "attestation_document": "dGVzdA==",
+            "status": "queued",
+        }
+
+        poll_response = MagicMock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "stdout": "out",
+            "stderr": "err",
+            "complete": True,
+            "exit_code": exit_code,
+            "output_attestation_document": None,
+        }
+
+        with patch("call_remote_executor.requests.get", side_effect=[health_response, poll_response]):
+            with patch("call_remote_executor.requests.post", return_value=exec_response):
+                with patch.object(caller, "validate_attestation", return_value={}):
+                    result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        assert result == exit_code
+
+
+# ---------------------------------------------------------------------------
+# Property 9: Summary contains execution results
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 9: Summary contains execution results
+# **Validates: Requirements 7.7**
+class TestSummaryContainsExecutionResults:
+    """Property 9: The generated summary string should contain stdout, stderr,
+    exit code, attestation status, and output integrity status."""
+
+    @given(
+        stdout_val=st.text(min_size=1, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N", "P", "Z"))),
+        stderr_val=st.text(min_size=0, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N", "P", "Z"))),
+        exit_code_val=st.integers(min_value=0, max_value=255),
+    )
+    @settings(max_examples=100)
+    def test_summary_contains_all_fields(self, stdout_val: str, stderr_val: str, exit_code_val: int):
+        """Summary string contains stdout, stderr, exit code, attestation and integrity status."""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,
+            max_poll_duration=9999,
+        )
+
+        health_response = MagicMock()
+        health_response.status_code = 200
+        health_response.json.return_value = {"status": "healthy"}
+
+        exec_response = MagicMock()
+        exec_response.status_code = 200
+        exec_response.json.return_value = {
+            "execution_id": "test-id",
+            "attestation_document": "dGVzdA==",
+            "status": "queued",
+        }
+
+        poll_response = MagicMock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "stdout": stdout_val,
+            "stderr": stderr_val,
+            "complete": True,
+            "exit_code": exit_code_val,
+            "output_attestation_document": None,
+        }
+
+        with patch("call_remote_executor.requests.get", side_effect=[health_response, poll_response]):
+            with patch("call_remote_executor.requests.post", return_value=exec_response):
+                with patch.object(caller, "validate_attestation", return_value={}):
+                    caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        summary = caller.summary
+        assert stdout_val in summary
+        assert stderr_val in summary
+        assert str(exit_code_val) in summary
+        assert "pass" in summary  # attestation status
+        assert "skipped" in summary  # output integrity (no attestation doc)

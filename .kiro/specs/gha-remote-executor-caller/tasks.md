@@ -181,8 +181,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test default max poll duration is 600 seconds (Req 5.5)
     - _Requirements: 6C.13, 5.2, 5.5, 5.6_
 
-- [ ] 8. Implement orchestration, reporting, and CLI entry point
-  - [ ] 8.1 Implement `run` method and summary generation
+- [x] 8. Implement orchestration, reporting, and CLI entry point
+  - [x] 8.1 Implement `run` method and summary generation
     - Orchestrate full flow: `health_check` → `execute` → `validate_attestation` → `poll_output` → `validate_output_attestation` → report results
     - Handle `CallerError` exceptions: print formatted error with phase and details, exit with code 1
     - Handle null/missing `output_attestation_document`: log warning, set verification status to "skipped"
@@ -191,7 +191,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Return remote script exit code
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7_
 
-  - [ ] 8.2 Implement `__main__` CLI entry point with `argparse`
+  - [x] 8.2 Implement `__main__` CLI entry point with `argparse`
     - Parse `--server-url` (required), `--script-path`, `--commit-hash`, `--github-token` arguments
     - Parse `--root-cert-pem` (required, PEM string passed from workflow) and `--expected-pcrs` (required, JSON string passed from workflow) arguments
     - Support environment variable overrides for timeout configuration (`CALLER_HTTP_TIMEOUT`, `CALLER_POLL_INTERVAL`, `CALLER_MAX_POLL_DURATION`, `CALLER_MAX_RETRIES`)
@@ -200,11 +200,11 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Call `sys.exit()` with the return value of `run()`
     - _Requirements: 1.5, 1.6, 1.7, 3.1, 3.2, 3.3, 7.7_
 
-  - [ ] 8.3 Write property test for exit code propagation
+  - [x] 8.3 Write property test for exit code propagation
     - **Property 8: Exit code propagation**
     - **Validates: Requirements 7.6**
 
-  - [ ] 8.4 Write property test for summary contains execution results
+  - [x] 8.4 Write property test for summary contains execution results
     - **Property 9: Summary contains execution results**
     - **Validates: Requirements 7.7**
 

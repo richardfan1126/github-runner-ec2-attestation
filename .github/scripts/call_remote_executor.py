@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import sys
 import time
 
@@ -525,6 +526,34 @@ class RemoteExecutorCaller:
         logger.info("Output integrity verification succeeded")
         return True
 
+    def _generate_summary(
+        self,
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+        attestation_status: str,
+        output_integrity_status: str,
+    ) -> str:
+        """Generate a GitHub Actions job summary string."""
+        lines = [
+            "## Remote Executor Results",
+            "",
+            f"**Exit Code:** {exit_code}",
+            f"**Attestation Validation:** {attestation_status}",
+            f"**Output Integrity:** {output_integrity_status}",
+            "",
+            "### stdout",
+            "```",
+            stdout,
+            "```",
+            "",
+            "### stderr",
+            "```",
+            stderr,
+            "```",
+        ]
+        return "\n".join(lines)
+
     def run(
         self,
         repository_url: str,
@@ -538,4 +567,111 @@ class RemoteExecutorCaller:
         -> validate_output_attestation -> report results.
         Returns remote script exit code.
         """
-        raise NotImplementedError
+        # Health check
+        logger.info("Checking server health...")
+        self.health_check()
+        logger.info("Server is healthy")
+
+        # Execute
+        logger.info("Submitting execution request...")
+        exec_response = self.execute(repository_url, commit_hash, script_path, github_token)
+        execution_id = exec_response["execution_id"]
+        attestation_b64 = exec_response["attestation_document"]
+        logger.info("Execution submitted: %s", execution_id)
+
+        # Validate server identity attestation
+        logger.info("Validating server attestation...")
+        self.validate_attestation(attestation_b64)
+        attestation_status = "pass"
+        logger.info("Attestation validation: %s", attestation_status)
+
+        # Poll for output
+        logger.info("Polling for execution output...")
+        output = self.poll_output(execution_id)
+        stdout = output["stdout"]
+        stderr = output["stderr"]
+        exit_code = output["exit_code"]
+        output_attestation_b64 = output.get("output_attestation_document")
+
+        logger.info("stdout: %s", stdout)
+        logger.info("stderr: %s", stderr)
+        logger.info("exit_code: %s", exit_code)
+
+        # Validate output attestation
+        if output_attestation_b64:
+            logger.info("Validating output attestation...")
+            self.validate_output_attestation(output_attestation_b64, stdout, stderr, exit_code)
+            output_integrity_status = "pass"
+        else:
+            logger.warning("No output attestation document received, skipping output integrity verification")
+            output_integrity_status = "skipped"
+
+        logger.info("Output integrity: %s", output_integrity_status)
+
+        # Generate summary
+        self.summary = self._generate_summary(
+            stdout, stderr, exit_code, attestation_status, output_integrity_status,
+        )
+
+        return exit_code
+
+
+def main():
+    """CLI entry point for the Remote Executor Caller."""
+    parser = argparse.ArgumentParser(description="GitHub Actions Remote Executor Caller")
+    parser.add_argument("--server-url", required=True, help="Base URL of the Remote Executor server")
+    parser.add_argument("--script-path", default=".github/scripts/sample-build.sh", help="Path to script in the repository")
+    parser.add_argument("--commit-hash", default="", help="Git commit SHA to execute")
+    parser.add_argument("--github-token", default="", help="GitHub token for authentication")
+    parser.add_argument("--root-cert-pem", required=True, help="AWS Nitro Enclaves root CA certificate PEM string")
+    parser.add_argument("--expected-pcrs", required=True, help="JSON string mapping PCR index to expected hex value")
+
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    # Environment variable overrides for timeout configuration
+    timeout = int(os.environ.get("CALLER_HTTP_TIMEOUT", "30"))
+    poll_interval = int(os.environ.get("CALLER_POLL_INTERVAL", "5"))
+    max_poll_duration = int(os.environ.get("CALLER_MAX_POLL_DURATION", "600"))
+    max_retries = int(os.environ.get("CALLER_MAX_RETRIES", "3"))
+
+    # Parse expected PCRs from JSON string
+    expected_pcrs = json.loads(args.expected_pcrs)
+    # Convert string keys to int keys
+    expected_pcrs = {int(k): v for k, v in expected_pcrs.items()}
+
+    caller = RemoteExecutorCaller(
+        server_url=args.server_url,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        max_poll_duration=max_poll_duration,
+        max_retries=max_retries,
+        root_cert_pem=args.root_cert_pem,
+        expected_pcrs=expected_pcrs,
+    )
+
+    try:
+        exit_code = caller.run(
+            repository_url="",  # Will be set by workflow
+            commit_hash=args.commit_hash,
+            script_path=args.script_path,
+            github_token=args.github_token,
+        )
+    except CallerError as exc:
+        print(f"ERROR [{exc.phase}]: {exc.message}", file=sys.stderr)
+        if exc.details:
+            print(f"  Details: {json.dumps(exc.details, default=str)}", file=sys.stderr)
+        exit_code = 1
+
+    # Write job summary to $GITHUB_STEP_SUMMARY if set
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path and hasattr(caller, "summary"):
+        with open(summary_path, "a") as f:
+            f.write(caller.summary)
+
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
