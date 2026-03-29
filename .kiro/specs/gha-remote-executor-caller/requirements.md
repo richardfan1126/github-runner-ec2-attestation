@@ -24,8 +24,8 @@ The caller includes:
 - **Server_URL**: The base URL of the Remote Executor server, provided as a `workflow_dispatch` input
 - **Caller_Script**: Python script that implements the HTTP client logic, attestation validation, and polling loop
 - **Output_Digest**: SHA-256 hash of the script output used to verify integrity against the Output_Attestation_Document's user_data field
-- **Root_CA_Certificate**: The AWS Nitro Enclaves root certificate authority PEM, hardcoded in the Caller_Workflow definition, used to anchor the certificate chain validation
-- **Expected_PCRs**: A JSON map of PCR index (integer) to expected hex-encoded PCR value for PCR4 and PCR7, hardcoded in the Caller_Workflow definition, used to validate the enclave's Platform Configuration Registers against known-good values
+- **Root_CA_Certificate**: The NitroTPM attestation root certificate authority PEM, hardcoded in the Caller_Workflow definition, used to anchor the certificate chain validation
+- **Expected_PCRs**: A JSON map of PCR index (integer) to expected hex-encoded PCR value for PCR4 and PCR7, hardcoded in the Caller_Workflow definition, used to validate the attestable AMI's Platform Configuration Registers against known-good values
 - **Certificate_Chain**: The ordered list of intermediate CA certificates (cabundle) included in the attestation document, linking the signing certificate to the Root_CA_Certificate
 - **Signing_Certificate**: The DER-encoded X.509 certificate embedded in the attestation document payload, whose public key is used to verify the COSE Sign1 signature
 
@@ -42,7 +42,7 @@ The caller includes:
 3. THE Caller_Workflow SHALL accept an optional input `script_path` with a default value pointing to the Sample_Build_Script
 4. THE Caller_Workflow SHALL accept an optional input `commit_hash` that defaults to the current workflow commit SHA
 5. IF the `server_url` input is empty, THEN THE Caller_Workflow SHALL fail with a clear error message
-6. THE Caller_Workflow SHALL hardcode the AWS Nitro Enclaves Root_CA_Certificate PEM inline in the workflow definition and pass it to the Caller_Script
+6. THE Caller_Workflow SHALL hardcode the NitroTPM attestation Root_CA_Certificate PEM inline in the workflow definition and pass it to the Caller_Script
 7. THE Caller_Workflow SHALL hardcode the Expected_PCRs for PCR4 and PCR7 as a JSON-encoded map inline in the workflow definition and pass it to the Caller_Script
 
 ### Requirement 2: Sample Build Script
@@ -72,7 +72,7 @@ The caller includes:
 
 ### Requirement 4: Server Identity Attestation Validation
 
-**User Story:** As a security engineer, I want the caller to cryptographically validate the server's attestation document, so that I can verify the execution request was accepted by a genuine NitroTPM-attested environment with a trusted signing certificate and expected enclave measurements.
+**User Story:** As a security engineer, I want the caller to cryptographically validate the server's attestation document, so that I can verify the execution request was accepted by a genuine NitroTPM-attested AMI environment with a trusted signing certificate and expected platform measurements.
 
 #### Acceptance Criteria
 

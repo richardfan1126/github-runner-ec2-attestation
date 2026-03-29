@@ -208,13 +208,13 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - **Property 9: Summary contains execution results**
     - **Validates: Requirements 7.7**
 
-- [ ] 9. Checkpoint - Ensure all tests pass
+- [x] 9. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 10. Create GitHub Actions workflow and sample build script
   - [ ] 10.1 Create `.github/workflows/call-remote-executor.yml`
     - Define `workflow_dispatch` trigger with inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`)
-    - Hardcode the AWS Nitro Enclaves root CA certificate PEM inline as a multi-line environment variable or step output
+    - Hardcode the NitroTPM attestation root CA certificate PEM inline as a multi-line environment variable or step output
     - Hardcode the expected PCR4 and PCR7 values as a JSON map `{"4": "<hex>", "7": "<hex>"}` inline in the workflow
     - Validate `server_url` is not empty, fail with clear error if it is
     - Check out the repository

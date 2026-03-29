@@ -11,12 +11,12 @@ The caller is designed to be triggered manually via `workflow_dispatch`, targeti
 1. **Single Python script**: All client logic (HTTP calls, COSE Sign1 verification, attestation validation, polling) lives in one `.github/scripts/call_remote_executor.py` file to keep the caller self-contained and easy to audit.
 2. **`cbor2` for CBOR decoding**: The attestation documents are COSE Sign1 structures encoded in CBOR. We use the `cbor2` library (pure Python) for decoding both the outer COSE structure and the inner attestation payload.
 3. **`pycose` for COSE Sign1 verification**: The `pycose` library provides `Sign1Message` and `EC2` key types for verifying the COSE signature using the signing certificate's public key.
-4. **`pyOpenSSL` for certificate chain validation**: The `OpenSSL.crypto` module provides `X509Store` and `X509StoreContext` for validating the signing certificate against the CA bundle and root certificate, matching the AWS Nitro Enclaves attestation verification pattern.
+4. **`pyOpenSSL` for certificate chain validation**: The `OpenSSL.crypto` module provides `X509Store` and `X509StoreContext` for validating the signing certificate against the CA bundle and root certificate, matching the NitroTPM attestation verification pattern for attestable AMIs.
 5. **`pycryptodome` for key parameter extraction**: The `Crypto.Util.number.long_to_bytes` utility converts the EC public key coordinates from integers to bytes for COSE key construction.
 6. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (health check → execute → poll loop).
 7. **Canonical output format**: The server constructs `Script_Output` as `stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`. The caller must replicate this exact format when computing the SHA-256 digest for output attestation verification.
 8. **Exit code propagation**: The caller script exits with the remote script's exit code, allowing the GitHub Actions workflow to naturally fail when the remote script fails.
-9. **Hardcoded trust anchors**: The AWS Nitro Enclaves root CA certificate PEM and expected PCR4/PCR7 values are hardcoded directly in the GitHub Actions workflow YAML. This eliminates the need for users to supply these values at dispatch time, ensuring every invocation performs full cryptographic verification. PKI validation and PCR validation are always performed. COSE signature verification is always performed when the signing certificate is present.
+9. **Hardcoded trust anchors**: The NitroTPM attestation root CA certificate PEM and expected PCR4/PCR7 values are hardcoded directly in the GitHub Actions workflow YAML. This eliminates the need for users to supply these values at dispatch time, ensuring every invocation performs full cryptographic verification. PKI validation and PCR validation are always performed. COSE signature verification is always performed when the signing certificate is present.
 
 ## Architecture
 
@@ -66,7 +66,7 @@ sequenceDiagram
 
 Responsibilities:
 - Define `workflow_dispatch` inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`)
-- Hardcode the AWS Nitro Enclaves root CA certificate PEM inline in the workflow YAML as an environment variable or step output, and pass it to the caller script via `--root-cert-pem`
+- Hardcode the NitroTPM attestation root CA certificate PEM inline in the workflow YAML as an environment variable or step output, and pass it to the caller script via `--root-cert-pem`
 - Hardcode the expected PCR4 and PCR7 values as a JSON map inline in the workflow YAML, and pass it to the caller script via `--expected-pcrs`
 - Validate that `server_url` is not empty
 - Check out the repository
@@ -286,8 +286,8 @@ The following values are hardcoded inline in the workflow YAML definition (not u
 
 | Constant | Description |
 |----------|-------------|
-| `ROOT_CERT_PEM` | AWS Nitro Enclaves root CA certificate in PEM format, embedded as a multi-line string in the workflow env or step |
-| `EXPECTED_PCRS` | JSON map `{"4": "<hex>", "7": "<hex>"}` containing expected PCR4 and PCR7 values for the enclave |
+| `ROOT_CERT_PEM` | NitroTPM attestation root CA certificate in PEM format, embedded as a multi-line string in the workflow env or step |
+| `EXPECTED_PCRS` | JSON map `{"4": "<hex>", "7": "<hex>"}` containing expected PCR4 and PCR7 values for the attestable AMI |
 
 ### API Request/Response Shapes (from server)
 
@@ -361,7 +361,7 @@ After CBOR-decoding the payload (index 2), the attestation document is a map wit
     "cabundle": list[bytes], # Certificate chain (DER-encoded), first entry is root CA
     "user_data": bytes | None, # For output attestation: SHA-256 hex digest (UTF-8 encoded)
     "nonce": bytes | None,   # Optional nonce (UTF-8 encoded)
-    "public_key": bytes | None, # Optional enclave public key (e.g. X25519)
+    "public_key": bytes | None, # Optional instance public key (e.g. X25519)
 }
 ```
 
