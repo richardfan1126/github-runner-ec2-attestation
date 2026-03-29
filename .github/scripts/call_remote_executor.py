@@ -290,8 +290,9 @@ class RemoteExecutorCaller:
                 payload=cose_array[2],
             )
             msg.signature = cose_array[3]
+            msg.key = cose_key
 
-            if not msg.verify_signature(cose_key):
+            if not msg.verify_signature():
                 raise CallerError(
                     message="COSE Sign1 signature verification failed",
                     phase="attestation",
@@ -337,7 +338,70 @@ class RemoteExecutorCaller:
         output_attestation_document.
         Raises CallerError on timeout or repeated HTTP failures.
         """
-        raise NotImplementedError
+        url = f"{self.server_url}/execution/{execution_id}/output"
+        start_time = time.monotonic()
+        consecutive_errors = 0
+        prev_stdout_offset = 0
+        prev_stderr_offset = 0
+
+        while True:
+            elapsed = time.monotonic() - start_time
+            if elapsed >= self.max_poll_duration:
+                raise CallerError(
+                    message=f"Polling timed out after {elapsed:.0f}s (max {self.max_poll_duration}s)",
+                    phase="polling",
+                    details={"elapsed": elapsed, "max_poll_duration": self.max_poll_duration},
+                )
+
+            try:
+                response = requests.get(url, timeout=self.timeout)
+            except requests.RequestException as exc:
+                consecutive_errors += 1
+                if consecutive_errors >= self.max_retries:
+                    raise CallerError(
+                        message=f"Polling failed after {consecutive_errors} consecutive errors: {exc}",
+                        phase="polling",
+                        details={"error": str(exc), "consecutive_errors": consecutive_errors},
+                    )
+                logger.warning("Poll request error (%d/%d): %s", consecutive_errors, self.max_retries, exc)
+                time.sleep(self.poll_interval)
+                continue
+
+            if response.status_code != 200:
+                consecutive_errors += 1
+                if consecutive_errors >= self.max_retries:
+                    raise CallerError(
+                        message=f"Polling failed with HTTP {response.status_code} after {consecutive_errors} consecutive errors",
+                        phase="polling",
+                        details={"status_code": response.status_code, "consecutive_errors": consecutive_errors},
+                    )
+                logger.warning("Poll HTTP error %d (%d/%d)", response.status_code, consecutive_errors, self.max_retries)
+                time.sleep(self.poll_interval)
+                continue
+
+            # Reset consecutive error counter on success
+            consecutive_errors = 0
+            data = response.json()
+
+            # Log incremental output
+            stdout = data.get("stdout", "")
+            stderr = data.get("stderr", "")
+            if len(stdout) > prev_stdout_offset:
+                logger.info("stdout: %s", stdout[prev_stdout_offset:])
+                prev_stdout_offset = len(stdout)
+            if len(stderr) > prev_stderr_offset:
+                logger.info("stderr: %s", stderr[prev_stderr_offset:])
+                prev_stderr_offset = len(stderr)
+
+            if data.get("complete"):
+                return {
+                    "stdout": data.get("stdout", ""),
+                    "stderr": data.get("stderr", ""),
+                    "exit_code": data.get("exit_code"),
+                    "output_attestation_document": data.get("output_attestation_document"),
+                }
+
+            time.sleep(self.poll_interval)
 
     def validate_output_attestation(
         self,
@@ -352,7 +416,114 @@ class RemoteExecutorCaller:
         Returns True if match.
         Raises CallerError on decode/parse failures or digest mismatch.
         """
-        raise NotImplementedError
+        # Decode base64 → CBOR → COSE Sign1 4-element array
+        try:
+            raw_bytes = base64.b64decode(output_attestation_b64)
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to base64-decode output attestation document: {exc}",
+                phase="output_attestation",
+                details={"error": str(exc)},
+            )
+
+        try:
+            cose_array = cbor2.loads(raw_bytes)
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to CBOR-decode output attestation document: {exc}",
+                phase="output_attestation",
+                details={"error": str(exc)},
+            )
+
+        if not isinstance(cose_array, (list, tuple)) or len(cose_array) != 4:
+            raise CallerError(
+                message="Output attestation CBOR is not a valid COSE Sign1 structure (expected 4-element array)",
+                phase="output_attestation",
+                details={"type": type(cose_array).__name__, "length": len(cose_array) if isinstance(cose_array, (list, tuple)) else None},
+            )
+
+        # CBOR-decode payload to extract attestation fields
+        try:
+            payload_doc = cbor2.loads(cose_array[2])
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to CBOR-decode output attestation payload: {exc}",
+                phase="output_attestation",
+                details={"error": str(exc)},
+            )
+
+        if not isinstance(payload_doc, dict):
+            raise CallerError(
+                message=f"Output attestation payload is not a map, got {type(payload_doc).__name__}",
+                phase="output_attestation",
+                details={"type": type(payload_doc).__name__},
+            )
+
+        # Validate structural fields
+        missing = [f for f in EXPECTED_ATTESTATION_FIELDS if f not in payload_doc]
+        if missing:
+            raise CallerError(
+                message=f"Output attestation document missing fields: {missing}",
+                phase="output_attestation",
+                details={"missing_fields": missing},
+            )
+
+        # Validate certificate chain (PKI) against root cert
+        try:
+            self._verify_certificate_chain(payload_doc["certificate"], payload_doc["cabundle"])
+        except CallerError as exc:
+            raise CallerError(
+                message=exc.message,
+                phase="output_attestation",
+                details=exc.details,
+            )
+
+        # Verify COSE Sign1 signature
+        try:
+            self._verify_cose_signature(cose_array)
+        except CallerError as exc:
+            raise CallerError(
+                message=exc.message,
+                phase="output_attestation",
+                details=exc.details,
+            )
+
+        # Validate PCR values
+        try:
+            self._validate_pcrs(payload_doc["pcrs"])
+        except CallerError as exc:
+            raise CallerError(
+                message=exc.message,
+                phase="output_attestation",
+                details=exc.details,
+            )
+
+        # Extract user_data from verified payload (SHA-256 hex digest)
+        user_data_raw = payload_doc.get("user_data")
+        if user_data_raw is None:
+            raise CallerError(
+                message="Output attestation document missing user_data field",
+                phase="output_attestation",
+            )
+
+        if isinstance(user_data_raw, bytes):
+            attestation_digest = user_data_raw.decode("utf-8")
+        else:
+            attestation_digest = str(user_data_raw)
+
+        # Reconstruct canonical output and compute SHA-256 hex digest
+        canonical_output = f"stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}"
+        computed_digest = hashlib.sha256(canonical_output.encode("utf-8")).hexdigest()
+
+        if computed_digest != attestation_digest:
+            raise CallerError(
+                message="Output integrity verification failed: digest mismatch",
+                phase="output_attestation",
+                details={"computed": computed_digest, "attestation": attestation_digest},
+            )
+
+        logger.info("Output integrity verification succeeded")
+        return True
 
     def run(
         self,

@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 
 import cbor2
 import pytest
+import requests
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.x509.oid import NameOID
@@ -457,3 +458,237 @@ class TestCertificateChainValidation:
         with pytest.raises(CallerError) as exc_info:
             caller._verify_certificate_chain(_TEST_SIGN_CERT_DER, [_TEST_CA_DER])
         assert exc_info.value.phase == "attestation"
+
+
+# ---------------------------------------------------------------------------
+# Property 3: Output integrity verification
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 3: Output integrity verification
+# **Validates: Requirements 6B.8, 6B.9, 6B.10, 6B.12**
+class TestOutputIntegrityVerification:
+    """Property 3: Output integrity verification."""
+
+    @given(
+        stdout_val=st.text(min_size=0, max_size=200),
+        stderr_val=st.text(min_size=0, max_size=200),
+        exit_code_val=st.integers(min_value=0, max_value=255),
+    )
+    @settings(max_examples=20)
+    def test_matching_digest_accepted(self, stdout_val: str, stderr_val: str, exit_code_val: int):
+        """If user_data contains the correct SHA-256 digest of the canonical output,
+        validate_output_attestation should return True."""
+        import hashlib as _hashlib
+
+        canonical = f"stdout:{stdout_val}\nstderr:{stderr_val}\nexit_code:{exit_code_val}"
+        digest = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        payload_dict = _make_test_payload(extra_fields={"user_data": digest.encode("utf-8")})
+        b64_str, _ = _make_signed_cose(payload_dict)
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            root_cert_pem=_TEST_CA_PEM,
+            expected_pcrs={4: b'\xaa' * 48, 7: b'\xbb' * 48},
+        )
+        # Fix expected_pcrs to hex strings
+        caller.expected_pcrs = {4: "aa" * 48, 7: "bb" * 48}
+
+        result = caller.validate_output_attestation(b64_str, stdout_val, stderr_val, exit_code_val)
+        assert result is True
+
+    @given(
+        stdout_val=st.text(min_size=0, max_size=200),
+        stderr_val=st.text(min_size=0, max_size=200),
+        exit_code_val=st.integers(min_value=0, max_value=255),
+    )
+    @settings(max_examples=20)
+    def test_tampered_output_rejected(self, stdout_val: str, stderr_val: str, exit_code_val: int):
+        """If stdout/stderr/exit_code is altered after the digest was computed,
+        validate_output_attestation should raise CallerError."""
+        import hashlib as _hashlib
+
+        canonical = f"stdout:{stdout_val}\nstderr:{stderr_val}\nexit_code:{exit_code_val}"
+        digest = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        payload_dict = _make_test_payload(extra_fields={"user_data": digest.encode("utf-8")})
+        b64_str, _ = _make_signed_cose(payload_dict)
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            root_cert_pem=_TEST_CA_PEM,
+            expected_pcrs={4: "aa" * 48, 7: "bb" * 48},
+        )
+
+        # Tamper the stdout
+        tampered_stdout = stdout_val + "_tampered"
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_output_attestation(b64_str, tampered_stdout, stderr_val, exit_code_val)
+        assert exc_info.value.phase == "output_attestation"
+        assert "mismatch" in exc_info.value.message.lower() or "integrity" in exc_info.value.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# Property 6: Polling termination on completion
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 6: Polling termination on completion
+# **Validates: Requirements 5.3, 5.4**
+class TestPollingTerminationOnCompletion:
+    """Property 6: Polling termination on completion."""
+
+    @given(
+        n_incomplete=st.integers(min_value=0, max_value=10),
+        stdout_val=st.text(min_size=0, max_size=50),
+        stderr_val=st.text(min_size=0, max_size=50),
+        exit_code_val=st.integers(min_value=0, max_value=255),
+    )
+    @settings(max_examples=20)
+    def test_polls_until_complete(self, n_incomplete: int, stdout_val: str, stderr_val: str, exit_code_val: int):
+        """Given N incomplete responses followed by 1 complete response,
+        poll_output should make exactly N+1 requests and return the final response."""
+        incomplete_response = MagicMock()
+        incomplete_response.status_code = 200
+        incomplete_response.json.return_value = {
+            "stdout": "",
+            "stderr": "",
+            "complete": False,
+            "exit_code": None,
+            "output_attestation_document": None,
+        }
+
+        complete_response = MagicMock()
+        complete_response.status_code = 200
+        complete_response.json.return_value = {
+            "stdout": stdout_val,
+            "stderr": stderr_val,
+            "complete": True,
+            "exit_code": exit_code_val,
+            "output_attestation_document": "some_b64_doc",
+        }
+
+        responses = [incomplete_response] * n_incomplete + [complete_response]
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,  # No sleep in tests
+            max_poll_duration=9999,
+        )
+
+        with patch("call_remote_executor.requests.get", side_effect=responses) as mock_get:
+            with patch("call_remote_executor.time.sleep"):
+                result = caller.poll_output("test-exec-id")
+
+        assert mock_get.call_count == n_incomplete + 1
+        assert result["stdout"] == stdout_val
+        assert result["stderr"] == stderr_val
+        assert result["exit_code"] == exit_code_val
+        assert result["output_attestation_document"] == "some_b64_doc"
+
+
+# ---------------------------------------------------------------------------
+# Property 7: Polling retry on transient errors
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 7: Polling retry on transient errors
+# **Validates: Requirements 5.7**
+class TestPollingRetryOnTransientErrors:
+    """Property 7: Polling retry on transient errors."""
+
+    @given(
+        k_errors=st.integers(min_value=1, max_value=2),
+    )
+    @settings(max_examples=20)
+    def test_recovers_from_fewer_than_max_retries(self, k_errors: int):
+        """When K < max_retries consecutive HTTP errors occur followed by success,
+        poll_output should recover and return the successful response."""
+        max_retries = 3
+
+        error_response = MagicMock()
+        error_response.status_code = 500
+        error_response.text = "Internal Server Error"
+
+        complete_response = MagicMock()
+        complete_response.status_code = 200
+        complete_response.json.return_value = {
+            "stdout": "ok",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        }
+
+        responses = [error_response] * k_errors + [complete_response]
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,
+            max_poll_duration=9999,
+            max_retries=max_retries,
+        )
+
+        with patch("call_remote_executor.requests.get", side_effect=responses):
+            with patch("call_remote_executor.time.sleep"):
+                result = caller.poll_output("test-exec-id")
+
+        assert result["stdout"] == "ok"
+        assert result["exit_code"] == 0
+
+    @given(
+        max_retries=st.integers(min_value=1, max_value=5),
+    )
+    @settings(max_examples=20)
+    def test_fails_after_max_retries_consecutive_errors(self, max_retries: int):
+        """When max_retries consecutive HTTP errors occur, poll_output should raise CallerError."""
+        error_response = MagicMock()
+        error_response.status_code = 500
+        error_response.text = "Internal Server Error"
+
+        responses = [error_response] * (max_retries + 5)  # More than enough errors
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,
+            max_poll_duration=9999,
+            max_retries=max_retries,
+        )
+
+        with patch("call_remote_executor.requests.get", side_effect=responses):
+            with patch("call_remote_executor.time.sleep"):
+                with pytest.raises(CallerError) as exc_info:
+                    caller.poll_output("test-exec-id")
+                assert exc_info.value.phase == "polling"
+
+    @given(
+        k_errors=st.integers(min_value=1, max_value=2),
+    )
+    @settings(max_examples=20)
+    def test_recovers_from_connection_errors(self, k_errors: int):
+        """When K < max_retries consecutive connection errors occur followed by success,
+        poll_output should recover."""
+        max_retries = 3
+
+        complete_response = MagicMock()
+        complete_response.status_code = 200
+        complete_response.json.return_value = {
+            "stdout": "recovered",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        }
+
+        side_effects = [requests.ConnectionError("timeout")] * k_errors + [complete_response]
+
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,
+            max_poll_duration=9999,
+            max_retries=max_retries,
+        )
+
+        with patch("call_remote_executor.requests.get", side_effect=side_effects):
+            with patch("call_remote_executor.time.sleep"):
+                result = caller.poll_output("test-exec-id")
+
+        assert result["stdout"] == "recovered"

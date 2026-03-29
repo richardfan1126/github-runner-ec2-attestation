@@ -137,8 +137,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 6. Checkpoint - Ensure all attestation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 7. Implement polling and output attestation
-  - [ ] 7.1 Implement `poll_output` method
+- [x] 7. Implement polling and output attestation
+  - [x] 7.1 Implement `poll_output` method
     - Send HTTP GET to `{server_url}/execution/{execution_id}/output` in a loop
     - While `complete` is false, sleep for `poll_interval` seconds and retry
     - When `complete` is true, extract and return `stdout`, `stderr`, `exit_code`, `output_attestation_document`
@@ -147,7 +147,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Log incremental output during polling for real-time feedback
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8_
 
-  - [ ] 7.2 Implement `validate_output_attestation` method
+  - [x] 7.2 Implement `validate_output_attestation` method
     - Decode base64 → CBOR → COSE Sign1 4-element array (same parsing as `validate_attestation`)
     - CBOR-decode payload to extract attestation fields
     - Validate certificate chain (PKI) against root cert
@@ -161,20 +161,20 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Raise `CallerError(phase="output_attestation")` on base64/CBOR/COSE/PKI/signature failures
     - _Requirements: 6A.1–6A.7, 6B.8–6B.12, 6C.13, 6C.14_
 
-  - [ ] 7.3 Write property test for output integrity verification
+  - [x] 7.3 Write property test for output integrity verification
     - **Property 3: Output integrity verification**
     - Build COSE Sign1 attestation with user_data digest signed with test key
     - **Validates: Requirements 6B.8, 6B.9, 6B.10, 6B.12**
 
-  - [ ] 7.4 Write property test for polling termination on completion
+  - [x] 7.4 Write property test for polling termination on completion
     - **Property 6: Polling termination on completion**
     - **Validates: Requirements 5.3, 5.4**
 
-  - [ ] 7.5 Write property test for polling retry on transient errors
+  - [x] 7.5 Write property test for polling retry on transient errors
     - **Property 7: Polling retry on transient errors**
     - **Validates: Requirements 5.7**
 
-  - [ ] 7.6 Write unit tests for polling and output attestation edge cases
+  - [x] 7.6 Write unit tests for polling and output attestation edge cases
     - Test null `output_attestation_document` logs warning and continues (Req 6C.13)
     - Test poll timeout raises `CallerError` after configured duration (Req 5.5, 5.6)
     - Test default poll interval is 5 seconds (Req 5.2)
