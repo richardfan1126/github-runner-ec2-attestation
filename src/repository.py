@@ -60,13 +60,15 @@ class RepositoryClient:
             "User-Agent": "GitHub-Actions-Remote-Executor/1.0"
         })
         
-        # Verify authentication by making a test request
+        # Verify authentication using /rate_limit which works with all
+        # GitHub token types including Actions GITHUB_TOKEN (which cannot
+        # access /user and returns 403).
         try:
-            response = self._session.get("https://api.github.com/user")
+            response = self._session.get("https://api.github.com/rate_limit")
             if response.status_code == 200:
                 self._authenticated = True
                 return AuthResult(success=True)
-            elif response.status_code == 401:
+            elif response.status_code in (401, 403):
                 self._authenticated = False
                 return AuthResult(
                     success=False,

@@ -142,7 +142,7 @@ def _make_test_payload(extra_fields: dict | None = None) -> dict:
         "module_id": "test-module",
         "digest": "SHA384",
         "timestamp": 1700000000000,
-        "pcrs": {0: b'\x00' * 48, 4: b'\xaa' * 48, 7: b'\xbb' * 48},
+        "nitrotpm_pcrs": {0: b'\x00' * 48, 4: b'\xaa' * 48, 7: b'\xbb' * 48},
         "certificate": _TEST_SIGN_CERT_DER,
         "cabundle": [_TEST_CA_DER],
     }
@@ -159,7 +159,7 @@ def attestation_doc_strategy():
             "module_id": st.text(min_size=1, max_size=50),
             "digest": st.text(min_size=1, max_size=20),
             "timestamp": st.integers(min_value=0, max_value=2**53),
-            "pcrs": st.dictionaries(
+            "nitrotpm_pcrs": st.dictionaries(
                 st.integers(min_value=0, max_value=15),
                 st.binary(min_size=1, max_size=48),
                 min_size=1,
@@ -450,13 +450,14 @@ class TestCertificateChainValidation:
         )
         other_ca_pem = other_ca_cert.public_bytes(serialization.Encoding.PEM).decode()
 
-        # Use the test signing cert (signed by _TEST_CA) but verify against the other CA
+        # Use the test signing cert (signed by _TEST_CA) but verify against the other CA.
+        # Pass an empty cabundle so the real issuer (_TEST_CA) is NOT in the store.
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             root_cert_pem=other_ca_pem,
         )
         with pytest.raises(CallerError) as exc_info:
-            caller._verify_certificate_chain(_TEST_SIGN_CERT_DER, [_TEST_CA_DER])
+            caller._verify_certificate_chain(_TEST_SIGN_CERT_DER, [])
         assert exc_info.value.phase == "attestation"
 
 

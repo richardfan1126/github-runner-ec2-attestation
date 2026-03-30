@@ -33,7 +33,7 @@ EXPECTED_ATTESTATION_FIELDS = [
     "module_id",
     "digest",
     "timestamp",
-    "pcrs",
+    "nitrotpm_pcrs",
     "certificate",
     "cabundle",
 ]
@@ -158,6 +158,46 @@ class RemoteExecutorCaller:
 
         return response.json()
 
+    def _decode_cose_sign1(self, raw_bytes: bytes, phase: str) -> list:
+        """Decode raw bytes into a COSE_Sign1 4-element array.
+
+        Handles both CBOR-tagged (tag 18) and untagged representations.
+        Returns the 4-element array [protected, unprotected, payload, signature].
+        Raises CallerError on decode/structure failures.
+        """
+        try:
+            decoded = cbor2.loads(raw_bytes)
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to CBOR-decode document: {exc}",
+                phase=phase,
+                details={"error": str(exc)},
+            )
+
+        # Unwrap CBOR tag 18 (COSE_Sign1) if present
+        if isinstance(decoded, cbor2.CBORTag):
+            if decoded.tag != 18:
+                raise CallerError(
+                    message=f"Unexpected CBOR tag {decoded.tag}, expected 18 (COSE_Sign1)",
+                    phase=phase,
+                    details={"tag": decoded.tag},
+                )
+            cose_array = decoded.value
+        else:
+            cose_array = decoded
+
+        if not isinstance(cose_array, (list, tuple)) or len(cose_array) != 4:
+            raise CallerError(
+                message="CBOR result is not a valid COSE_Sign1 structure (expected 4-element array)",
+                phase=phase,
+                details={
+                    "type": type(cose_array).__name__,
+                    "length": len(cose_array) if isinstance(cose_array, (list, tuple)) else None,
+                },
+            )
+
+        return list(cose_array)
+
     def validate_attestation(self, attestation_b64: str) -> dict:
         """Decode base64 -> CBOR -> COSE Sign1 array. Validate and verify.
 
@@ -174,22 +214,8 @@ class RemoteExecutorCaller:
                 details={"error": str(exc)},
             )
 
-        # CBOR-decode the binary — expect a 4-element COSE Sign1 array
-        try:
-            cose_array = cbor2.loads(raw_bytes)
-        except Exception as exc:
-            raise CallerError(
-                message=f"Failed to CBOR-decode attestation document: {exc}",
-                phase="attestation",
-                details={"error": str(exc)},
-            )
-
-        if not isinstance(cose_array, (list, tuple)) or len(cose_array) != 4:
-            raise CallerError(
-                message="CBOR result is not a valid COSE Sign1 structure (expected 4-element array)",
-                phase="attestation",
-                details={"type": type(cose_array).__name__, "length": len(cose_array) if isinstance(cose_array, (list, tuple)) else None},
-            )
+        # CBOR-decode the binary — expect a COSE_Sign1 structure (tag 18)
+        cose_array = self._decode_cose_sign1(raw_bytes, phase="attestation")
 
         # CBOR-decode the payload (index 2) to extract attestation fields
         try:
@@ -224,7 +250,7 @@ class RemoteExecutorCaller:
         self._verify_cose_signature(cose_array)
 
         # Validate PCR values
-        self._validate_pcrs(payload_doc["pcrs"])
+        self._validate_pcrs(payload_doc["nitrotpm_pcrs"])
 
         # Log attestation document fields for audit
         for field in EXPECTED_ATTESTATION_FIELDS:
@@ -235,6 +261,8 @@ class RemoteExecutorCaller:
     def _verify_certificate_chain(self, cert_der: bytes, cabundle: list[bytes]) -> None:
         """Validate the signing certificate against the CA bundle and root certificate.
 
+        Per AWS docs, cabundle is ordered [ROOT_CERT, INTERM_1, INTERM_2, ..., INTERM_N].
+        The chain for validation is: TARGET_CERT <- INTERM_N <- ... <- INTERM_1 <- ROOT_CERT.
         Raises CallerError if certificate chain validation fails.
         """
         if not self.root_cert_pem:
@@ -242,9 +270,12 @@ class RemoteExecutorCaller:
 
         try:
             store = ossl_crypto.X509Store()
+            # Add the trusted root certificate from the provided PEM
             store.add_cert(ossl_crypto.load_certificate(ossl_crypto.FILETYPE_PEM, self.root_cert_pem))
 
-            for der_cert in cabundle[1:]:
+            # Add all certificates from the CA bundle as intermediates.
+            # cabundle[0] is the root from the document; the remaining are intermediates.
+            for der_cert in cabundle:
                 store.add_cert(ossl_crypto.load_certificate(ossl_crypto.FILETYPE_ASN1, der_cert))
 
             signing_cert = ossl_crypto.load_certificate(ossl_crypto.FILETYPE_ASN1, cert_der)
@@ -258,8 +289,11 @@ class RemoteExecutorCaller:
             )
 
     def _verify_cose_signature(self, cose_array: list) -> None:
-        """Verify the COSE Sign1 signature using the signing certificate's public key.
+        """Verify the COSE_Sign1 signature using the signing certificate's public key.
 
+        The COSE_Sign1 structure per AWS docs:
+          [protected_header, unprotected_header, payload, signature]
+        where protected_header = {1: -35} (algorithm: ECDSA 384).
         Raises CallerError if signature verification fails.
         """
         if not self.root_cert_pem:
@@ -285,9 +319,13 @@ class RemoteExecutorCaller:
                 EC2KpY: y_bytes,
             })
 
+            # Decode protected header — it's CBOR-encoded bytes in the array
+            phdr = cbor2.loads(cose_array[0]) if isinstance(cose_array[0], bytes) else cose_array[0]
+            uhdr = cose_array[1] if cose_array[1] else {}
+
             msg = Sign1Message(
-                phdr=cbor2.loads(cose_array[0]),
-                uhdr=cose_array[1] if cose_array[1] else {},
+                phdr=phdr,
+                uhdr=uhdr,
                 payload=cose_array[2],
             )
             msg.signature = cose_array[3]
@@ -417,7 +455,7 @@ class RemoteExecutorCaller:
         Returns True if match.
         Raises CallerError on decode/parse failures or digest mismatch.
         """
-        # Decode base64 → CBOR → COSE Sign1 4-element array
+        # Decode base64 → CBOR → COSE_Sign1 (tag 18) 4-element array
         try:
             raw_bytes = base64.b64decode(output_attestation_b64)
         except Exception as exc:
@@ -427,21 +465,7 @@ class RemoteExecutorCaller:
                 details={"error": str(exc)},
             )
 
-        try:
-            cose_array = cbor2.loads(raw_bytes)
-        except Exception as exc:
-            raise CallerError(
-                message=f"Failed to CBOR-decode output attestation document: {exc}",
-                phase="output_attestation",
-                details={"error": str(exc)},
-            )
-
-        if not isinstance(cose_array, (list, tuple)) or len(cose_array) != 4:
-            raise CallerError(
-                message="Output attestation CBOR is not a valid COSE Sign1 structure (expected 4-element array)",
-                phase="output_attestation",
-                details={"type": type(cose_array).__name__, "length": len(cose_array) if isinstance(cose_array, (list, tuple)) else None},
-            )
+        cose_array = self._decode_cose_sign1(raw_bytes, phase="output_attestation")
 
         # CBOR-decode payload to extract attestation fields
         try:
@@ -491,7 +515,7 @@ class RemoteExecutorCaller:
 
         # Validate PCR values
         try:
-            self._validate_pcrs(payload_doc["pcrs"])
+            self._validate_pcrs(payload_doc["nitrotpm_pcrs"])
         except CallerError as exc:
             raise CallerError(
                 message=exc.message,
