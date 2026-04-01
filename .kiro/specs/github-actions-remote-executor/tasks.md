@@ -1257,11 +1257,197 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 57. Checkpoint - Ensure all output attestation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 58. Add PyJWT dependency and update ServerConfig for OIDC authentication
+  - [ ] 58.1 Add PyJWT[crypto] to pyproject.toml dependencies
+    - Add `PyJWT[crypto]>=2.8.0` to the `dependencies` list in pyproject.toml
+    - This provides JWT decoding and JWKS/RSA signature verification via the `cryptography` backend
+    - _Requirements: 2.4, 2.5, 12.4_
+
+  - [ ] 58.2 Update ServerConfig with OIDC configuration fields
+    - Add `allowed_repositories: list[str]` field to ServerConfig dataclass
+    - Add `expected_audience: str` field to ServerConfig dataclass
+    - Load `ALLOWED_REPOSITORIES` from environment (comma-separated string, split into list)
+    - Load `EXPECTED_AUDIENCE` from environment
+    - Add validation: `allowed_repositories` must be non-empty list, `expected_audience` must be non-empty string
+    - Add both to `from_env()` and `validate()` methods
+    - _Requirements: 9.2, 9.3, 9.8_
+
+  - [ ] 58.3 Update .env.example and KIWI env file with OIDC config variables
+    - Add `ALLOWED_REPOSITORIES=owner/repo1,owner/repo2` to .env.example
+    - Add `EXPECTED_AUDIENCE=https://your-remote-executor.example.com` to .env.example
+    - Add same variables to kiwi-descriptions/root/etc/github-actions-remote-executor/env
+    - _Requirements: 9.2, 9.3_
+
+  - [ ] 58.4 Update KIWI config.sh to verify PyJWT is importable
+    - Add `python3.11 -c "import jwt"` verification check alongside existing fastapi/uvicorn/requests checks
+    - _Requirements: 12.4_
+
+- [ ] 59. Implement OIDC token validation in RequestValidator
+  - [ ] 59.1 Add OIDCValidationResult and OIDCTokenClaims data models
+    - Create `OIDCValidationResult` dataclass with fields: `valid` (bool), `status_code` (int), `error_message` (str | None), `claims` (dict | None)
+    - Create `OIDCTokenClaims` dataclass with fields: `iss` (str), `aud` (str), `repository` (str), `exp` (int), `sub` (str)
+    - Add to src/models.py or src/validation.py
+    - _Requirements: 2.1, 2.7, 2.9, 2.11, 2.13_
+
+  - [ ] 59.2 Update RequestValidator constructor for OIDC configuration
+    - Add `__init__` method accepting `allowed_repositories: list[str]` and `expected_audience: str`
+    - Store as instance attributes for use in OIDC validation
+    - Update all call sites (server.py `create_app`) to pass config values
+    - _Requirements: 2.9, 2.11_
+
+  - [ ] 59.3 Implement `_fetch_jwks()` method
+    - Fetch JWKS from `https://token.actions.githubusercontent.com/.well-known/jwks`
+    - Cache the JWKS response in an instance variable
+    - Accept `force_refresh: bool = False` parameter to refresh cache on unknown key ID
+    - Use `requests.get()` with a reasonable timeout
+    - Parse response as JSON and return the JWKS dict
+    - Handle network errors gracefully
+    - _Requirements: 2.4, 2.5_
+
+  - [ ] 59.4 Implement `validate_oidc_token()` method
+    - Extract Bearer token from Authorization header string
+    - Return 401 if header is missing or not in `Bearer <token>` format
+    - Decode JWT header to get `kid` (key ID)
+    - Fetch JWKS (from cache or fresh) and find matching key by `kid`
+    - If `kid` not found in cached JWKS, force refresh and retry once
+    - Verify JWT signature against the matching JWKS key using `jwt.decode()` with `algorithms=["RS256"]`
+    - Validate `iss` claim equals `https://token.actions.githubusercontent.com` — return 401 if mismatch
+    - Validate `aud` claim equals `self.expected_audience` — return 401 if mismatch
+    - Validate `repository` claim is in `self.allowed_repositories` — return 403 if not found
+    - Validate `exp` claim (PyJWT handles expiration automatically) — return 401 if expired
+    - Return `OIDCValidationResult` with `valid=True`, `status_code=200`, and decoded claims on success
+    - Return `OIDCValidationResult` with appropriate `status_code` (401 or 403) and `error_message` on failure
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14_
+
+- [ ] 60. Add OIDC authentication middleware to protected endpoints
+  - [ ] 60.1 Add OIDC authentication to POST /execute endpoint
+    - Extract Authorization header from request
+    - Call `request_validator.validate_oidc_token(authorization_header)` before processing the request body
+    - If validation fails with 401, return HTTP 401 with error message
+    - If validation fails with 403, return HTTP 403 with error message
+    - Log OIDC validation result (success/failure, repository claim) excluding the token itself
+    - _Requirements: 2.1, 2.3, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14_
+
+  - [ ] 60.2 Add OIDC authentication to GET /execution/{id}/output endpoint
+    - Extract Authorization header from request
+    - Call `request_validator.validate_oidc_token(authorization_header)` before retrieving output
+    - If validation fails with 401, return HTTP 401 with error message
+    - If validation fails with 403, return HTTP 403 with error message
+    - _Requirements: 2.2, 2.3, 6.3_
+
+  - [ ] 60.3 Ensure /health endpoint remains unauthenticated
+    - Verify that the GET /health endpoint does NOT call `validate_oidc_token()`
+    - No Authorization header required for health checks
+    - _Requirements: 2.20_
+
+- [ ] 61. Checkpoint - Ensure OIDC implementation compiles and existing tests are updated
+  - Update existing tests that construct `ServerConfig` to include `allowed_repositories` and `expected_audience` fields
+  - Update existing tests that construct `RequestValidator` to pass OIDC config parameters
+  - Ensure all existing tests pass with the updated signatures
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 62. Write property tests for OIDC token validation
+  - [ ] 62.1 Write property test for OIDC Issuer Claim Validation
+    - **Property 104: OIDC Issuer Claim Validation**
+    - Generate OIDC tokens with arbitrary `iss` claims that do not match `https://token.actions.githubusercontent.com`
+    - Verify the Request Validator rejects with HTTP 401
+    - **Validates: Requirements 2.7, 2.8**
+
+  - [ ] 62.2 Write property test for OIDC Audience Claim Validation
+    - **Property 105: OIDC Audience Claim Validation**
+    - Generate OIDC tokens with arbitrary `aud` claims that do not match the configured Expected_Audience
+    - Verify the Request Validator rejects with HTTP 401
+    - **Validates: Requirements 2.9, 2.10**
+
+  - [ ] 62.3 Write property test for OIDC Repository Authorization
+    - **Property 106: OIDC Repository Authorization**
+    - Generate OIDC tokens with arbitrary `repository` claims not in the Allowed_Repositories list
+    - Verify the Request Validator rejects with HTTP 403
+    - **Validates: Requirements 2.11, 2.12**
+
+  - [ ] 62.4 Write property test for OIDC Token Expiration Validation
+    - **Property 107: OIDC Token Expiration Validation**
+    - Generate OIDC tokens with `exp` claims in the past
+    - Verify the Request Validator rejects with HTTP 401
+    - **Validates: Requirements 2.13, 2.14**
+
+  - [ ] 62.5 Write property test for Health Endpoint No Authentication
+    - **Property 108: Health Endpoint No Authentication**
+    - Send requests to /health without any Authorization header
+    - Verify the server responds with HTTP 200 without requiring authentication
+    - **Validates: Requirements 2.20**
+
+  - [ ] 62.6 Write property test for OIDC Token Required on Protected Endpoints
+    - **Property 8: OIDC Token Required on Protected Endpoints**
+    - Send requests to /execute and /execution/{id}/output without Authorization header
+    - Verify both return HTTP 401
+    - **Validates: Requirements 2.1, 2.2, 2.3**
+
+  - [ ] 62.7 Write property test for OIDC Token Signature Verification
+    - **Property 10: OIDC Token Signature Verification**
+    - Generate tokens signed with a different key than the JWKS
+    - Verify the Request Validator rejects with HTTP 401
+    - **Validates: Requirements 2.4, 2.6**
+
+- [ ] 63. Write unit tests for OIDC validation
+  - [ ] 63.1 Write unit tests for OIDC token validation
+    - Test missing Authorization header returns 401
+    - Test malformed Authorization header (not "Bearer <token>") returns 401
+    - Test valid token with correct claims returns success
+    - Test token with wrong issuer returns 401
+    - Test token with wrong audience returns 401
+    - Test token with unauthorized repository returns 403
+    - Test expired token returns 401
+    - Test token signed with wrong key returns 401
+    - Test JWKS cache refresh on unknown key ID
+    - Test JWKS fetch failure handling
+    - Mock JWKS endpoint and JWT signing for all tests
+    - _Requirements: 2.1-2.14, 2.20_
+
+  - [ ] 63.2 Write unit tests for OIDC-protected endpoints
+    - Test POST /execute without Authorization header returns 401
+    - Test POST /execute with invalid token returns 401
+    - Test POST /execute with unauthorized repo token returns 403
+    - Test POST /execute with valid token proceeds to execution
+    - Test GET /execution/{id}/output without Authorization header returns 401
+    - Test GET /execution/{id}/output with valid token returns output
+    - Test GET /health without Authorization header returns 200
+    - _Requirements: 2.1, 2.2, 2.3, 2.20_
+
+- [ ] 64. Update existing tests for OIDC authentication compatibility
+  - [ ] 64.1 Update tests/test_server_unit.py for OIDC
+    - Add OIDC token mocking/bypass to all existing endpoint tests
+    - Update ServerConfig construction to include `allowed_repositories` and `expected_audience`
+    - Ensure existing /execute and /output tests pass with OIDC middleware active
+    - _Requirements: 2.1, 2.2_
+
+  - [ ] 64.2 Update tests/test_integration.py for OIDC
+    - Add OIDC token mocking to integration test setup
+    - Update ServerConfig construction to include OIDC fields
+    - Ensure end-to-end flow tests work with OIDC authentication
+    - _Requirements: 2.1, 2.2_
+
+  - [ ] 64.3 Update tests/test_config_properties.py for OIDC config fields
+    - Add property tests for `ALLOWED_REPOSITORIES` and `EXPECTED_AUDIENCE` environment variable loading
+    - Test comma-separated repository list parsing
+    - Test missing OIDC config variables cause startup failure
+    - _Requirements: 9.2, 9.3, 9.8_
+
+  - [ ] 64.4 Update remaining test files that construct ServerConfig
+    - Update tests/test_health_metrics_unit.py
+    - Update tests/test_health_metrics_properties.py
+    - Update tests/test_logging_error_handling_properties.py
+    - Add `allowed_repositories` and `expected_audience` to all ServerConfig constructor calls
+    - _Requirements: 9.2, 9.3_
+
+- [ ] 65. Final checkpoint - Ensure all OIDC tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 103 correctness properties from the design document
+- Property tests validate the 108 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
@@ -1282,7 +1468,11 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - SSH key provisioning uses cloud-init and ec2-instance-connect (no baked-in keys)
 - NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM
 - Scripts execute as root with full system privileges
-- All 94 properties should be tested with hypothesis library (minimum 100 iterations each)
+- OIDC authentication (tasks 58-65) replaces the previous shared secret token approach with GitHub Actions OIDC JWT validation
+- PyJWT[crypto] is used for JWT decoding and JWKS-based signature verification
+- OIDC tokens are validated for signature (JWKS), issuer, audience, repository, and expiration claims
+- Protected endpoints (/execute, /execution/{id}/output) require Bearer OIDC tokens; /health remains unauthenticated
+- All 108 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup

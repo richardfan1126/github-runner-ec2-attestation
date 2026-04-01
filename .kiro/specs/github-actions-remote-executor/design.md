@@ -113,6 +113,12 @@ The system consists of the following major components:
 - If Output_Attestation_Document generation fails, still returns Script_Output and Attestation_Document with an error field
 
 **Request Validator**
+- Validates OIDC JWT tokens on protected endpoints (/execute, /execution/{id}/output)
+- Fetches and caches GitHub's OIDC provider JWKS from `https://token.actions.githubusercontent.com/.well-known/jwks`
+- Verifies JWT signature against JWKS; refreshes cache on unknown key ID
+- Validates JWT claims: `iss` matches `https://token.actions.githubusercontent.com`, `aud` matches configured Expected_Audience, `repository` matches an entry in configured Allowed_Repositories, `exp` is not past current time
+- Returns 401 for missing/invalid/expired tokens and signature failures; returns 403 for valid tokens from unauthorized repositories
+- Does NOT require authentication for /health endpoint
 - Validates request structure and required fields
 - Validates repository URL format
 - Validates Git commit SHA format
@@ -177,27 +183,29 @@ The system consists of the following major components:
 
 **Execution Request Flow:**
 
-1. Client sends POST request to `/execute` with repository URL, commit hash, script path, and GitHub token
-2. Request Handler validates request structure
-3. Request Validator validates all fields
-4. Repository Client authenticates and fetches script file from GitHub
-5. Attestation Generator creates attestation document with execution metadata
-6. Execution Manager creates execution record with unique ID
-7. Response returned immediately with execution ID and attestation document
-8. Script Executor begins asynchronous execution as root
-9. Output Collector captures stdout/stderr streams
-10. Execution Manager updates status upon completion
+1. Client sends POST request to `/execute` with repository URL, commit hash, script path, GitHub token, and Bearer OIDC_Token in Authorization header
+2. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
+3. Request Handler validates request structure
+4. Request Validator validates all request body fields
+5. Repository Client authenticates and fetches script file from GitHub
+6. Attestation Generator creates attestation document with execution metadata
+7. Execution Manager creates execution record with unique ID
+8. Response returned immediately with execution ID and attestation document
+9. Script Executor begins asynchronous execution as root
+10. Output Collector captures stdout/stderr streams
+11. Execution Manager updates status upon completion
 
 **Output Polling Flow:**
 
-1. Client sends GET request to `/execution/{id}/output` with optional offset parameter
-2. Output Handler retrieves execution record by ID
-3. Output Collector returns current status, output from offset, and completion flag
-4. If complete, Output Handler computes SHA-256 digest of the Script_Output and generates an Output_Attestation_Document with the digest in user_data
-5. If complete, response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code
-6. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
-7. Client repeats polling until execution completes
-8. Client can verify output integrity by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
+1. Client sends GET request to `/execution/{id}/output` with optional offset parameter and Bearer OIDC_Token in Authorization header
+2. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
+3. Output Handler retrieves execution record by ID
+4. Output Collector returns current status, output from offset, and completion flag
+5. If complete, Output Handler computes SHA-256 digest of the Script_Output and generates an Output_Attestation_Document with the digest in user_data
+6. If complete, response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code
+7. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
+8. Client repeats polling until execution completes
+9. Client can verify output integrity by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
 
 ### Concurrency Model
 
@@ -236,7 +244,8 @@ Initiates script execution and returns attestation document.
 
 **Error Responses:**
 - 400 Bad Request: Malformed request or validation failure
-- 401 Unauthorized: GitHub authentication failure
+- 401 Unauthorized: Missing/invalid/expired OIDC token, signature verification failure, invalid iss or aud claim
+- 403 Forbidden: Valid OIDC token from an unauthorized repository
 - 404 Not Found: Repository, commit, or file not found
 - 413 Payload Too Large: Script file exceeds size limit
 - 429 Too Many Requests: Rate limit exceeded
@@ -295,6 +304,8 @@ When complete but Output_Attestation_Document generation fails:
 ```
 
 **Error Responses:**
+- 401 Unauthorized: Missing/invalid/expired OIDC token, signature verification failure, invalid iss or aud claim
+- 403 Forbidden: Valid OIDC token from an unauthorized repository
 - 404 Not Found: Execution ID does not exist
 
 #### GET /health
@@ -332,6 +343,26 @@ Metrics endpoint for monitoring.
 
 ```python
 class RequestValidator:
+    def __init__(self, allowed_repositories: list[str], expected_audience: str):
+        """Initialize with OIDC configuration"""
+        pass
+
+    def validate_oidc_token(self, authorization_header: str | None) -> OIDCValidationResult:
+        """
+        Validates the OIDC Bearer token from the Authorization header.
+        Fetches JWKS from GitHub's OIDC provider, verifies JWT signature,
+        and validates iss, aud, repository, and exp claims.
+        Returns 401 for missing/invalid/expired tokens, 403 for unauthorized repos.
+        """
+        pass
+
+    def _fetch_jwks(self, force_refresh: bool = False) -> dict:
+        """
+        Fetches JWKS from https://token.actions.githubusercontent.com/.well-known/jwks
+        Caches the result; refreshes when force_refresh=True (e.g., unknown key ID).
+        """
+        pass
+
     def validate_execution_request(self, request: dict) -> ValidationResult:
         """Validates execution request structure and fields"""
         pass
@@ -502,6 +533,31 @@ class ServerConfig:
     temp_storage_path: str
     output_retention_hours: int
     tpm_attest_path: str
+    allowed_repositories: list[str]
+    expected_audience: str
+```
+
+### OIDCValidationResult
+
+```python
+@dataclass
+class OIDCValidationResult:
+    valid: bool
+    status_code: int  # 200 on success, 401 or 403 on failure
+    error_message: str | None
+    claims: dict | None  # Decoded JWT claims on success
+```
+
+### OIDCTokenClaims
+
+```python
+@dataclass
+class OIDCTokenClaims:
+    iss: str       # Must be https://token.actions.githubusercontent.com
+    aud: str       # Must match Expected_Audience
+    repository: str  # Must match an entry in Allowed_Repositories
+    exp: int       # Unix timestamp, must not be expired
+    sub: str       # Subject (e.g., repo:owner/repo:ref:refs/heads/main)
 ```
 
 
@@ -551,11 +607,11 @@ class ServerConfig:
 
 **Validates: Requirements 2.5**
 
-### Property 8: GitHub Authentication
+### Property 8: OIDC Token Required on Protected Endpoints
 
-*For any* valid execution request with a GitHub token, the Repository Client should authenticate to GitHub using that token before fetching files.
+*For any* request to `/execute` or `/execution/{id}/output` without a valid Bearer OIDC_Token in the Authorization header, the server should reject the request with HTTP 401 Unauthorized.
 
-**Validates: Requirements 3.1**
+**Validates: Requirements 2.1, 2.2, 2.3**
 
 ### Property 9: Exact Commit File Retrieval
 
@@ -563,11 +619,11 @@ class ServerConfig:
 
 **Validates: Requirements 3.2**
 
-### Property 10: Authentication Failure Response
+### Property 10: OIDC Token Signature Verification
 
-*For any* invalid or expired GitHub token, the Repository Client should return HTTP 401 with an authentication error message.
+*For any* OIDC_Token whose signature cannot be verified against the JWKS fetched from GitHub's OIDC provider, the Request Validator should reject the request with HTTP 401 Unauthorized.
 
-**Validates: Requirements 3.3**
+**Validates: Requirements 2.4, 2.6**
 
 ### Property 11: Repository Not Found Response
 
@@ -787,7 +843,7 @@ class ServerConfig:
 
 ### Property 50: Configuration Loading
 
-*For any* server startup, configuration should be loaded from environment variables or a configuration file.
+*For any* server startup, configuration should be loaded from environment variables or a configuration file, including Allowed_Repositories and Expected_Audience.
 
 **Validates: Requirements 9.1**
 
@@ -869,13 +925,44 @@ class ServerConfig:
 
 **Validates: Requirements 6.11**
 
+### Property 104: OIDC Issuer Claim Validation
+
+*For any* OIDC_Token where the `iss` claim does not match `https://token.actions.githubusercontent.com`, the Request Validator should reject the request with HTTP 401 Unauthorized.
+
+**Validates: Requirements 2.7, 2.8**
+
+### Property 105: OIDC Audience Claim Validation
+
+*For any* OIDC_Token where the `aud` claim does not match the configured Expected_Audience, the Request Validator should reject the request with HTTP 401 Unauthorized.
+
+**Validates: Requirements 2.9, 2.10**
+
+### Property 106: OIDC Repository Authorization
+
+*For any* OIDC_Token where the `repository` claim does not match any entry in the configured Allowed_Repositories, the Request Validator should reject the request with HTTP 403 Forbidden.
+
+**Validates: Requirements 2.11, 2.12**
+
+### Property 107: OIDC Token Expiration Validation
+
+*For any* OIDC_Token where the `exp` claim is in the past relative to the current time, the Request Validator should reject the request with HTTP 401 Unauthorized.
+
+**Validates: Requirements 2.13, 2.14**
+
+### Property 108: Health Endpoint No Authentication
+
+*For any* request to the /health endpoint, the server should respond without requiring an Authorization header or OIDC token.
+
+**Validates: Requirements 2.20**
+
 ### Error Categories
 
 The system handles errors in the following categories:
 
 1. **Client Errors (4xx)**
    - 400 Bad Request: Malformed requests, validation failures
-   - 401 Unauthorized: GitHub authentication failures
+   - 401 Unauthorized: Missing/invalid/expired OIDC tokens, JWT signature verification failures, invalid iss or aud claims
+   - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories)
    - 404 Not Found: Repository, commit, file, or execution ID not found
    - 413 Payload Too Large: Script file exceeds size limit
    - 429 Too Many Requests: Rate limit exceeded
@@ -908,6 +995,16 @@ All error responses follow a consistent JSON structure:
 - Distinguish between authentication, not found, and rate limit errors
 - Map GitHub API error codes to appropriate HTTP status codes
 - Retry transient errors with exponential backoff
+
+**OIDC Authentication Errors**
+- Return 401 for missing Authorization header with descriptive error message
+- Return 401 for JWT signature verification failures (invalid signature against JWKS)
+- Return 401 for invalid `iss` claim (not `https://token.actions.githubusercontent.com`)
+- Return 401 for invalid `aud` claim (does not match Expected_Audience)
+- Return 401 for expired tokens (`exp` claim in the past)
+- Return 403 for valid tokens from unauthorized repositories (`repository` claim not in Allowed_Repositories)
+- Cache JWKS and refresh on unknown key ID to handle key rotation
+- Log authentication failures with claim details (excluding the token itself)
 
 **Attestation Errors**
 - Verify NitroTPM device availability at startup
@@ -1009,6 +1106,13 @@ def test_execution_id_uniqueness(requests):
 **Attestation Testing**
 - Unit tests: Mock NitroTPM device, specific attestation formats
 - Property tests: Random execution metadata, attestation verification
+
+**OIDC Authentication Testing**
+- Unit tests: Mock JWKS endpoint, specific token claim combinations, expired tokens, wrong issuer/audience, unauthorized repositories
+- Property tests: Random JWT claims with valid/invalid signatures, random repository names against Allowed_Repositories, random expiration times relative to current time
+- Test JWKS caching behavior: verify cache hit on known key ID, cache refresh on unknown key ID
+- Test 401 vs 403 distinction: invalid tokens → 401, valid token from unauthorized repo → 403
+- Test /health endpoint accessibility without authentication
 
 **Output Attestation Testing**
 - Unit tests: Mock NitroTPM for output attestation generation, verify graceful degradation on failure
@@ -1337,6 +1441,7 @@ The project maintains two separate Python dependency configurations to ensure th
   - fastapi: HTTP server framework
   - uvicorn: ASGI server for running FastAPI
   - requests: HTTP client for GitHub API calls
+  - PyJWT[crypto]: JWT decoding and JWKS-based signature verification for OIDC token validation (includes cryptography dependency)
 - Development/testing dependencies:
   - hypothesis: Property-based testing library
   - pytest: Test execution framework
@@ -1377,7 +1482,7 @@ The Python dependency installation is split across two phases:
 
 3. **Installation Verification:**
    - The config.sh script verifies critical packages are importable
-   - Example: `python3 -c "import fastapi"`, `python3 -c "import uvicorn"`, `python3 -c "import requests"`
+   - Example: `python3 -c "import fastapi"`, `python3 -c "import uvicorn"`, `python3 -c "import requests"`, `python3 -c "import jwt"`
    - If verification fails, the KIWI build fails with an error
    - Successful verification is logged for build audit trail
 
@@ -2304,6 +2409,7 @@ If automated cleanup fails:
 - fastapi: HTTP server framework
 - uvicorn: ASGI server
 - requests: HTTP client for GitHub API
+- PyJWT[crypto]: JWT decoding and JWKS-based signature verification for OIDC token validation
 - Development/test dependencies (hypothesis, pytest, pytest-asyncio, httpx) if included
 - Script dependencies from scripts/pyproject.toml (boto3, paramiko) are NOT installed in the image
 
@@ -2322,7 +2428,7 @@ The KIWI image build process installs Python dependencies using a two-phase appr
 
 3. **Installation Verification:**
    - After installation, the script verifies that key packages are importable
-   - Checks that fastapi, uvicorn, and requests are available
+   - Checks that fastapi, uvicorn, requests, and jwt (PyJWT) are available
    - Logs installation results for debugging
 
 4. **System Python Environment:**
@@ -2342,7 +2448,7 @@ The dependency installation is split across two scripts:
 - **config.sh** (runs inside KIWI chroot with no network):
   - Verifies pre-downloaded wheels exist at /tmp/kiwi-build/wheels/
   - Installs from local wheels using `pip3 install --no-index --find-links`
-  - Verifies critical packages are importable (fastapi, uvicorn, requests)
+  - Verifies critical packages are importable (fastapi, uvicorn, requests, jwt)
 
 This approach ensures that the remote executor service has all required dependencies available when the AMI is launched, without requiring network access during the KIWI image build phase.
 
