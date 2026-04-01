@@ -259,6 +259,31 @@ def add_routes(app: FastAPI) -> None:
         phase_times = {}
         
         try:
+            # OIDC authentication
+            oidc_start = time.time()
+            validator = request.app.state.request_validator
+            authorization_header = request.headers.get("authorization")
+            oidc_result = validator.validate_oidc_token(authorization_header)
+
+            if not oidc_result.valid:
+                repo_claim = (oidc_result.claims or {}).get("repository", "unknown")
+                logger.warning(
+                    f"OIDC validation failed: status={oidc_result.status_code}, "
+                    f"repository={repo_claim}, error={oidc_result.error_message}"
+                )
+                raise HTTPException(
+                    status_code=oidc_result.status_code,
+                    detail=create_error_response(
+                        "oidc_authentication_failed",
+                        oidc_result.error_message or "Authentication failed"
+                    )
+                )
+
+            logger.info(
+                f"OIDC validation succeeded: repository={oidc_result.claims.get('repository')}"
+            )
+            phase_times['oidc_auth'] = (time.time() - oidc_start) * 1000
+
             # Parse request body
             try:
                 body = await request.json()
@@ -281,7 +306,6 @@ def add_routes(app: FastAPI) -> None:
             
             # Validate request
             validation_start = time.time()
-            validator = request.app.state.request_validator
             validation_result = validator.validate_execution_request(body)
             
             if not validation_result.valid:
@@ -417,6 +441,7 @@ def add_routes(app: FastAPI) -> None:
             total_time = (time.time() - start_time) * 1000
             logger.info(
                 f"Request processing phases for {execution_record.execution_id}: "
+                f"oidc_auth={phase_times.get('oidc_auth', 0):.2f}ms, "
                 f"validation={phase_times.get('validation', 0):.2f}ms, "
                 f"auth={phase_times.get('authentication', 0):.2f}ms, "
                 f"fetch={phase_times.get('file_retrieval', 0):.2f}ms, "
@@ -463,6 +488,25 @@ def add_routes(app: FastAPI) -> None:
         }
         """
         try:
+            # OIDC authentication
+            validator = request.app.state.request_validator
+            authorization_header = request.headers.get("authorization")
+            oidc_result = validator.validate_oidc_token(authorization_header)
+
+            if not oidc_result.valid:
+                repo_claim = (oidc_result.claims or {}).get("repository", "unknown")
+                logger.warning(
+                    f"OIDC validation failed on output endpoint: status={oidc_result.status_code}, "
+                    f"repository={repo_claim}, error={oidc_result.error_message}"
+                )
+                raise HTTPException(
+                    status_code=oidc_result.status_code,
+                    detail=create_error_response(
+                        "oidc_authentication_failed",
+                        oidc_result.error_message or "Authentication failed"
+                    )
+                )
+
             # Validate offset
             if offset < 0:
                 raise HTTPException(

@@ -9,9 +9,19 @@ from fastapi.testclient import TestClient
 
 from src.server import create_app
 from src.config import ServerConfig
-from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument
+from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult
 from src.repository import FileContent, GitHubAPIError
 from src.attestation import AttestationError
+
+
+VALID_OIDC_RESULT = OIDCValidationResult(
+    valid=True,
+    status_code=200,
+    error_message=None,
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+)
+
+OIDC_BEARER_HEADER = {"Authorization": "Bearer valid.oidc.token"}
 
 
 def get_test_config():
@@ -46,7 +56,8 @@ class TestExecuteEndpoint:
             "github_token": "ghp_test_token_123"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -72,7 +83,7 @@ class TestExecuteEndpoint:
                         )
                         
                         with patch.object(app.state.script_executor, 'execute_async'):
-                            response = client.post("/execute", json=request_data)
+                            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                             
                             # Verify response
                             assert response.status_code == 200
@@ -92,11 +103,12 @@ class TestExecuteEndpoint:
         app = create_app(get_test_config())
         client = TestClient(app)
         
-        response = client.post(
-            "/execute",
-            content="not valid json{",
-            headers={"Content-Type": "application/json"}
-        )
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            response = client.post(
+                "/execute",
+                content="not valid json{",
+                headers={"Content-Type": "application/json", "Authorization": "Bearer valid.oidc.token"}
+            )
         
         assert response.status_code == 400
         data = response.json()
@@ -114,13 +126,14 @@ class TestExecuteEndpoint:
             "script_path": "scripts/test.sh"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(
                 valid=False,
                 errors=["Missing required field: github_token"]
             )
             
-            response = client.post("/execute", json=request_data)
+            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
             
             assert response.status_code == 400
             data = response.json()
@@ -139,13 +152,14 @@ class TestExecuteEndpoint:
             "github_token": "ghp_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(
                 valid=False,
                 errors=["Invalid repository URL format"]
             )
             
-            response = client.post("/execute", json=request_data)
+            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
             
             assert response.status_code == 400
             data = response.json()
@@ -164,13 +178,14 @@ class TestExecuteEndpoint:
             "github_token": "ghp_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(
                 valid=False,
                 errors=["Invalid commit hash format"]
             )
             
-            response = client.post("/execute", json=request_data)
+            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
             
             assert response.status_code == 400
             data = response.json()
@@ -188,7 +203,8 @@ class TestExecuteEndpoint:
             "github_token": "invalid_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -197,7 +213,7 @@ class TestExecuteEndpoint:
                     error_message="Invalid authentication credentials"
                 )
                 
-                response = client.post("/execute", json=request_data)
+                response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                 
                 assert response.status_code == 401
                 data = response.json()
@@ -216,7 +232,8 @@ class TestExecuteEndpoint:
             "github_token": "ghp_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -228,7 +245,7 @@ class TestExecuteEndpoint:
                         404
                     )
                     
-                    response = client.post("/execute", json=request_data)
+                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                     
                     assert response.status_code == 404
                     data = response.json()
@@ -246,7 +263,8 @@ class TestExecuteEndpoint:
             "github_token": "ghp_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -258,7 +276,7 @@ class TestExecuteEndpoint:
                         404
                     )
                     
-                    response = client.post("/execute", json=request_data)
+                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                     
                     assert response.status_code == 404
     
@@ -274,7 +292,8 @@ class TestExecuteEndpoint:
             "github_token": "ghp_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -286,7 +305,7 @@ class TestExecuteEndpoint:
                         404
                     )
                     
-                    response = client.post("/execute", json=request_data)
+                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                     
                     assert response.status_code == 404
     
@@ -305,7 +324,8 @@ class TestExecuteEndpoint:
             "github_token": "ghp_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -319,7 +339,7 @@ class TestExecuteEndpoint:
                     )
                     
                     with patch.object(app.state.repository_client, 'cleanup_temp_file') as mock_cleanup:
-                        response = client.post("/execute", json=request_data)
+                        response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                         
                         assert response.status_code == 413
                         data = response.json()
@@ -342,7 +362,8 @@ class TestExecuteEndpoint:
             "github_token": "ghp_token"
         }
         
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -368,7 +389,7 @@ class TestExecuteEndpoint:
                         )
                         
                         with patch.object(app.state.repository_client, 'cleanup_temp_file') as mock_cleanup:
-                            response = client.post("/execute", json=request_data)
+                            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                             
                             assert response.status_code == 500
                             data = response.json()
@@ -496,21 +517,22 @@ class TestOutputEndpoint:
             exit_code=None
         )
         
-        with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-            with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                response = client.get(f"/execution/{execution_id}/output")
-                
-                assert response.status_code == 200
-                data = response.json()
-                
-                assert data["execution_id"] == execution_id
-                assert data["status"] == "running"
-                assert data["stdout"] == "Line 1\nLine 2\n"
-                assert data["stderr"] == "Warning: test\n"
-                assert data["stdout_offset"] == 14
-                assert data["stderr_offset"] == 14
-                assert data["complete"] is False
-                assert data["exit_code"] is None
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
+                    response = client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                    
+                    assert response.status_code == 200
+                    data = response.json()
+                    
+                    assert data["execution_id"] == execution_id
+                    assert data["status"] == "running"
+                    assert data["stdout"] == "Line 1\nLine 2\n"
+                    assert data["stderr"] == "Warning: test\n"
+                    assert data["stdout_offset"] == 14
+                    assert data["stderr_offset"] == 14
+                    assert data["complete"] is False
+                    assert data["exit_code"] is None
     
     def test_completed_execution_with_exit_code(self):
         """Test output retrieval for completed execution includes exit code"""
@@ -541,16 +563,17 @@ class TestOutputEndpoint:
             exit_code=0
         )
         
-        with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-            with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                response = client.get(f"/execution/{execution_id}/output")
-                
-                assert response.status_code == 200
-                data = response.json()
-                
-                assert data["status"] == "completed"
-                assert data["complete"] is True
-                assert data["exit_code"] == 0
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
+                    response = client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                    
+                    assert response.status_code == 200
+                    data = response.json()
+                    
+                    assert data["status"] == "completed"
+                    assert data["complete"] is True
+                    assert data["exit_code"] == 0
     
     def test_failed_execution_with_nonzero_exit_code(self):
         """Test output retrieval for failed execution with non-zero exit code"""
@@ -581,16 +604,17 @@ class TestOutputEndpoint:
             exit_code=1
         )
         
-        with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-            with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                response = client.get(f"/execution/{execution_id}/output")
-                
-                assert response.status_code == 200
-                data = response.json()
-                
-                assert data["status"] == "failed"
-                assert data["exit_code"] == 1
-                assert data["complete"] is True
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
+                    response = client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                    
+                    assert response.status_code == 200
+                    data = response.json()
+                    
+                    assert data["status"] == "failed"
+                    assert data["exit_code"] == 1
+                    assert data["complete"] is True
     
     def test_execution_not_found_404(self):
         """Test 404 error for non-existent execution ID"""
@@ -599,13 +623,14 @@ class TestOutputEndpoint:
         
         execution_id = "nonexistent-id"
         
-        with patch.object(app.state.execution_manager, 'get_execution', return_value=None):
-            response = client.get(f"/execution/{execution_id}/output")
-            
-            assert response.status_code == 404
-            data = response.json()
-            assert data["detail"]["error"] == "execution_not_found"
-            assert execution_id in data["detail"]["message"]
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=None):
+                response = client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                
+                assert response.status_code == 404
+                data = response.json()
+                assert data["detail"]["error"] == "execution_not_found"
+                assert execution_id in data["detail"]["message"]
     
     def test_output_with_offset(self):
         """Test output retrieval with offset parameter"""
@@ -637,18 +662,19 @@ class TestOutputEndpoint:
             exit_code=None
         )
         
-        with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-            with patch.object(app.state.output_collector, 'get_output', return_value=output_data) as mock_get:
-                response = client.get(f"/execution/{execution_id}/output?offset=100")
-                
-                assert response.status_code == 200
-                data = response.json()
-                
-                # Verify offset was passed to output collector
-                mock_get.assert_called_once_with(execution_id, 100)
-                
-                assert data["stdout"] == "New output\n"
-                assert data["stdout_offset"] == 111
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', return_value=output_data) as mock_get:
+                    response = client.get(f"/execution/{execution_id}/output?offset=100", headers=OIDC_BEARER_HEADER)
+                    
+                    assert response.status_code == 200
+                    data = response.json()
+                    
+                    # Verify offset was passed to output collector
+                    mock_get.assert_called_once_with(execution_id, 100)
+                    
+                    assert data["stdout"] == "New output\n"
+                    assert data["stdout_offset"] == 111
     
     def test_invalid_negative_offset(self):
         """Test 400 error for negative offset"""
@@ -657,7 +683,8 @@ class TestOutputEndpoint:
         
         execution_id = "test-exec-123"
         
-        response = client.get(f"/execution/{execution_id}/output?offset=-1")
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            response = client.get(f"/execution/{execution_id}/output?offset=-1", headers=OIDC_BEARER_HEADER)
         
         assert response.status_code == 400
         data = response.json()
@@ -683,19 +710,20 @@ class TestOutputEndpoint:
             timeout_seconds=300
         )
         
-        with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-            with patch.object(app.state.output_collector, 'get_output', side_effect=ValueError("No output buffer")):
-                response = client.get(f"/execution/{execution_id}/output")
-                
-                assert response.status_code == 200
-                data = response.json()
-                
-                # Should return empty output
-                assert data["stdout"] == ""
-                assert data["stderr"] == ""
-                assert data["stdout_offset"] == 0
-                assert data["stderr_offset"] == 0
-                assert data["complete"] is False
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', side_effect=ValueError("No output buffer")):
+                    response = client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                    
+                    assert response.status_code == 200
+                    data = response.json()
+                    
+                    # Should return empty output
+                    assert data["stdout"] == ""
+                    assert data["stderr"] == ""
+                    assert data["stdout_offset"] == 0
+                    assert data["stderr_offset"] == 0
+                    assert data["complete"] is False
 
 
 class TestConcurrentRequests:
@@ -712,7 +740,8 @@ class TestConcurrentRequests:
         errors = []
         
         # Apply patches at outer level so they work across threads
-        with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
             
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -751,7 +780,7 @@ class TestConcurrentRequests:
                                         "script_path": f"test{index}.sh",
                                         "github_token": f"ghp_token_{index}"
                                     }
-                                    response = client.post("/execute", json=request_data)
+                                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                                     results.append((index, response))
                                 except Exception as e:
                                     errors.append((index, str(e)))
@@ -810,12 +839,13 @@ class TestConcurrentRequests:
         results = []
         
         # Apply patches at the outer level so they work across threads
-        with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
-            with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                
-                def get_output():
-                    response = client.get(f"/execution/{execution_id}/output")
-                    results.append(response)
+        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
+                    
+                    def get_output():
+                        response = client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                        results.append(response)
                 
                 # Launch 10 concurrent output requests
                 threads = []

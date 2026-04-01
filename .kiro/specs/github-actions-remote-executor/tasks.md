@@ -1319,8 +1319,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Return `OIDCValidationResult` with appropriate `status_code` (401 or 403) and `error_message` on failure
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14_
 
-- [ ] 60. Add OIDC authentication middleware to protected endpoints
-  - [ ] 60.1 Add OIDC authentication to POST /execute endpoint
+- [x] 60. Add OIDC authentication middleware to protected endpoints
+  - [x] 60.1 Add OIDC authentication to POST /execute endpoint
     - Extract Authorization header from request
     - Call `request_validator.validate_oidc_token(authorization_header)` before processing the request body
     - If validation fails with 401, return HTTP 401 with error message
@@ -1328,14 +1328,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Log OIDC validation result (success/failure, repository claim) excluding the token itself
     - _Requirements: 2.1, 2.3, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14_
 
-  - [ ] 60.2 Add OIDC authentication to GET /execution/{id}/output endpoint
+  - [x] 60.2 Add OIDC authentication to GET /execution/{id}/output endpoint
     - Extract Authorization header from request
     - Call `request_validator.validate_oidc_token(authorization_header)` before retrieving output
     - If validation fails with 401, return HTTP 401 with error message
     - If validation fails with 403, return HTTP 403 with error message
     - _Requirements: 2.2, 2.3, 6.3_
 
-  - [ ] 60.3 Ensure /health endpoint remains unauthenticated
+  - [x] 60.3 Ensure /health endpoint remains unauthenticated
     - Verify that the GET /health endpoint does NOT call `validate_oidc_token()`
     - No Authorization header required for health checks
     - _Requirements: 2.20_

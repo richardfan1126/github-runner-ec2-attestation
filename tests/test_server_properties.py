@@ -10,10 +10,20 @@ import pytest
 
 from src.server import create_app
 from src.config import ServerConfig
-from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument
+from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult
 from src.repository import FileContent, GitHubAPIError
 from src.attestation import AttestationError
 from datetime import datetime, timezone
+
+
+VALID_OIDC_RESULT = OIDCValidationResult(
+    valid=True,
+    status_code=200,
+    error_message=None,
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+)
+
+OIDC_BEARER_HEADER = {"Authorization": "Bearer valid.oidc.token"}
 
 
 # Test configuration
@@ -89,7 +99,8 @@ def test_concurrent_request_handling(requests_list):
     
     def make_request(req_data):
         try:
-            with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+            with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+                 patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
                 mock_validate.return_value = Mock(valid=True, errors=[])
                 
                 with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -115,7 +126,7 @@ def test_concurrent_request_handling(requests_list):
                             )
                             
                             with patch.object(app.state.script_executor, 'execute_async'):
-                                response = client.post("/execute", json=req_data)
+                                response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
                                 results.append(response)
         except Exception as e:
             errors.append(str(e))
@@ -170,7 +181,8 @@ def test_immediate_response_with_attestation(req_data):
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
     
-    with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+    with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
         mock_validate.return_value = Mock(valid=True, errors=[])
         
         with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -196,7 +208,7 @@ def test_immediate_response_with_attestation(req_data):
                     )
                     
                     with patch.object(app.state.script_executor, 'execute_async', side_effect=slow_execute):
-                        response = client.post("/execute", json=req_data)
+                        response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
                         
                         # Response should be received before execution completes
                         assert not execution_completed.is_set(), \
@@ -240,24 +252,25 @@ def test_output_endpoint_status_return(execution_id, status):
         timeout_seconds=300
     )
     
-    with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
-        with patch.object(_app.state.output_collector, 'get_output') as mock_output:
-            mock_output.return_value = OutputData(
-                stdout="",
-                stderr="",
-                stdout_offset=0,
-                stderr_offset=0,
-                complete=False,
-                exit_code=None
-            )
-            
-            response = _client.get(f"/execution/{execution_id}/output")
-            
-            if response.status_code == 200:
-                data = response.json()
-                assert "status" in data, "Response missing status field"
-                assert data["status"] == status.value, \
-                    f"Status mismatch: expected {status.value}, got {data['status']}"
+    with patch.object(_app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+        with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
+            with patch.object(_app.state.output_collector, 'get_output') as mock_output:
+                mock_output.return_value = OutputData(
+                    stdout="",
+                    stderr="",
+                    stdout_offset=0,
+                    stderr_offset=0,
+                    complete=False,
+                    exit_code=None
+                )
+                
+                response = _client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    assert "status" in data, "Response missing status field"
+                    assert data["status"] == status.value, \
+                        f"Status mismatch: expected {status.value}, got {data['status']}"
 
 
 # Feature: github-actions-remote-executor, Property 33: Completion Exit Code Inclusion
@@ -284,25 +297,26 @@ def test_completion_exit_code_inclusion(execution_id, exit_code):
         timeout_seconds=300
     )
     
-    with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
-        with patch.object(_app.state.output_collector, 'get_output') as mock_output:
-            mock_output.return_value = OutputData(
-                stdout="test output",
-                stderr="",
-                stdout_offset=11,
-                stderr_offset=0,
-                complete=True,
-                exit_code=exit_code
-            )
-            
-            response = _client.get(f"/execution/{execution_id}/output")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert "exit_code" in data, "Response missing exit_code field"
-            assert data["exit_code"] == exit_code, \
-                f"Exit code mismatch: expected {exit_code}, got {data['exit_code']}"
-            assert data["complete"] is True, "Complete flag should be True"
+    with patch.object(_app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+        with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
+            with patch.object(_app.state.output_collector, 'get_output') as mock_output:
+                mock_output.return_value = OutputData(
+                    stdout="test output",
+                    stderr="",
+                    stdout_offset=11,
+                    stderr_offset=0,
+                    complete=True,
+                    exit_code=exit_code
+                )
+                
+                response = _client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert "exit_code" in data, "Response missing exit_code field"
+                assert data["exit_code"] == exit_code, \
+                    f"Exit code mismatch: expected {exit_code}, got {data['exit_code']}"
+                assert data["complete"] is True, "Complete flag should be True"
 
 
 # Feature: github-actions-remote-executor, Property 34: Completion Flag Accuracy
@@ -330,24 +344,25 @@ def test_completion_flag_accuracy(execution_id, is_complete):
         timeout_seconds=300
     )
     
-    with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
-        with patch.object(_app.state.output_collector, 'get_output') as mock_output:
-            mock_output.return_value = OutputData(
-                stdout="test",
-                stderr="",
-                stdout_offset=4,
-                stderr_offset=0,
-                complete=is_complete,
-                exit_code=0 if is_complete else None
-            )
-            
-            response = _client.get(f"/execution/{execution_id}/output")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert "complete" in data, "Response missing complete field"
-            assert data["complete"] == is_complete, \
-                f"Complete flag mismatch: expected {is_complete}, got {data['complete']}"
+    with patch.object(_app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+        with patch.object(_app.state.execution_manager, 'get_execution', return_value=record):
+            with patch.object(_app.state.output_collector, 'get_output') as mock_output:
+                mock_output.return_value = OutputData(
+                    stdout="test",
+                    stderr="",
+                    stdout_offset=4,
+                    stderr_offset=0,
+                    complete=is_complete,
+                    exit_code=0 if is_complete else None
+                )
+                
+                response = _client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert "complete" in data, "Response missing complete field"
+                assert data["complete"] == is_complete, \
+                    f"Complete flag mismatch: expected {is_complete}, got {data['complete']}"
 
 
 # Feature: github-actions-remote-executor, Property 35: Invalid Execution ID Response
@@ -361,16 +376,17 @@ def test_invalid_execution_id_response(execution_id):
     HTTP 404 with an execution not found error.
     """
     # Mock execution manager to return None (not found)
-    with patch.object(_app.state.execution_manager, 'get_execution', return_value=None):
-        response = _client.get(f"/execution/{execution_id}/output")
-        
-        assert response.status_code == 404, \
-            f"Expected 404 for non-existent execution, got {response.status_code}"
-        
-        data = response.json()
-        assert "error" in data.get("detail", {}), "Response missing error field"
-        assert data["detail"]["error"] == "execution_not_found", \
-            "Error should be 'execution_not_found'"
+    with patch.object(_app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT):
+        with patch.object(_app.state.execution_manager, 'get_execution', return_value=None):
+            response = _client.get(f"/execution/{execution_id}/output", headers=OIDC_BEARER_HEADER)
+            
+            assert response.status_code == 404, \
+                f"Expected 404 for non-existent execution, got {response.status_code}"
+            
+            data = response.json()
+            assert "error" in data.get("detail", {}), "Response missing error field"
+            assert data["detail"]["error"] == "execution_not_found", \
+                "Error should be 'execution_not_found'"
 
 
 # Feature: github-actions-remote-executor, Property 47: Script Size Validation
@@ -387,7 +403,8 @@ def test_script_size_validation(req_data, file_size):
     app = create_app(get_test_config())
     client = TestClient(app)
     
-    with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+    with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
         mock_validate.return_value = Mock(valid=True, errors=[])
         
         with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -401,7 +418,7 @@ def test_script_size_validation(req_data, file_size):
                 )
                 
                 with patch.object(app.state.repository_client, 'cleanup_temp_file'):
-                    response = client.post("/execute", json=req_data)
+                    response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
                     
                     # Should validate size and reject if too large
                     max_size = app.state.config.max_script_size_bytes
@@ -430,7 +447,8 @@ def test_oversized_script_rejection(req_data):
     
     max_size = app.state.config.max_script_size_bytes
     
-    with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+    with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
         mock_validate.return_value = Mock(valid=True, errors=[])
         
         with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
@@ -444,7 +462,7 @@ def test_oversized_script_rejection(req_data):
                 )
                 
                 with patch.object(app.state.repository_client, 'cleanup_temp_file') as mock_cleanup:
-                    response = client.post("/execute", json=req_data)
+                    response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
                     
                     assert response.status_code == 413, \
                         f"Expected 413 for oversized file, got {response.status_code}"
@@ -476,7 +494,8 @@ def test_rate_limiting_per_ip(num_requests):
     
     responses = []
     
-    with patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+    with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
         mock_validate.return_value = Mock(valid=True, errors=[])
         
         for i in range(num_requests):
@@ -485,7 +504,7 @@ def test_rate_limiting_per_ip(num_requests):
                 "commit_hash": "a" * 40,
                 "script_path": "test.sh",
                 "github_token": "test_token"
-            })
+            }, headers=OIDC_BEARER_HEADER)
             responses.append(response)
     
     # Count how many were rate limited
