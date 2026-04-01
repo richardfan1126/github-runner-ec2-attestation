@@ -14,8 +14,16 @@ from fastapi.testclient import TestClient
 
 from src.attestation import AttestationGenerator
 from src.config import ServerConfig
-from src.models import ExecutionRecord, ExecutionStatus, OutputData
+from src.models import ExecutionRecord, ExecutionStatus, OutputData, OIDCValidationResult
 from src.server import create_app
+
+
+VALID_OIDC_RESULT = OIDCValidationResult(
+    valid=True,
+    status_code=200,
+    error_message=None,
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+)
 
 
 def get_test_config():
@@ -149,14 +157,15 @@ class TestOutputEndpointWithAttestation:
         )
         attestation_bytes = b"output_attestation_cbor_data"
 
-        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
-            with patch.object(app.state.output_collector, "get_output", return_value=output):
-                with patch.object(
-                    app.state.attestation_generator,
-                    "generate_output_attestation",
-                    return_value=(attestation_bytes, None),
-                ):
-                    response = client.get(f"/execution/{eid}/output")
+        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+                with patch.object(app.state.output_collector, "get_output", return_value=output):
+                    with patch.object(
+                        app.state.attestation_generator,
+                        "generate_output_attestation",
+                        return_value=(attestation_bytes, None),
+                    ):
+                        response = client.get(f"/execution/{eid}/output")
 
         assert response.status_code == 200
         data = response.json()
@@ -176,14 +185,15 @@ class TestOutputEndpointWithAttestation:
             stderr_offset=0, complete=True, exit_code=0,
         )
 
-        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
-            with patch.object(app.state.output_collector, "get_output", return_value=output):
-                with patch.object(
-                    app.state.attestation_generator,
-                    "generate_output_attestation",
-                    return_value=(None, "TPM device unavailable"),
-                ):
-                    response = client.get(f"/execution/{eid}/output")
+        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+                with patch.object(app.state.output_collector, "get_output", return_value=output):
+                    with patch.object(
+                        app.state.attestation_generator,
+                        "generate_output_attestation",
+                        return_value=(None, "TPM device unavailable"),
+                    ):
+                        response = client.get(f"/execution/{eid}/output")
 
         assert response.status_code == 200
         data = response.json()
@@ -205,9 +215,10 @@ class TestOutputEndpointWithAttestation:
             stderr_offset=0, complete=False, exit_code=None,
         )
 
-        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
-            with patch.object(app.state.output_collector, "get_output", return_value=output):
-                response = client.get(f"/execution/{eid}/output")
+        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+                with patch.object(app.state.output_collector, "get_output", return_value=output):
+                    response = client.get(f"/execution/{eid}/output")
 
         assert response.status_code == 200
         data = response.json()
@@ -222,12 +233,13 @@ class TestOutputEndpointWithAttestation:
 
         record = self._make_record(eid, ExecutionStatus.QUEUED)
 
-        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
-            with patch.object(
-                app.state.output_collector, "get_output",
-                side_effect=ValueError("No output buffer"),
-            ):
-                response = client.get(f"/execution/{eid}/output")
+        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+                with patch.object(
+                    app.state.output_collector, "get_output",
+                    side_effect=ValueError("No output buffer"),
+                ):
+                    response = client.get(f"/execution/{eid}/output")
 
         assert response.status_code == 200
         data = response.json()

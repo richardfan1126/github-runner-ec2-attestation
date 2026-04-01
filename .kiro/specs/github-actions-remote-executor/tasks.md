@@ -1340,7 +1340,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - No Authorization header required for health checks
     - _Requirements: 2.20_
 
-- [ ] 61. Checkpoint - Ensure OIDC implementation compiles and existing tests are updated
+- [x] 61. Checkpoint - Ensure OIDC implementation compiles and existing tests are updated
   - Update existing tests that construct `ServerConfig` to include `allowed_repositories` and `expected_audience` fields
   - Update existing tests that construct `RequestValidator` to pass OIDC config parameters
   - Ensure all existing tests pass with the updated signatures

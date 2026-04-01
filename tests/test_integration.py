@@ -13,7 +13,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.config import ServerConfig
+from src.models import OIDCValidationResult
 from src.server import create_app
+
+
+VALID_OIDC_RESULT = OIDCValidationResult(
+    valid=True,
+    status_code=200,
+    error_message=None,
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+)
 
 
 @pytest.fixture
@@ -89,8 +98,11 @@ def mock_github_and_attestation():
 
 @pytest.fixture
 def app(test_config, mock_github_and_attestation):
-    """Create test application"""
-    return create_app(test_config)
+    """Create test application with OIDC validation mocked"""
+    application = create_app(test_config)
+    # Mock OIDC validation to always succeed for integration tests
+    application.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
+    return application
 
 
 @pytest.fixture
@@ -244,6 +256,7 @@ class TestErrorScenarios:
         """Test script execution timeout"""
         # Create fresh app and client to avoid rate limiting from other tests
         app = create_app(test_config)
+        app.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
         client = TestClient(app)
         
         # Mock long-running script

@@ -13,8 +13,16 @@ from fastapi.testclient import TestClient
 from src.attestation import AttestationGenerator
 from src.server import create_app
 from src.config import ServerConfig
-from src.models import ExecutionStatus, ExecutionRecord, OutputData
+from src.models import ExecutionStatus, ExecutionRecord, OutputData, OIDCValidationResult
 from datetime import datetime, timezone
+
+
+VALID_OIDC_RESULT = OIDCValidationResult(
+    valid=True,
+    status_code=200,
+    error_message=None,
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+)
 
 
 def get_test_config():
@@ -133,17 +141,20 @@ def test_property_45_output_attestation_base64_encoding(
     )
 
     with patch.object(
-        app.state.execution_manager, "get_execution", return_value=record
+        app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
     ):
         with patch.object(
-            app.state.output_collector, "get_output", return_value=output_data
+            app.state.execution_manager, "get_execution", return_value=record
         ):
             with patch.object(
-                app.state.attestation_generator,
-                "generate_output_attestation",
-                return_value=(attestation_bytes, None),
+                app.state.output_collector, "get_output", return_value=output_data
             ):
-                response = client.get(f"/execution/{execution_id}/output")
+                with patch.object(
+                    app.state.attestation_generator,
+                    "generate_output_attestation",
+                    return_value=(attestation_bytes, None),
+                ):
+                    response = client.get(f"/execution/{execution_id}/output")
 
     assert response.status_code == 200
     data = response.json()
@@ -202,17 +213,20 @@ def test_property_46_output_attestation_failure_graceful_degradation(
     )
 
     with patch.object(
-        app.state.execution_manager, "get_execution", return_value=record
+        app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
     ):
         with patch.object(
-            app.state.output_collector, "get_output", return_value=output_data
+            app.state.execution_manager, "get_execution", return_value=record
         ):
             with patch.object(
-                app.state.attestation_generator,
-                "generate_output_attestation",
-                return_value=(None, error_msg),
+                app.state.output_collector, "get_output", return_value=output_data
             ):
-                response = client.get(f"/execution/{execution_id}/output")
+                with patch.object(
+                    app.state.attestation_generator,
+                    "generate_output_attestation",
+                    return_value=(None, error_msg),
+                ):
+                    response = client.get(f"/execution/{execution_id}/output")
 
     assert response.status_code == 200
     data = response.json()
