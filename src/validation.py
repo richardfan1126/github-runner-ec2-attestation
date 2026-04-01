@@ -1,8 +1,19 @@
 """Request validation for GitHub Actions Remote Executor"""
+import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional, List
-from src.models import ExecutionRequest
+
+import jwt
+import requests as http_requests
+
+from src.models import ExecutionRequest, OIDCValidationResult
+
+logger = logging.getLogger(__name__)
+
+GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+GITHUB_OIDC_JWKS_URL = f"{GITHUB_OIDC_ISSUER}/.well-known/jwks"
 
 
 @dataclass
@@ -35,6 +46,162 @@ class RequestValidator:
     
     # Path traversal patterns to detect
     PATH_TRAVERSAL_PATTERNS = ['../', '..\\', '/../', '\\..\\']
+
+    def __init__(
+        self,
+        allowed_repositories: Optional[List[str]] = None,
+        expected_audience: Optional[str] = None,
+    ):
+        self.allowed_repositories = allowed_repositories or []
+        self.expected_audience = expected_audience or ""
+        self._jwks_cache: Optional[dict] = None
+
+    # ------------------------------------------------------------------
+    # OIDC token validation
+    # ------------------------------------------------------------------
+
+    def _fetch_jwks(self, force_refresh: bool = False) -> dict:
+        """Fetch JWKS from GitHub's OIDC provider, with caching.
+
+        Args:
+            force_refresh: If True, bypass the cache and fetch fresh JWKS.
+
+        Returns:
+            The JWKS dict (contains a ``keys`` list).
+        """
+        if self._jwks_cache is not None and not force_refresh:
+            return self._jwks_cache
+
+        try:
+            resp = http_requests.get(GITHUB_OIDC_JWKS_URL, timeout=10)
+            resp.raise_for_status()
+            self._jwks_cache = resp.json()
+            return self._jwks_cache
+        except Exception as exc:
+            logger.error(f"Failed to fetch JWKS from {GITHUB_OIDC_JWKS_URL}: {exc}")
+            raise
+
+    def validate_oidc_token(self, authorization_header: Optional[str]) -> OIDCValidationResult:
+        """Validate a Bearer OIDC token from the Authorization header.
+
+        Returns an ``OIDCValidationResult`` with ``status_code`` 200 on
+        success, 401 for authentication failures, or 403 when the token
+        is valid but the repository is not in the allow-list.
+        """
+        # --- extract bearer token ---
+        if not authorization_header:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Authorization header is required",
+                claims=None,
+            )
+
+        parts = authorization_header.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Authorization header must use Bearer scheme",
+                claims=None,
+            )
+
+        token = parts[1]
+
+        # --- decode JWT header to get kid ---
+        try:
+            unverified_header = jwt.get_unverified_header(token)
+        except jwt.exceptions.DecodeError as exc:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message=f"Invalid token format: {exc}",
+                claims=None,
+            )
+
+        kid = unverified_header.get("kid")
+        if not kid:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Token header missing key ID (kid)",
+                claims=None,
+            )
+
+        # --- find matching key in JWKS (retry once on cache miss) ---
+        signing_key = self._find_signing_key(kid)
+        if signing_key is None:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message=f"No matching key found for kid: {kid}",
+                claims=None,
+            )
+
+        # --- verify signature and decode claims ---
+        try:
+            claims = jwt.decode(
+                token,
+                signing_key,
+                algorithms=["RS256"],
+                issuer=GITHUB_OIDC_ISSUER,
+                audience=self.expected_audience,
+                options={"require": ["exp", "iss", "aud"]},
+            )
+        except jwt.ExpiredSignatureError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Token has expired",
+                claims=None,
+            )
+        except jwt.InvalidIssuerError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Invalid token issuer",
+                claims=None,
+            )
+        except jwt.InvalidAudienceError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Invalid token audience",
+                claims=None,
+            )
+        except jwt.InvalidSignatureError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Token signature verification failed",
+                claims=None,
+            )
+        except jwt.PyJWTError as exc:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message=f"Token validation failed: {exc}",
+                claims=None,
+            )
+
+        # --- validate repository claim ---
+        repository = claims.get("repository")
+        if not repository or repository not in self.allowed_repositories:
+            return OIDCValidationResult(
+                valid=False, status_code=403,
+                error_message=f"Repository not authorized: {repository}",
+                claims=None,
+            )
+
+        return OIDCValidationResult(
+            valid=True, status_code=200,
+            error_message=None,
+            claims=claims,
+        )
+
+    def _find_signing_key(self, kid: str):
+        """Look up a signing key by kid, refreshing JWKS once on miss."""
+        for attempt in range(2):
+            try:
+                jwks = self._fetch_jwks(force_refresh=(attempt == 1))
+            except Exception:
+                return None
+
+            jwk_set = jwt.PyJWKSet.from_dict(jwks)
+            for key in jwk_set.keys:
+                if key.key_id == kid:
+                    return key.key
+        return None
     
     def validate_execution_request(self, request: dict) -> ValidationResult:
         """

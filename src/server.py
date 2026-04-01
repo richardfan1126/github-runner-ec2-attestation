@@ -121,7 +121,10 @@ def create_app(config: ServerConfig) -> FastAPI:
         output_collector,
         config.temp_storage_path
     )
-    request_validator = RequestValidator()
+    request_validator = RequestValidator(
+        allowed_repositories=config.allowed_repositories,
+        expected_audience=config.expected_audience,
+    )
     rate_limiter = RateLimiter(
         config.rate_limit_per_ip,
         config.rate_limit_window_seconds

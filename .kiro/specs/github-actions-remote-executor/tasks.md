@@ -1282,20 +1282,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add `python3.11 -c "import jwt"` verification check alongside existing fastapi/uvicorn/requests checks
     - _Requirements: 12.4_
 
-- [ ] 59. Implement OIDC token validation in RequestValidator
-  - [ ] 59.1 Add OIDCValidationResult and OIDCTokenClaims data models
+- [x] 59. Implement OIDC token validation in RequestValidator
+  - [x] 59.1 Add OIDCValidationResult and OIDCTokenClaims data models
     - Create `OIDCValidationResult` dataclass with fields: `valid` (bool), `status_code` (int), `error_message` (str | None), `claims` (dict | None)
     - Create `OIDCTokenClaims` dataclass with fields: `iss` (str), `aud` (str), `repository` (str), `exp` (int), `sub` (str)
     - Add to src/models.py or src/validation.py
     - _Requirements: 2.1, 2.7, 2.9, 2.11, 2.13_
 
-  - [ ] 59.2 Update RequestValidator constructor for OIDC configuration
+  - [x] 59.2 Update RequestValidator constructor for OIDC configuration
     - Add `__init__` method accepting `allowed_repositories: list[str]` and `expected_audience: str`
     - Store as instance attributes for use in OIDC validation
     - Update all call sites (server.py `create_app`) to pass config values
     - _Requirements: 2.9, 2.11_
 
-  - [ ] 59.3 Implement `_fetch_jwks()` method
+  - [x] 59.3 Implement `_fetch_jwks()` method
     - Fetch JWKS from `https://token.actions.githubusercontent.com/.well-known/jwks`
     - Cache the JWKS response in an instance variable
     - Accept `force_refresh: bool = False` parameter to refresh cache on unknown key ID
@@ -1304,7 +1304,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle network errors gracefully
     - _Requirements: 2.4, 2.5_
 
-  - [ ] 59.4 Implement `validate_oidc_token()` method
+  - [x] 59.4 Implement `validate_oidc_token()` method
     - Extract Bearer token from Authorization header string
     - Return 401 if header is missing or not in `Bearer <token>` format
     - Decode JWT header to get `kid` (key ID)

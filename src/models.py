@@ -68,3 +68,22 @@ class SandboxConfig:
     network_enabled: bool
     timeout_seconds: int
     allowed_paths: List[str]
+
+
+@dataclass
+class OIDCValidationResult:
+    """Result of OIDC token validation"""
+    valid: bool
+    status_code: int  # 200 on success, 401 or 403 on failure
+    error_message: Optional[str]
+    claims: Optional[dict]
+
+
+@dataclass
+class OIDCTokenClaims:
+    """Decoded claims from a GitHub Actions OIDC token"""
+    iss: str       # Must be https://token.actions.githubusercontent.com
+    aud: str       # Must match Expected_Audience
+    repository: str  # Must match an entry in Allowed_Repositories
+    exp: int       # Unix timestamp, must not be expired
+    sub: str       # Subject (e.g., repo:owner/repo:ref:refs/heads/main)
