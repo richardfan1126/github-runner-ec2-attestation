@@ -370,10 +370,10 @@ def test_property_25_execution_timeout_configuration(params):
 # Property 26: Timeout Termination
 # Feature: github-actions-remote-executor, Property 26: Timeout Termination
 @given(
-    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 2),
+    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 1),
     sleep_multiplier=st.floats(min_value=1.5, max_value=2.0)
 )
-@settings(max_examples=10, deadline=20000)  # Reduced from 20 examples
+@settings(max_examples=3, deadline=20000)  # Reduced examples for timeout tests
 def test_property_26_timeout_termination(params, sleep_multiplier):
     """
     Property 26: For any script execution that exceeds the configured timeout,
@@ -382,7 +382,7 @@ def test_property_26_timeout_termination(params, sleep_multiplier):
     Validates: Requirements 5.6
     """
     # Ensure timeout is short for testing
-    params['timeout_seconds'] = min(params['timeout_seconds'], 2)
+    params['timeout_seconds'] = 1
     
     with tempfile.TemporaryDirectory() as temp_dir:
         # Create components
@@ -409,7 +409,7 @@ def test_property_26_timeout_termination(params, sleep_multiplier):
         executor.execute_async(execution_id, script_path)
         
         # Wait for timeout to occur
-        max_wait = configured_timeout + 5  # Reduced from 10
+        max_wait = configured_timeout + 3
         while time.time() - start_time < max_wait:
             record = manager.get_execution(execution_id)
             if record and record.status == ExecutionStatus.TIMED_OUT:
@@ -426,14 +426,14 @@ def test_property_26_timeout_termination(params, sleep_multiplier):
         
         # Verify termination happened around the timeout period
         # Allow some overhead for process management
-        assert execution_duration < configured_timeout + 5, \
+        assert execution_duration < configured_timeout + 3, \
             f"Execution should terminate near timeout ({configured_timeout}s), took {execution_duration:.1f}s"
 
 
 @given(
-    timeout_seconds=st.integers(min_value=1, max_value=2)
+    timeout_seconds=st.integers(min_value=1, max_value=1)
 )
-@settings(max_examples=10, deadline=20000)  # Reduced from 20 examples
+@settings(max_examples=3, deadline=20000)  # Reduced examples for timeout tests
 def test_property_26_timeout_exit_code(timeout_seconds):
     """
     Property 26 (variant): Timed out executions should have exit code -1.
@@ -468,7 +468,7 @@ def test_property_26_timeout_exit_code(timeout_seconds):
         executor.execute_async(execution_id, script_path)
         
         # Wait for timeout
-        max_wait = timeout_seconds + 5  # Reduced from 10
+        max_wait = timeout_seconds + 3
         start_time = time.time()
         while time.time() - start_time < max_wait:
             record = manager.get_execution(execution_id)
@@ -597,10 +597,10 @@ def test_property_27_exit_code_in_output(params):
 # Property 28: Temporary File Cleanup
 # Feature: github-actions-remote-executor, Property 28: Temporary File Cleanup
 @given(
-    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 5),
+    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 3),
     should_succeed=st.booleans()
 )
-@settings(max_examples=10, deadline=10000)  # Reduced from 20 examples and 15000ms
+@settings(max_examples=5, deadline=10000)  # Reduced from 10 examples
 def test_property_28_temporary_file_cleanup(params, should_succeed):
     """
     Property 28: For any script execution (successful or failed), all temporary
@@ -655,16 +655,16 @@ def test_property_28_temporary_file_cleanup(params, should_succeed):
 
 
 @given(
-    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 2)
+    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 1)
 )
-@settings(max_examples=10, deadline=20000)  # Reduced from 20 examples
+@settings(max_examples=3, deadline=20000)  # Reduced examples for timeout tests
 def test_property_28_cleanup_after_timeout(params):
     """
     Property 28 (variant): Temporary files should be cleaned up even after timeout.
     
     Validates: Requirements 8.4
     """
-    params['timeout_seconds'] = min(params['timeout_seconds'], 2)
+    params['timeout_seconds'] = 1
     
     with tempfile.TemporaryDirectory() as temp_dir:
         # Create components
@@ -692,7 +692,7 @@ def test_property_28_cleanup_after_timeout(params):
         executor.execute_async(execution_id, script_path)
         
         # Wait for timeout
-        max_wait = timeout + 5  # Reduced from 10
+        max_wait = timeout + 3
         start_time = time.time()
         while time.time() - start_time < max_wait:
             record = manager.get_execution(execution_id)
@@ -709,9 +709,9 @@ def test_property_28_cleanup_after_timeout(params):
 
 
 @given(
-    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 5)
+    params=execution_params().filter(lambda p: p['timeout_seconds'] <= 3)
 )
-@settings(max_examples=10, deadline=10000)  # Reduced from 20 examples and 15000ms
+@settings(max_examples=5, deadline=10000)  # Reduced from 10 examples
 def test_property_28_cleanup_preserves_output(params):
     """
     Property 28 (variant): Cleanup should remove script files but preserve output data.

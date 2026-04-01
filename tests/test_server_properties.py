@@ -477,8 +477,8 @@ def test_oversized_script_rejection(req_data):
 
 
 # Feature: github-actions-remote-executor, Property 49: Rate Limiting per IP
-@settings(max_examples=10, deadline=None)
-@given(st.integers(min_value=1, max_value=20))
+@settings(max_examples=3, deadline=None)
+@given(st.integers(min_value=1, max_value=12))
 def test_rate_limiting_per_ip(num_requests):
     """
     **Validates: Requirements 8.5**

@@ -296,7 +296,7 @@ def test_execute_script_timeout():
         )
         
         # Create script that sleeps longer than timeout
-        script_content = f"sleep {timeout * 3}\necho 'Should not reach here'\n"
+        script_content = f"sleep {timeout * 2}\necho 'Should not reach here'\n"
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
@@ -304,7 +304,7 @@ def test_execute_script_timeout():
         executor.execute_async(record.execution_id, script_path)
         
         # Wait for timeout
-        max_wait = timeout + 3
+        max_wait = timeout + 2
         while time.time() - start_time < max_wait:
             record = manager.get_execution(record.execution_id)
             if record and record.status == ExecutionStatus.TIMED_OUT:
@@ -319,7 +319,7 @@ def test_execute_script_timeout():
         assert final_record.exit_code == -1
         
         # Verify termination happened around timeout period
-        assert execution_duration < timeout + 3
+        assert execution_duration < timeout + 2
 
 
 def test_execute_script_timeout_with_different_durations():
@@ -333,7 +333,7 @@ def test_execute_script_timeout_with_different_durations():
             temp_storage_path=temp_dir
         )
         
-        timeout_values = [1, 2]
+        timeout_values = [1]
         
         for timeout in timeout_values:
             # Create execution

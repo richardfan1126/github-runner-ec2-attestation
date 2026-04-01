@@ -174,7 +174,7 @@ class TestEndToEndIntegration:
         assert len(set(execution_ids)) == 3
         
         # Wait and verify all complete
-        time.sleep(2)
+        time.sleep(1)
         for execution_id in execution_ids:
             response = client.get(f"/execution/{execution_id}/output")
             assert response.status_code == 200
@@ -254,6 +254,9 @@ class TestErrorScenarios:
     
     def test_execution_timeout(self, test_config, mock_github_and_attestation):
         """Test script execution timeout"""
+        # Use a shorter timeout for faster test
+        test_config.execution_timeout_seconds = 1
+        
         # Create fresh app and client to avoid rate limiting from other tests
         app = create_app(test_config)
         app.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
@@ -273,8 +276,8 @@ class TestErrorScenarios:
         assert response.status_code == 200
         execution_id = response.json()["execution_id"]
         
-        # Wait for timeout to occur (config has 5 second timeout)
-        time.sleep(6)
+        # Wait for timeout to occur (config has 1 second timeout)
+        time.sleep(2)
         
         # Check status - should be timed out
         output_response = client.get(f"/execution/{execution_id}/output")
