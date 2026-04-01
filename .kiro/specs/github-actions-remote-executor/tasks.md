@@ -1257,13 +1257,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 57. Checkpoint - Ensure all output attestation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 58. Add PyJWT dependency and update ServerConfig for OIDC authentication
-  - [ ] 58.1 Add PyJWT[crypto] to pyproject.toml dependencies
+- [x] 58. Add PyJWT dependency and update ServerConfig for OIDC authentication
+  - [x] 58.1 Add PyJWT[crypto] to pyproject.toml dependencies
     - Add `PyJWT[crypto]>=2.8.0` to the `dependencies` list in pyproject.toml
     - This provides JWT decoding and JWKS/RSA signature verification via the `cryptography` backend
     - _Requirements: 2.4, 2.5, 12.4_
 
-  - [ ] 58.2 Update ServerConfig with OIDC configuration fields
+  - [x] 58.2 Update ServerConfig with OIDC configuration fields
     - Add `allowed_repositories: list[str]` field to ServerConfig dataclass
     - Add `expected_audience: str` field to ServerConfig dataclass
     - Load `ALLOWED_REPOSITORIES` from environment (comma-separated string, split into list)
@@ -1272,13 +1272,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add both to `from_env()` and `validate()` methods
     - _Requirements: 9.2, 9.3, 9.8_
 
-  - [ ] 58.3 Update .env.example and KIWI env file with OIDC config variables
+  - [x] 58.3 Update .env.example and KIWI env file with OIDC config variables
     - Add `ALLOWED_REPOSITORIES=owner/repo1,owner/repo2` to .env.example
     - Add `EXPECTED_AUDIENCE=https://your-remote-executor.example.com` to .env.example
     - Add same variables to kiwi-descriptions/root/etc/github-actions-remote-executor/env
     - _Requirements: 9.2, 9.3_
 
-  - [ ] 58.4 Update KIWI config.sh to verify PyJWT is importable
+  - [x] 58.4 Update KIWI config.sh to verify PyJWT is importable
     - Add `python3.11 -c "import jwt"` verification check alongside existing fastapi/uvicorn/requests checks
     - _Requirements: 12.4_
 

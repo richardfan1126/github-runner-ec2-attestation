@@ -29,6 +29,8 @@ def get_test_config():
         temp_storage_path="/tmp/test",
         output_retention_hours=24,
         tpm_attest_path="/usr/bin/nitro-tpm-attest",
+        allowed_repositories=["owner/repo"],
+        expected_audience="https://example.com",
     )
 
 

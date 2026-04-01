@@ -32,6 +32,10 @@ class ServerConfig:
     # NitroTPM Configuration
     tpm_attest_path: str
     
+    # OIDC Authentication Configuration
+    allowed_repositories: list[str]
+    expected_audience: str
+    
     @classmethod
     def from_env(cls) -> "ServerConfig":
         """Load configuration from environment variables"""
@@ -74,6 +78,14 @@ class ServerConfig:
         if tpm_path is None:
             missing_vars.append("TPM_ATTEST_PATH")
         
+        allowed_repos = os.getenv("ALLOWED_REPOSITORIES")
+        if allowed_repos is None:
+            missing_vars.append("ALLOWED_REPOSITORIES")
+        
+        expected_aud = os.getenv("EXPECTED_AUDIENCE")
+        if expected_aud is None:
+            missing_vars.append("EXPECTED_AUDIENCE")
+        
         if missing_vars:
             raise ValueError(
                 f"Missing required environment variables: {', '.join(missing_vars)}"
@@ -89,6 +101,8 @@ class ServerConfig:
             temp_storage_path=temp_path,
             output_retention_hours=int(retention),
             tpm_attest_path=tpm_path,
+            allowed_repositories=[r.strip() for r in allowed_repos.split(",") if r.strip()],
+            expected_audience=expected_aud,
         )
     
     def validate(self) -> None:
@@ -133,6 +147,12 @@ class ServerConfig:
         
         if not self.tpm_attest_path:
             errors.append("tpm_attest_path cannot be empty")
+        
+        if not self.allowed_repositories:
+            errors.append("allowed_repositories must be a non-empty list")
+        
+        if not self.expected_audience:
+            errors.append("expected_audience cannot be empty")
         
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")

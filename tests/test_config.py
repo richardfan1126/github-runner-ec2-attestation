@@ -15,6 +15,8 @@ def test_config_from_env_success(monkeypatch):
     monkeypatch.setenv("TEMP_STORAGE_PATH", "/tmp/gha-executor")
     monkeypatch.setenv("OUTPUT_RETENTION_HOURS", "24")
     monkeypatch.setenv("TPM_ATTEST_PATH", "/dev/nsm")
+    monkeypatch.setenv("ALLOWED_REPOSITORIES", "owner/repo1,owner/repo2")
+    monkeypatch.setenv("EXPECTED_AUDIENCE", "https://example.com")
     
     config = ServerConfig.from_env()
     
@@ -27,6 +29,8 @@ def test_config_from_env_success(monkeypatch):
     assert config.temp_storage_path == "/tmp/gha-executor"
     assert config.output_retention_hours == 24
     assert config.tpm_attest_path == "/dev/nsm"
+    assert config.allowed_repositories == ["owner/repo1", "owner/repo2"]
+    assert config.expected_audience == "https://example.com"
 
 
 def test_config_missing_required_vars(monkeypatch):
@@ -42,6 +46,8 @@ def test_config_missing_required_vars(monkeypatch):
         "TEMP_STORAGE_PATH",
         "OUTPUT_RETENTION_HOURS",
         "TPM_ATTEST_PATH",
+        "ALLOWED_REPOSITORIES",
+        "EXPECTED_AUDIENCE",
     ]:
         monkeypatch.delenv(var, raising=False)
     
@@ -63,6 +69,8 @@ def test_config_validation_invalid_port():
         temp_storage_path="/tmp/gha-executor",
         output_retention_hours=24,
         tpm_attest_path="/dev/nsm",
+        allowed_repositories=["owner/repo"],
+        expected_audience="https://example.com",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -83,6 +91,8 @@ def test_config_validation_success():
         temp_storage_path="/tmp/gha-executor",
         output_retention_hours=24,
         tpm_attest_path="/dev/nsm",
+        allowed_repositories=["owner/repo"],
+        expected_audience="https://example.com",
     )
     
     # Should not raise

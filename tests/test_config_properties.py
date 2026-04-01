@@ -91,6 +91,8 @@ def test_property_50_configuration_loading(
         TEMP_STORAGE_PATH=temp_path,
         OUTPUT_RETENTION_HOURS=retention,
         TPM_ATTEST_PATH=nsm_path,
+        ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com",
     ):
         # Configuration should load successfully
         config = ServerConfig.from_env()
@@ -129,6 +131,8 @@ def test_property_51_port_configuration(port):
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
         TPM_ATTEST_PATH="/dev/nsm",
+        ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com",
     ):
         config = ServerConfig.from_env()
         
@@ -162,6 +166,8 @@ def test_property_52_timeout_configuration(timeout):
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
         TPM_ATTEST_PATH="/dev/nsm",
+        ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com",
     ):
         config = ServerConfig.from_env()
         
@@ -195,6 +201,8 @@ def test_property_53_size_limit_configuration(max_size):
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
         TPM_ATTEST_PATH="/dev/nsm",
+        ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com",
     ):
         config = ServerConfig.from_env()
         
@@ -231,6 +239,8 @@ def test_property_54_rate_limit_configuration(rate_limit, rate_window):
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=24,
         TPM_ATTEST_PATH="/dev/nsm",
+        ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com",
     ):
         config = ServerConfig.from_env()
         
@@ -265,6 +275,8 @@ def test_property_55_storage_path_configuration(storage_path):
         TEMP_STORAGE_PATH=storage_path,
         OUTPUT_RETENTION_HOURS=24,
         TPM_ATTEST_PATH="/dev/nsm",
+        ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com",
     ):
         config = ServerConfig.from_env()
         
@@ -298,6 +310,8 @@ def test_property_56_retention_period_configuration(retention_hours):
         TEMP_STORAGE_PATH="/tmp/test",
         OUTPUT_RETENTION_HOURS=retention_hours,
         TPM_ATTEST_PATH="/dev/nsm",
+        ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com",
     ):
         config = ServerConfig.from_env()
         
@@ -320,6 +334,8 @@ def test_property_56_retention_period_configuration(retention_hours):
         "TEMP_STORAGE_PATH",
         "OUTPUT_RETENTION_HOURS",
         "TPM_ATTEST_PATH",
+        "ALLOWED_REPOSITORIES",
+        "EXPECTED_AUDIENCE",
     ])
 )
 @settings(max_examples=20)
@@ -343,6 +359,8 @@ def test_property_57_missing_configuration_failure(missing_var):
         "TEMP_STORAGE_PATH": "/tmp/test",
         "OUTPUT_RETENTION_HOURS": "24",
         "TPM_ATTEST_PATH": "/dev/nsm",
+        "ALLOWED_REPOSITORIES": "owner/repo",
+        "EXPECTED_AUDIENCE": "https://example.com",
     }
     
     # Remove the selected variable
@@ -381,6 +399,8 @@ def test_property_invalid_port_validation(port):
         temp_storage_path="/tmp/test",
         output_retention_hours=24,
         tpm_attest_path="/dev/nsm",
+        allowed_repositories=["owner/repo"],
+        expected_audience="https://example.com",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -409,6 +429,8 @@ def test_property_invalid_positive_int_validation(value):
         temp_storage_path="/tmp/test",
         output_retention_hours=24,
         tpm_attest_path="/dev/nsm",
+        allowed_repositories=["owner/repo"],
+        expected_audience="https://example.com",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -438,6 +460,8 @@ def test_property_empty_path_validation(empty_path):
         temp_storage_path=empty_path,
         output_retention_hours=24,
         tpm_attest_path="/dev/nsm",
+        allowed_repositories=["owner/repo"],
+        expected_audience="https://example.com",
     )
     
     with pytest.raises(ValueError) as exc_info:
