@@ -1584,8 +1584,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - For any configured Container_Image name, verify the Script_Executor uses that image when creating Execution_Containers
     - **Validates: Requirements 9.7**
 
-- [ ] 72. Write unit tests for Docker container management
-  - [ ] 72.1 Write unit tests for Docker ScriptExecutor
+- [x] 72. Write unit tests for Docker container management
+  - [x] 72.1 Write unit tests for Docker ScriptExecutor
     - Test container creation with correct image, name, and security constraints (memory, CPU, read-only fs, no network, no privilege escalation, non-root user)
     - Test container execution captures stdout, stderr, and exit code
     - Test container is removed after successful execution
@@ -1598,13 +1598,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Mock Docker SDK client for all tests
     - _Requirements: 5.1-5.13, 8.1-8.10, 9.7, 9.11, 9.12_
 
-  - [ ] 72.2 Update existing ScriptExecutor tests for Docker-based execution
+  - [x] 72.2 Update existing ScriptExecutor tests for Docker-based execution
     - Update tests/test_script_executor.py to use mocked Docker client instead of subprocess
     - Update tests/test_script_executor_properties.py to verify Docker container behavior
     - Ensure Properties 21-28 still pass with Docker-based execution
     - _Requirements: 5.1, 5.2, 5.6, 5.7, 5.8, 5.9, 5.10_
 
-- [ ] 73. Final checkpoint - Ensure all Docker container tests pass
+- [x] 73. Final checkpoint - Ensure all Docker container tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
