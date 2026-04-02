@@ -11,6 +11,7 @@ The GitHub Actions Remote Executor runs on an Attestable EC2 instance with Nitro
 - Python 3.11+
 - Attestable EC2 instance with NitroTPM
 - GitHub personal access token
+- GitHub Actions OIDC token (for authenticating workflow requests)
 
 ## Installation
 
@@ -45,6 +46,8 @@ All configuration is done through environment variables. See `.env.example` for 
 - `TEMP_STORAGE_PATH`: Temporary file storage location (default: /tmp/gha-executor)
 - `OUTPUT_RETENTION_HOURS`: Output retention period (default: 24)
 - `TPM_ATTEST_PATH`: NitroTPM attestation tool path (default: /usr/bin/nitro-tpm-attest)
+- `ALLOWED_REPOSITORIES`: Comma-separated list of GitHub repositories authorized to execute scripts (e.g., `owner/repo1,owner/repo2`)
+- `EXPECTED_AUDIENCE`: Expected `aud` claim in OIDC tokens, used to ensure tokens were issued for this Remote Executor instance (e.g., `https://your-remote-executor.example.com`)
 
 ## Usage
 
@@ -65,6 +68,21 @@ All endpoints are rate-limited per source IP (configurable via `RATE_LIMIT_PER_I
 
 When the limit is exceeded the server returns `429 Too Many Requests` with a `retry_after_seconds` hint.
 
+Protected endpoints (`POST /execute` and `GET /execution/{id}/output`) require a GitHub Actions OIDC token in the `Authorization` header:
+
+```
+Authorization: Bearer <OIDC_TOKEN>
+```
+
+The server validates the token by:
+1. Fetching the JWKS from GitHub's OIDC provider (`https://token.actions.githubusercontent.com/.well-known/jwks`) and verifying the JWT signature (JWKS is cached and refreshed on unknown key IDs)
+2. Checking the `iss` claim matches `https://token.actions.githubusercontent.com`
+3. Checking the `aud` claim matches the configured `EXPECTED_AUDIENCE`
+4. Checking the `repository` claim is in the configured `ALLOWED_REPOSITORIES` list
+5. Checking the `exp` claim has not passed
+
+Missing or invalid tokens return `401 Unauthorized`. Valid tokens from unauthorized repositories return `403 Forbidden`. The `/health` and `/metrics` endpoints do not require authentication.
+
 All error responses share a consistent structure:
 
 ```json
@@ -80,6 +98,8 @@ All error responses share a consistent structure:
 ### POST /execute
 
 Fetches a script from a GitHub repository at a specific commit, generates a NitroTPM attestation document binding the request parameters to the execution environment, and starts asynchronous execution. The response is returned immediately without waiting for the script to finish.
+
+Requires a valid OIDC Bearer token in the `Authorization` header.
 
 **Request body:**
 
@@ -108,7 +128,8 @@ The `attestation_document` is a base64-encoded CBOR document produced by NitroTP
 |---|---|---|
 | 400 | `malformed_request` | Request body is not valid JSON |
 | 400 | `validation_failed` | Missing or invalid fields (details include per-field errors) |
-| 401 | `authentication_failed` | GitHub token is invalid or lacks access |
+| 401 | `unauthorized` | Missing, invalid, or expired OIDC token; signature verification failure; wrong issuer or audience |
+| 403 | `forbidden` | Valid OIDC token from a repository not in `ALLOWED_REPOSITORIES` |
 | 404 | `github_api_error` | Repository, commit, or file not found |
 | 413 | `file_too_large` | Script exceeds `MAX_SCRIPT_SIZE_BYTES` |
 | 429 | `rate_limit_exceeded` | Too many requests from this IP |
@@ -120,6 +141,8 @@ The `attestation_document` is a base64-encoded CBOR document produced by NitroTP
 ### GET /execution/{execution_id}/output
 
 Retrieves execution status and output. Supports incremental polling via the `offset` query parameter — pass the `stdout_offset` / `stderr_offset` from the previous response to receive only new output.
+
+Requires a valid OIDC Bearer token in the `Authorization` header.
 
 When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure.
 
@@ -178,6 +201,8 @@ When the execution is complete, the response includes an `output_attestation_doc
 | Status | Error code | Cause |
 |---|---|---|
 | 400 | `invalid_offset` | Negative offset value |
+| 401 | `unauthorized` | Missing, invalid, or expired OIDC token |
+| 403 | `forbidden` | Valid OIDC token from an unauthorized repository |
 | 404 | `execution_not_found` | No execution with this ID exists |
 | 429 | `rate_limit_exceeded` | Too many requests from this IP |
 | 500 | `internal_server_error` | Unexpected server error |
@@ -186,7 +211,7 @@ When the execution is complete, the response includes an `output_attestation_doc
 
 ### GET /health
 
-Returns operational status of the server. This endpoint is exempt from rate limiting.
+Returns operational status of the server. This endpoint is exempt from rate limiting and does not require authentication.
 
 **Response (healthy):**
 ```json

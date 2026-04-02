@@ -1414,33 +1414,33 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test GET /health without Authorization header returns 200
     - _Requirements: 2.1, 2.2, 2.3, 2.20_
 
-- [ ] 64. Update existing tests for OIDC authentication compatibility
-  - [ ] 64.1 Update tests/test_server_unit.py for OIDC
+- [x] 64. Update existing tests for OIDC authentication compatibility
+  - [x] 64.1 Update tests/test_server_unit.py for OIDC
     - Add OIDC token mocking/bypass to all existing endpoint tests
     - Update ServerConfig construction to include `allowed_repositories` and `expected_audience`
     - Ensure existing /execute and /output tests pass with OIDC middleware active
     - _Requirements: 2.1, 2.2_
 
-  - [ ] 64.2 Update tests/test_integration.py for OIDC
+  - [x] 64.2 Update tests/test_integration.py for OIDC
     - Add OIDC token mocking to integration test setup
     - Update ServerConfig construction to include OIDC fields
     - Ensure end-to-end flow tests work with OIDC authentication
     - _Requirements: 2.1, 2.2_
 
-  - [ ] 64.3 Update tests/test_config_properties.py for OIDC config fields
+  - [x] 64.3 Update tests/test_config_properties.py for OIDC config fields
     - Add property tests for `ALLOWED_REPOSITORIES` and `EXPECTED_AUDIENCE` environment variable loading
     - Test comma-separated repository list parsing
     - Test missing OIDC config variables cause startup failure
     - _Requirements: 9.2, 9.3, 9.8_
 
-  - [ ] 64.4 Update remaining test files that construct ServerConfig
+  - [x] 64.4 Update remaining test files that construct ServerConfig
     - Update tests/test_health_metrics_unit.py
     - Update tests/test_health_metrics_properties.py
     - Update tests/test_logging_error_handling_properties.py
     - Add `allowed_repositories` and `expected_audience` to all ServerConfig constructor calls
     - _Requirements: 9.2, 9.3_
 
-- [ ] 65. Final checkpoint - Ensure all OIDC tests pass
+- [x] 65. Final checkpoint - Ensure all OIDC tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
