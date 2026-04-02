@@ -22,6 +22,15 @@ on:
         required: false
         default: ""
         type: string
+      audience:
+        description: "Audience value for OIDC token request (must match server's expected audience)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
 
 env:
   # AWS Nitro Attestation PKI root CA certificate (used by NitroTPM)
@@ -84,4 +93,5 @@ jobs:
             --repository-url "${{ inputs.repository_url || format('https://github.com/{0}', github.repository) }}" \
             --github-token "$GITHUB_TOKEN" \
             --root-cert-pem "$ROOT_CERT_PEM" \
-            --expected-pcrs "$EXPECTED_PCRS"
+            --expected-pcrs "$EXPECTED_PCRS" \
+            --audience "${{ inputs.audience }}"

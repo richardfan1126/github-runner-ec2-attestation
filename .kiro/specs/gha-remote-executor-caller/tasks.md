@@ -340,16 +340,16 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Ensure existing property tests pass with OIDC-aware signatures
     - _Requirements: 9.2, 10.1, 10.2_
 
-- [ ] 17. Update GitHub Actions workflow for OIDC
-  - [ ] 17.1 Add `id-token: write` permission to workflow
+- [x] 17. Update GitHub Actions workflow for OIDC
+  - [x] 17.1 Add `id-token: write` permission to workflow
     - Add `id-token: write` to the `permissions` block in `.github/workflows/call-remote-executor.yml`
     - _Requirements: 9.1_
 
-  - [ ] 17.2 Add `audience` input to workflow dispatch
+  - [x] 17.2 Add `audience` input to workflow dispatch
     - Add optional `audience` input to `workflow_dispatch` inputs
     - _Requirements: 9.2_
 
-  - [ ] 17.3 Pass `--audience` to caller script invocation
+  - [x] 17.3 Pass `--audience` to caller script invocation
     - Add `--audience ${{ inputs.audience }}` to the caller script invocation step
     - _Requirements: 9.2_
 
