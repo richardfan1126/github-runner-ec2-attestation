@@ -47,6 +47,9 @@ def test_config(temp_dir):
         tpm_attest_path="/usr/bin/nitro-tpm-attest",
         allowed_repositories=["owner/repo"],
         expected_audience="https://example.com",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
     )
 
 

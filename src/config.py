@@ -36,6 +36,11 @@ class ServerConfig:
     allowed_repositories: list[str]
     expected_audience: str
     
+    # Container Execution Configuration
+    container_image: str
+    container_memory_limit: str
+    container_cpu_limit: float
+    
     @classmethod
     def from_env(cls) -> "ServerConfig":
         """Load configuration from environment variables"""
@@ -86,6 +91,18 @@ class ServerConfig:
         if expected_aud is None:
             missing_vars.append("EXPECTED_AUDIENCE")
         
+        container_image = os.getenv("CONTAINER_IMAGE")
+        if container_image is None:
+            missing_vars.append("CONTAINER_IMAGE")
+        
+        container_memory_limit = os.getenv("CONTAINER_MEMORY_LIMIT")
+        if container_memory_limit is None:
+            missing_vars.append("CONTAINER_MEMORY_LIMIT")
+        
+        container_cpu_limit = os.getenv("CONTAINER_CPU_LIMIT")
+        if container_cpu_limit is None:
+            missing_vars.append("CONTAINER_CPU_LIMIT")
+        
         if missing_vars:
             raise ValueError(
                 f"Missing required environment variables: {', '.join(missing_vars)}"
@@ -103,6 +120,9 @@ class ServerConfig:
             tpm_attest_path=tpm_path,
             allowed_repositories=[r.strip() for r in allowed_repos.split(",") if r.strip()],
             expected_audience=expected_aud,
+            container_image=container_image,
+            container_memory_limit=container_memory_limit,
+            container_cpu_limit=float(container_cpu_limit),
         )
     
     def validate(self) -> None:
@@ -153,6 +173,17 @@ class ServerConfig:
         
         if not self.expected_audience:
             errors.append("expected_audience cannot be empty")
+        
+        if not self.container_image:
+            errors.append("container_image cannot be empty")
+        
+        if not self.container_memory_limit:
+            errors.append("container_memory_limit cannot be empty")
+        
+        if self.container_cpu_limit <= 0:
+            errors.append(
+                f"Invalid container_cpu_limit: {self.container_cpu_limit} (must be > 0)"
+            )
         
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")

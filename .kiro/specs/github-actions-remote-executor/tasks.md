@@ -1443,13 +1443,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 65. Final checkpoint - Ensure all OIDC tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 66. Add Docker SDK dependency and update ServerConfig for container execution
-  - [ ] 66.1 Add docker Python SDK to pyproject.toml dependencies
+- [x] 66. Add Docker SDK dependency and update ServerConfig for container execution
+  - [x] 66.1 Add docker Python SDK to pyproject.toml dependencies
     - Add `docker>=7.0.0` to the `dependencies` list in pyproject.toml
     - This provides the Docker SDK for managing container lifecycle
     - _Requirements: 12.8_
 
-  - [ ] 66.2 Add container configuration fields to ServerConfig
+  - [x] 66.2 Add container configuration fields to ServerConfig
     - Add `container_image: str` field to ServerConfig dataclass (Docker image name for Execution_Containers)
     - Add `container_memory_limit: str` field to ServerConfig dataclass (e.g., '512m')
     - Add `container_cpu_limit: float` field to ServerConfig dataclass (e.g., 1.0)
@@ -1459,18 +1459,18 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add validation: `container_image` must be non-empty, `container_memory_limit` must be non-empty, `container_cpu_limit` must be > 0
     - _Requirements: 9.6, 9.7_
 
-  - [ ] 66.3 Update .env.example and KIWI env file with container config variables
+  - [x] 66.3 Update .env.example and KIWI env file with container config variables
     - Add `CONTAINER_IMAGE=python:3.11-slim` to .env.example
     - Add `CONTAINER_MEMORY_LIMIT=512m` to .env.example
     - Add `CONTAINER_CPU_LIMIT=1.0` to .env.example
     - Add same variables to kiwi-descriptions/root/etc/github-actions-remote-executor/env
     - _Requirements: 9.6, 9.7_
 
-  - [ ] 66.4 Update KIWI config.sh to verify docker package is importable
+  - [x] 66.4 Update KIWI config.sh to verify docker package is importable
     - Add `python3.11 -c "import docker"` verification check alongside existing fastapi/uvicorn/requests/jwt checks
     - _Requirements: 12.8_
 
-  - [ ] 66.5 Update existing tests that construct ServerConfig to include container fields
+  - [x] 66.5 Update existing tests that construct ServerConfig to include container fields
     - Update tests/test_config.py, tests/test_config_properties.py
     - Update tests/test_health_metrics_unit.py, tests/test_health_metrics_properties.py
     - Update tests/test_server_unit.py, tests/test_integration.py

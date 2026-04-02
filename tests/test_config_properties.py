@@ -93,6 +93,9 @@ def test_property_50_configuration_loading(
         TPM_ATTEST_PATH=nsm_path,
         ALLOWED_REPOSITORIES="owner/repo",
         EXPECTED_AUDIENCE="https://example.com",
+        CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m",
+        CONTAINER_CPU_LIMIT="1.0",
     ):
         # Configuration should load successfully
         config = ServerConfig.from_env()
@@ -133,6 +136,9 @@ def test_property_51_port_configuration(port):
         TPM_ATTEST_PATH="/dev/nsm",
         ALLOWED_REPOSITORIES="owner/repo",
         EXPECTED_AUDIENCE="https://example.com",
+        CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m",
+        CONTAINER_CPU_LIMIT="1.0",
     ):
         config = ServerConfig.from_env()
         
@@ -168,6 +174,9 @@ def test_property_52_timeout_configuration(timeout):
         TPM_ATTEST_PATH="/dev/nsm",
         ALLOWED_REPOSITORIES="owner/repo",
         EXPECTED_AUDIENCE="https://example.com",
+        CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m",
+        CONTAINER_CPU_LIMIT="1.0",
     ):
         config = ServerConfig.from_env()
         
@@ -203,6 +212,9 @@ def test_property_53_size_limit_configuration(max_size):
         TPM_ATTEST_PATH="/dev/nsm",
         ALLOWED_REPOSITORIES="owner/repo",
         EXPECTED_AUDIENCE="https://example.com",
+        CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m",
+        CONTAINER_CPU_LIMIT="1.0",
     ):
         config = ServerConfig.from_env()
         
@@ -241,6 +253,9 @@ def test_property_54_rate_limit_configuration(rate_limit, rate_window):
         TPM_ATTEST_PATH="/dev/nsm",
         ALLOWED_REPOSITORIES="owner/repo",
         EXPECTED_AUDIENCE="https://example.com",
+        CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m",
+        CONTAINER_CPU_LIMIT="1.0",
     ):
         config = ServerConfig.from_env()
         
@@ -277,6 +292,9 @@ def test_property_55_storage_path_configuration(storage_path):
         TPM_ATTEST_PATH="/dev/nsm",
         ALLOWED_REPOSITORIES="owner/repo",
         EXPECTED_AUDIENCE="https://example.com",
+        CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m",
+        CONTAINER_CPU_LIMIT="1.0",
     ):
         config = ServerConfig.from_env()
         
@@ -312,6 +330,9 @@ def test_property_56_retention_period_configuration(retention_hours):
         TPM_ATTEST_PATH="/dev/nsm",
         ALLOWED_REPOSITORIES="owner/repo",
         EXPECTED_AUDIENCE="https://example.com",
+        CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m",
+        CONTAINER_CPU_LIMIT="1.0",
     ):
         config = ServerConfig.from_env()
         
@@ -336,6 +357,9 @@ def test_property_56_retention_period_configuration(retention_hours):
         "TPM_ATTEST_PATH",
         "ALLOWED_REPOSITORIES",
         "EXPECTED_AUDIENCE",
+        "CONTAINER_IMAGE",
+        "CONTAINER_MEMORY_LIMIT",
+        "CONTAINER_CPU_LIMIT",
     ])
 )
 @settings(max_examples=20)
@@ -361,6 +385,9 @@ def test_property_57_missing_configuration_failure(missing_var):
         "TPM_ATTEST_PATH": "/dev/nsm",
         "ALLOWED_REPOSITORIES": "owner/repo",
         "EXPECTED_AUDIENCE": "https://example.com",
+        "CONTAINER_IMAGE": "python:3.11-slim",
+        "CONTAINER_MEMORY_LIMIT": "512m",
+        "CONTAINER_CPU_LIMIT": "1.0",
     }
     
     # Remove the selected variable
@@ -401,6 +428,9 @@ def test_property_invalid_port_validation(port):
         tpm_attest_path="/dev/nsm",
         allowed_repositories=["owner/repo"],
         expected_audience="https://example.com",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -431,6 +461,9 @@ def test_property_invalid_positive_int_validation(value):
         tpm_attest_path="/dev/nsm",
         allowed_repositories=["owner/repo"],
         expected_audience="https://example.com",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -462,6 +495,9 @@ def test_property_empty_path_validation(empty_path):
         tpm_attest_path="/dev/nsm",
         allowed_repositories=["owner/repo"],
         expected_audience="https://example.com",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
     )
     
     with pytest.raises(ValueError) as exc_info:

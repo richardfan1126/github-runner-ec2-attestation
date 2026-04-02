@@ -96,6 +96,9 @@ def _get_test_config() -> ServerConfig:
         tpm_attest_path="/usr/bin/nitro-tpm-attest",
         allowed_repositories=ALLOWED_REPOS,
         expected_audience=EXPECTED_AUDIENCE,
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
     )
 
 

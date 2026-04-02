@@ -17,6 +17,9 @@ def test_config_from_env_success(monkeypatch):
     monkeypatch.setenv("TPM_ATTEST_PATH", "/dev/nsm")
     monkeypatch.setenv("ALLOWED_REPOSITORIES", "owner/repo1,owner/repo2")
     monkeypatch.setenv("EXPECTED_AUDIENCE", "https://example.com")
+    monkeypatch.setenv("CONTAINER_IMAGE", "python:3.11-slim")
+    monkeypatch.setenv("CONTAINER_MEMORY_LIMIT", "512m")
+    monkeypatch.setenv("CONTAINER_CPU_LIMIT", "1.0")
     
     config = ServerConfig.from_env()
     
@@ -31,6 +34,9 @@ def test_config_from_env_success(monkeypatch):
     assert config.tpm_attest_path == "/dev/nsm"
     assert config.allowed_repositories == ["owner/repo1", "owner/repo2"]
     assert config.expected_audience == "https://example.com"
+    assert config.container_image == "python:3.11-slim"
+    assert config.container_memory_limit == "512m"
+    assert config.container_cpu_limit == 1.0
 
 
 def test_config_missing_required_vars(monkeypatch):
@@ -48,6 +54,9 @@ def test_config_missing_required_vars(monkeypatch):
         "TPM_ATTEST_PATH",
         "ALLOWED_REPOSITORIES",
         "EXPECTED_AUDIENCE",
+        "CONTAINER_IMAGE",
+        "CONTAINER_MEMORY_LIMIT",
+        "CONTAINER_CPU_LIMIT",
     ]:
         monkeypatch.delenv(var, raising=False)
     
@@ -71,6 +80,9 @@ def test_config_validation_invalid_port():
         tpm_attest_path="/dev/nsm",
         allowed_repositories=["owner/repo"],
         expected_audience="https://example.com",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -93,6 +105,9 @@ def test_config_validation_success():
         tpm_attest_path="/dev/nsm",
         allowed_repositories=["owner/repo"],
         expected_audience="https://example.com",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
     )
     
     # Should not raise

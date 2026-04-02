@@ -23,3 +23,8 @@ TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest
 # OIDC Authentication Configuration
 ALLOWED_REPOSITORIES=richardfan1126/github-runner-ec2-attestation
 EXPECTED_AUDIENCE=test-workflow
+
+# Container Execution Configuration
+CONTAINER_IMAGE=python:3.11-slim
+CONTAINER_MEMORY_LIMIT=512m
+CONTAINER_CPU_LIMIT=1.0
