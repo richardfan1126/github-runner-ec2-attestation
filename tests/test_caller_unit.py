@@ -347,6 +347,122 @@ class TestOutputAttestationEdgeCases:
         assert caller.max_retries == 3
         assert caller.poll_interval == 5
 
+class TestOIDCTokenAcquisitionErrors:
+    """Unit tests for OIDC token acquisition error handling."""
+
+    def test_missing_request_url_raises_caller_error(self):
+        """Missing ACTIONS_ID_TOKEN_REQUEST_URL raises CallerError with phase 'oidc'.
+        Validates: Requirement 9.5"""
+        caller = _make_caller()
+        env = {"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "fake-token"}
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(CallerError) as exc_info:
+                caller.request_oidc_token()
+            assert exc_info.value.phase == "oidc"
+            assert "id-token: write" in exc_info.value.message.lower() or "id-token" in exc_info.value.message.lower()
+
+    def test_missing_request_token_raises_caller_error(self):
+        """Missing ACTIONS_ID_TOKEN_REQUEST_TOKEN raises CallerError with phase 'oidc'.
+        Validates: Requirement 9.5"""
+        caller = _make_caller()
+        env = {"ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.githubusercontent.com"}
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(CallerError) as exc_info:
+                caller.request_oidc_token()
+            assert exc_info.value.phase == "oidc"
+            assert "id-token" in exc_info.value.message.lower()
+
+    def test_oidc_provider_http_error_raises_caller_error(self):
+        """OIDC provider returning HTTP error raises CallerError with phase 'oidc'.
+        Validates: Requirement 9.6"""
+        caller = _make_caller()
+        env = {
+            "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.githubusercontent.com",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "fake-token",
+        }
+        mock_resp = type("MockResp", (), {"status_code": 500, "text": "Internal Server Error", "json": lambda self: {}})()
+        with patch.dict(os.environ, env, clear=True):
+            with patch("call_remote_executor.requests.get", return_value=mock_resp):
+                with pytest.raises(CallerError) as exc_info:
+                    caller.request_oidc_token()
+                assert exc_info.value.phase == "oidc"
+                assert "500" in exc_info.value.message
+
+
+class TestOIDCAuthenticatedEndpointErrors:
+    """Unit tests for OIDC-authenticated endpoint error handling (401/403)."""
+
+    def test_execute_http_401_raises_caller_error(self):
+        """Execute with HTTP 401 raises CallerError with authentication failure message.
+        Validates: Requirement 10.4"""
+        caller = _make_caller()
+        caller._oidc_token = "test-token"
+        mock_resp = type("MockResp", (), {"status_code": 401, "text": "Unauthorized"})()
+        with patch("call_remote_executor.requests.post", return_value=mock_resp):
+            with pytest.raises(CallerError) as exc_info:
+                caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+            assert exc_info.value.phase == "execute"
+            assert "authentication failure" in exc_info.value.message.lower()
+
+    def test_execute_http_403_raises_caller_error(self):
+        """Execute with HTTP 403 raises CallerError with repository not authorized message.
+        Validates: Requirement 10.5"""
+        caller = _make_caller()
+        caller._oidc_token = "test-token"
+        mock_resp = type("MockResp", (), {"status_code": 403, "text": "Forbidden"})()
+        with patch("call_remote_executor.requests.post", return_value=mock_resp):
+            with pytest.raises(CallerError) as exc_info:
+                caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+            assert exc_info.value.phase == "execute"
+            assert "not authorized" in exc_info.value.message.lower()
+
+    def test_poll_output_http_401_raises_caller_error(self):
+        """Poll output with HTTP 401 raises CallerError with authentication failure message.
+        Validates: Requirement 10.4"""
+        caller = _make_caller()
+        caller._oidc_token = "test-token"
+        mock_resp = type("MockResp", (), {"status_code": 401, "text": "Unauthorized"})()
+        with patch("call_remote_executor.requests.get", return_value=mock_resp):
+            with pytest.raises(CallerError) as exc_info:
+                caller.poll_output("test-exec-id")
+            assert exc_info.value.phase == "polling"
+            assert "authentication failure" in exc_info.value.message.lower()
+
+    def test_poll_output_http_403_raises_caller_error(self):
+        """Poll output with HTTP 403 raises CallerError with repository not authorized message.
+        Validates: Requirement 10.5"""
+        caller = _make_caller()
+        caller._oidc_token = "test-token"
+        mock_resp = type("MockResp", (), {"status_code": 403, "text": "Forbidden"})()
+        with patch("call_remote_executor.requests.get", return_value=mock_resp):
+            with pytest.raises(CallerError) as exc_info:
+                caller.poll_output("test-exec-id")
+            assert exc_info.value.phase == "polling"
+            assert "not authorized" in exc_info.value.message.lower()
+
+
+class TestHealthCheckAuthorizationExclusion:
+    """Unit tests for health check Authorization header exclusion."""
+
+    def test_health_check_no_auth_header_when_oidc_token_set(self):
+        """Health check does not include Authorization header even when _oidc_token is set.
+        Validates: Requirement 10.3"""
+        caller = _make_caller()
+        caller._oidc_token = "should-not-be-sent"
+
+        with patch("call_remote_executor.requests.get") as mock_get:
+            mock_resp = mock_get.return_value
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"status": "healthy"}
+            caller.health_check()
+
+            # Verify the GET call was made without an Authorization header
+            call_kwargs = mock_get.call_args
+            headers = call_kwargs.kwargs.get("headers") or (call_kwargs[1].get("headers") if len(call_kwargs) > 1 else None)
+            if headers:
+                assert "Authorization" not in headers, "health_check should not send Authorization header"
+
+
 import os
 import stat
 import subprocess

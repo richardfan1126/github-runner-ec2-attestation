@@ -309,21 +309,21 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test missing env vars cause `CallerError` with `id-token: write` permission message
     - **Validates: Requirements 9.5, 9.6, 10.4, 10.5**
 
-- [ ] 15. Write unit tests for OIDC
-  - [ ] 15.1 Write unit tests for OIDC token acquisition errors
+- [x] 15. Write unit tests for OIDC
+  - [x] 15.1 Write unit tests for OIDC token acquisition errors
     - Test missing `ACTIONS_ID_TOKEN_REQUEST_URL` raises `CallerError` with phase "oidc" (Req 9.5)
     - Test missing `ACTIONS_ID_TOKEN_REQUEST_TOKEN` raises `CallerError` with phase "oidc" (Req 9.5)
     - Test OIDC provider HTTP error raises `CallerError` with phase "oidc" (Req 9.6)
     - _Requirements: 9.5, 9.6_
 
-  - [ ] 15.2 Write unit tests for OIDC-authenticated endpoint error handling
+  - [x] 15.2 Write unit tests for OIDC-authenticated endpoint error handling
     - Test execute with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
     - Test execute with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
     - Test poll output with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
     - Test poll output with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
     - _Requirements: 10.4, 10.5_
 
-  - [ ] 15.3 Write unit test for health check Authorization header exclusion
+  - [x] 15.3 Write unit test for health check Authorization header exclusion
     - Test health check does not include Authorization header even when `_oidc_token` is set (Req 10.3)
     - _Requirements: 10.3_
 
