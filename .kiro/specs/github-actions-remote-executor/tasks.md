@@ -1389,8 +1389,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify the Request Validator rejects with HTTP 401
     - **Validates: Requirements 2.4, 2.6**
 
-- [ ] 63. Write unit tests for OIDC validation
-  - [ ] 63.1 Write unit tests for OIDC token validation
+- [x] 63. Write unit tests for OIDC validation
+  - [x] 63.1 Write unit tests for OIDC token validation
     - Test missing Authorization header returns 401
     - Test malformed Authorization header (not "Bearer <token>") returns 401
     - Test valid token with correct claims returns success
@@ -1404,7 +1404,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Mock JWKS endpoint and JWT signing for all tests
     - _Requirements: 2.1-2.14, 2.20_
 
-  - [ ] 63.2 Write unit tests for OIDC-protected endpoints
+  - [x] 63.2 Write unit tests for OIDC-protected endpoints
     - Test POST /execute without Authorization header returns 401
     - Test POST /execute with invalid token returns 401
     - Test POST /execute with unauthorized repo token returns 403
