@@ -96,7 +96,7 @@ class RemoteExecutorCaller:
                 },
             )
 
-        url = f"{request_url}?audience={self.audience}" if self.audience else request_url
+        url = f"{request_url}&audience={self.audience}" if self.audience else request_url
         headers = {"Authorization": f"Bearer {request_token}"}
 
         try:
