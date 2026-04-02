@@ -1478,11 +1478,11 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add `container_image`, `container_memory_limit`, `container_cpu_limit` to all ServerConfig constructor calls
     - _Requirements: 9.6, 9.7_
 
-- [ ] 67. Checkpoint - Ensure all tests pass after adding Docker config
+- [x] 67. Checkpoint - Ensure all tests pass after adding Docker config
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 68. Rewrite ScriptExecutor to use Docker SDK for container-based execution
-  - [ ] 68.1 Update ScriptExecutor constructor for Docker SDK
+- [x] 68. Rewrite ScriptExecutor to use Docker SDK for container-based execution
+  - [x] 68.1 Update ScriptExecutor constructor for Docker SDK
     - Replace subprocess-based execution with Docker SDK (`docker` Python package)
     - Accept `docker_client: docker.DockerClient` parameter
     - Accept `container_image: str` parameter (Container_Image name)
@@ -1491,7 +1491,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Keep existing `execution_manager`, `output_collector`, `temp_storage_path` parameters
     - _Requirements: 5.1, 5.2, 8.1, 8.2, 9.6, 9.7_
 
-  - [ ] 68.2 Implement Docker container lifecycle in execute_async
+  - [x] 68.2 Implement Docker container lifecycle in execute_async
     - Create a new Execution_Container from the configured Container_Image for each execution
     - Assign a unique container name derived from the Execution_ID (e.g., `gare-exec-{execution_id}`)
     - Configure container with security constraints:
@@ -1508,20 +1508,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Remove the container after completion, failure, or timeout
     - _Requirements: 5.1, 5.2, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.13, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
-  - [ ] 68.3 Implement container removal with verification
+  - [x] 68.3 Implement container removal with verification
     - After execution completes (success, failure, or timeout), remove the Execution_Container
     - After removal, verify the container no longer exists on the Docker host by attempting to inspect it
     - Log verification result
     - _Requirements: 5.4, 5.5, 8.9_
 
-  - [ ] 68.4 Implement dangling container cleanup on startup
+  - [x] 68.4 Implement dangling container cleanup on startup
     - Create `cleanup_dangling_containers()` method
     - On startup, list all containers matching the naming convention (e.g., prefix `gare-exec-`)
     - Stop and remove any found dangling containers
     - Log each cleaned-up container
     - _Requirements: 8.10_
 
-  - [ ] 68.5 Implement Docker daemon accessibility check
+  - [x] 68.5 Implement Docker daemon accessibility check
     - Create `verify_docker_daemon()` method
     - Call `docker_client.ping()` to verify the Docker daemon is accessible
     - Return True if accessible, False otherwise
