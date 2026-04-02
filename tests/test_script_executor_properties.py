@@ -14,6 +14,7 @@ from src.script_executor import ScriptExecutor
 from src.execution_manager import ExecutionManager
 from src.output_collector import OutputCollector
 from src.models import ExecutionStatus
+from tests.mock_docker import create_mock_docker_client
 
 
 # Custom strategies for generating test data
@@ -94,6 +95,7 @@ def test_property_21_asynchronous_script_execution(params, output_text):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -154,6 +156,7 @@ def test_property_21_multiple_async_executions(params_list):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -213,6 +216,7 @@ def test_property_22_process_isolation(params):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -271,6 +275,7 @@ def test_property_22_process_isolation_crash_safety(params):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -328,6 +333,7 @@ def test_property_25_execution_timeout_configuration(params):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -389,6 +395,7 @@ def test_property_26_timeout_termination(params, sleep_multiplier):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -445,6 +452,7 @@ def test_property_26_timeout_exit_code(timeout_seconds):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -502,6 +510,7 @@ def test_property_27_exit_code_capture(params, exit_code):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -561,6 +570,7 @@ def test_property_27_exit_code_in_output(params):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -613,6 +623,7 @@ def test_property_28_temporary_file_cleanup(params, should_succeed):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -671,6 +682,7 @@ def test_property_28_cleanup_after_timeout(params):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir
@@ -723,6 +735,7 @@ def test_property_28_cleanup_preserves_output(params):
         manager = ExecutionManager(output_retention_hours=1)
         collector = OutputCollector()
         executor = ScriptExecutor(
+            docker_client=create_mock_docker_client(),
             execution_manager=manager,
             output_collector=collector,
             temp_storage_path=temp_dir

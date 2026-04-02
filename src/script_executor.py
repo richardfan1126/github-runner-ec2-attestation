@@ -286,7 +286,7 @@ class ScriptExecutor:
             True if container was terminated, False if not found or already completed
         """
         with self._container_lock:
-            container = self._active_containers.get(execution_id)
+            container = self._active_containers.pop(execution_id, None)
 
         if container is not None:
             container_name = f"{CONTAINER_NAME_PREFIX}{execution_id}"

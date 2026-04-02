@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from src.config import ServerConfig
 from src.models import OIDCValidationResult
 from src.server import create_app
+from tests.mock_docker import create_mock_docker_client
 
 
 VALID_OIDC_RESULT = OIDCValidationResult(
@@ -102,7 +103,7 @@ def mock_github_and_attestation():
 @pytest.fixture
 def app(test_config, mock_github_and_attestation):
     """Create test application with OIDC validation mocked"""
-    application = create_app(test_config)
+    application = create_app(test_config, docker_client=create_mock_docker_client())
     # Mock OIDC validation to always succeed for integration tests
     application.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
     return application
@@ -261,7 +262,7 @@ class TestErrorScenarios:
         test_config.execution_timeout_seconds = 1
         
         # Create fresh app and client to avoid rate limiting from other tests
-        app = create_app(test_config)
+        app = create_app(test_config, docker_client=create_mock_docker_client())
         app.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
         client = TestClient(app)
         
