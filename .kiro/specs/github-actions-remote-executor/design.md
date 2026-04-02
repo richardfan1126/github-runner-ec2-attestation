@@ -2,7 +2,7 @@
 
 ## Overview
 
-The GitHub Actions Remote Executor is an HTTP server that runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts asynchronously while allowing clients to poll for output and status.
+The GitHub Actions Remote Executor is an HTTP server that runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts inside ephemeral Docker containers asynchronously while allowing clients to poll for output and status. Each script execution runs in a newly created Docker container that is destroyed after completion, ensuring complete isolation between executions.
 
 This design document covers five major aspects of the system:
 
@@ -20,7 +20,7 @@ This design document covers five major aspects of the system:
 
 1. **Asynchronous Execution Model**: Requests return immediately with an execution ID and attestation document, while script execution proceeds in the background
 2. **Polling-based Output Retrieval**: Clients poll a separate endpoint to retrieve incremental output rather than maintaining long HTTP connections
-3. **Root Execution**: Scripts execute as root with full system privileges for maximum flexibility
+3. **Ephemeral Docker Container Isolation**: Each script execution runs inside a newly created Docker container from a configured Container_Image; containers are never reused and are destroyed after completion, failure, or timeout
 4. **Attestable Environment**: NitroTPM-based attestation on the Attestable EC2 instance provides cryptographic proof of the execution environment
 5. **Stateless Request Handling**: Each request is independent, with execution state stored separately
 
@@ -35,7 +35,7 @@ This design document covers five major aspects of the system:
 
 The project maintains separate Python dependency configurations:
 
-- **Remote Executor (pyproject.toml)**: Contains dependencies for the HTTP service (fastapi, uvicorn, requests) that runs in the KIWI image. The remote executor does NOT use boto3.
+- **Remote Executor (pyproject.toml)**: Contains dependencies for the HTTP service (fastapi, uvicorn, requests, docker) that runs in the KIWI image. The remote executor does NOT use boto3.
 - **Build Scripts (scripts/pyproject.toml)**: Contains dependencies for build and deployment scripts (boto3, paramiko) used during AMI creation. These are NOT installed in the KIWI image.
 
 This separation ensures the KIWI image only contains libraries needed for the remote executor service, keeping it minimal and focused.
@@ -76,7 +76,15 @@ The system consists of the following major components:
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │  Execution   │  │    Script    │  │    Output    │      │
 │  │   Manager    │  │   Executor   │  │  Collector   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│  └──────────────┘  └──┬───────┬──┘  └──────────────┘      │
+│                        │       │                             │
+│              ┌─────────▼───────▼──────────┐                 │
+│              │     Docker Daemon (SDK)     │                 │
+│              │  ┌────────┐  ┌────────┐    │                 │
+│              │  │Container│  │Container│   │                 │
+│              │  │ exec-1  │  │ exec-2 │   │                 │
+│              │  └────────┘  └────────┘    │                 │
+│              └────────────────────────────┘                 │
 └───────────────────────────────────────────────────────────────┘
             │                     │                     │
 ┌───────────▼─────────────────────▼─────────────────────▼─────┐
@@ -155,11 +163,15 @@ The system consists of the following major components:
 - Cleans up completed executions after retention period
 
 **Script Executor**
-- Executes scripts as root with full system privileges
-- Captures stdout and stderr streams
-- Monitors execution progress
-- Enforces resource limits (timeouts)
-- Handles process termination
+- Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
+- Assigns a unique container name derived from the Execution_ID to each container
+- Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory), network disabled, no privilege escalation, non-root user
+- Captures stdout and stderr streams from the container
+- Monitors execution progress and enforces timeout
+- Removes the container and its resources after completion, failure, or timeout
+- Never reuses a container for more than one execution
+- Verifies container removal after destruction
+- Cleans up any dangling containers matching the naming convention on startup
 - Records exit codes
 
 **Output Collector**
@@ -191,9 +203,9 @@ The system consists of the following major components:
 6. Attestation Generator creates attestation document with execution metadata
 7. Execution Manager creates execution record with unique ID
 8. Response returned immediately with execution ID and attestation document
-9. Script Executor begins asynchronous execution as root
-10. Output Collector captures stdout/stderr streams
-11. Execution Manager updates status upon completion
+9. Script Executor creates a new Docker container from the configured Container_Image and begins asynchronous execution inside it
+10. Output Collector captures stdout/stderr streams from the container
+11. Execution Manager updates status upon completion; container is removed
 
 **Output Polling Flow:**
 
@@ -210,10 +222,12 @@ The system consists of the following major components:
 ### Concurrency Model
 
 - HTTP server handles multiple concurrent connections using thread pool or async I/O
-- Each execution runs in a separate process/container
+- Each execution runs in a separate ephemeral Docker container (Execution_Container) created from the configured Container_Image
+- Containers are never reused — each execution gets a fresh container that is destroyed after completion, failure, or timeout
 - Execution state stored in thread-safe data structure or external store
 - Output collection uses buffered writes to avoid blocking
-- Maximum concurrent executions configurable to prevent resource exhaustion
+- Maximum concurrent Execution_Containers configurable to prevent resource exhaustion
+- Docker daemon manages container lifecycle and resource isolation
 
 ## Components and Interfaces
 
@@ -317,6 +331,7 @@ Health check endpoint for monitoring.
 {
   "status": "healthy",
   "attestation_available": true,
+  "docker_available": true,
   "disk_space_mb": 10240,
   "active_executions": 3
 }
@@ -430,13 +445,48 @@ class ExecutionManager:
 #### ScriptExecutor Interface
 
 ```python
+import docker
+
 class ScriptExecutor:
-    def execute_async(self, execution_id: str, script_path: str) -> None:
-        """Executes script asynchronously as root"""
+    def __init__(self, docker_client: docker.DockerClient, container_image: str,
+                 memory_limit: str, cpu_limit: float, timeout_seconds: int):
+        """
+        Initialize with Docker client and container configuration.
+        
+        Args:
+            docker_client: Docker SDK client instance
+            container_image: Name of the Container_Image to use for Execution_Containers
+            memory_limit: Docker memory constraint (e.g., '512m')
+            cpu_limit: Docker CPU constraint (e.g., 1.0 for one CPU)
+            timeout_seconds: Maximum execution timeout
+        """
         pass
-    
+
+    def execute_async(self, execution_id: str, script_path: str) -> None:
+        """
+        Creates a new Execution_Container from Container_Image, copies the script
+        into it, and executes it asynchronously. The container is assigned a unique
+        name derived from the execution_id.
+        """
+        pass
+
     def terminate(self, execution_id: str) -> None:
-        """Terminates running execution"""
+        """Stops and removes the Execution_Container for the given execution"""
+        pass
+
+    def cleanup_dangling_containers(self) -> None:
+        """
+        Removes any dangling Execution_Containers on startup that match
+        the container naming convention.
+        """
+        pass
+
+    def verify_container_removed(self, execution_id: str) -> bool:
+        """Verifies the container no longer exists on the Docker host"""
+        pass
+
+    def verify_docker_daemon(self) -> bool:
+        """Checks if the Docker daemon is accessible"""
         pass
 ```
 
@@ -535,6 +585,9 @@ class ServerConfig:
     tpm_attest_path: str
     allowed_repositories: list[str]
     expected_audience: str
+    container_image: str  # Docker image name for Execution_Containers
+    container_memory_limit: str  # Docker memory constraint (e.g., '512m')
+    container_cpu_limit: float  # Docker CPU constraint (e.g., 1.0)
 ```
 
 ### OIDCValidationResult
@@ -691,11 +744,11 @@ class OIDCTokenClaims:
 
 **Validates: Requirements 5.1**
 
-### Property 22: Process Isolation
+### Property 22: Docker Container Isolation
 
-*For any* script execution, the script should run in an isolated process separate from the server process.
+*For any* script execution, the script should run inside a newly created ephemeral Docker container (Execution_Container) that is separate from the server process and from all other executions.
 
-**Validates: Requirements 5.2**
+**Validates: Requirements 5.1, 5.2, 5.3, 5.11**
 
 ### Property 23: Output Stream Capture
 
@@ -727,11 +780,11 @@ class OIDCTokenClaims:
 
 **Validates: Requirements 5.7**
 
-### Property 28: Temporary File Cleanup
+### Property 28: Execution Container and Temporary File Cleanup
 
-*For any* script execution (successful or failed), all temporary files should be cleaned up after execution completes.
+*For any* script execution (successful, failed, or timed out), the Execution_Container should be removed and all temporary files should be cleaned up after execution completes.
 
-**Validates: Requirements 8.6**
+**Validates: Requirements 5.4, 5.5, 5.10, 8.9**
 
 ### Property 29: Execution Status Tracking
 
@@ -955,6 +1008,48 @@ class OIDCTokenClaims:
 
 **Validates: Requirements 2.20**
 
+### Property 109: Container Non-Reuse
+
+*For any* two script executions, the Execution_Containers used should be distinct — no container is ever reused for more than one execution.
+
+**Validates: Requirements 5.3**
+
+### Property 110: Container Unique Naming
+
+*For any* script execution, the Execution_Container should be assigned a unique container name derived from the Execution_ID.
+
+**Validates: Requirements 5.13**
+
+### Property 111: Docker Container Security Constraints
+
+*For any* Execution_Container created by the Script_Executor, the container should be configured with: a non-root user, network access disabled, a read-only root filesystem (except for a designated execution directory), privilege escalation disabled, memory limits enforced, and CPU limits enforced.
+
+**Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
+
+### Property 112: Container Removal Verification
+
+*For any* Execution_Container that is removed, the Script_Executor should verify the container no longer exists on the Docker host.
+
+**Validates: Requirements 8.9**
+
+### Property 113: Dangling Container Cleanup on Startup
+
+*For any* server startup, the Script_Executor should remove any dangling Execution_Containers that match the container naming convention.
+
+**Validates: Requirements 8.10**
+
+### Property 114: Docker Daemon Accessibility Check
+
+*For any* server startup, the Script_Executor should verify that the Docker daemon is accessible; if not, the server should fail to start with a descriptive error.
+
+**Validates: Requirements 9.11, 9.12**
+
+### Property 115: Container Image Configuration
+
+*For any* configured Container_Image name, the Script_Executor should use that image when creating Execution_Containers.
+
+**Validates: Requirements 9.7**
+
 ### Error Categories
 
 The system handles errors in the following categories:
@@ -1019,16 +1114,25 @@ All error responses follow a consistent JSON structure:
 - Log the output attestation failure with execution ID context
 
 **Execution Errors**
-- Capture script stderr for error diagnosis
+- Capture script stderr from the Execution_Container for error diagnosis
 - Mark execution status appropriately (failed vs timed_out)
-- Clean up resources even when errors occur
+- Remove the Execution_Container and clean up resources even when errors occur
+- Verify container removal after destruction
 - Log execution errors with execution ID context
+
+**Docker Container Errors**
+- Docker daemon not accessible at startup: fail to start with descriptive error
+- Container creation failure: record error for execution ID, log Docker API error
+- Container timeout: stop and remove container, mark execution as timed_out
+- Container removal failure: log error, retry removal, verify container state
+- Dangling container cleanup failure on startup: log warning, continue startup
 
 **Resource Exhaustion**
 - Implement rate limiting to prevent abuse
-- Limit concurrent executions to prevent resource exhaustion
+- Limit concurrent Execution_Containers to prevent resource exhaustion
 - Monitor disk space and reject requests when low
-- Implement execution timeouts to prevent runaway processes
+- Implement execution timeouts to prevent runaway containers
+- Docker memory and CPU constraints prevent individual containers from consuming excessive host resources
 
 ### Logging Strategy
 
@@ -1119,16 +1223,16 @@ def test_execution_id_uniqueness(requests):
 - Property tests: Random Script_Output content, SHA-256 digest round-trip verification, base64 encoding validation
 
 **Execution Testing**
-- Unit tests: Specific scripts with known output, timeout scenarios
-- Property tests: Random script content, concurrent executions
+- Unit tests: Specific scripts with known output, timeout scenarios, container creation/removal
+- Property tests: Random script content, concurrent executions in separate containers, container cleanup verification
 
 **Output Collection Testing**
 - Unit tests: Specific output patterns, offset edge cases
 - Property tests: Random output sizes, offset values, concurrent access
 
 **Security Testing**
-- Unit tests: Path traversal attempts, token handling
-- Property tests: Random input validation scenarios
+- Unit tests: Path traversal attempts, token handling, Docker container security constraints
+- Property tests: Random input validation scenarios, container isolation verification
 
 **Configuration Testing**
 - Unit tests: Specific missing config, invalid values
@@ -1137,30 +1241,34 @@ def test_execution_id_uniqueness(requests):
 ### Integration Testing
 
 **End-to-End Scenarios**:
-1. Complete execution flow: request → attestation → execution → output retrieval
-2. Error scenarios: authentication failure, timeout, file not found
-3. Concurrent execution: multiple simultaneous requests
+1. Complete execution flow: request → attestation → container creation → execution → output retrieval → container removal
+2. Error scenarios: authentication failure, timeout, file not found, Docker daemon unavailable
+3. Concurrent execution: multiple simultaneous requests in separate Docker containers
 4. Rate limiting: exceeding limits from single IP
-5. Cleanup: verify temporary files removed after execution
+5. Cleanup: verify containers removed and temporary files cleaned up after execution
+6. Startup: verify dangling container cleanup on server start
 
 **External Dependencies**:
 - Mock GitHub API for predictable testing
 - Mock NitroTPM device for attestation testing
-- Use separate processes for execution testing
+- Mock Docker SDK for container lifecycle testing
+- Use separate containers for execution testing
 
 ### Performance Testing
 
 **Load Testing**:
 - Concurrent request handling capacity
-- Execution throughput under load
-- Memory usage during concurrent executions
+- Execution throughput under load with multiple Docker containers
+- Memory usage during concurrent container executions
 - Disk I/O performance for output collection
+- Docker container creation/removal overhead
 
 **Stress Testing**:
-- Maximum concurrent executions
+- Maximum concurrent Execution_Containers
 - Large script file handling
-- Long-running script behavior
+- Long-running script behavior within containers
 - Output retention with many executions
+- Docker daemon resource limits under load
 
 ### Security Testing
 
@@ -1441,6 +1549,7 @@ The project maintains two separate Python dependency configurations to ensure th
   - fastapi: HTTP server framework
   - uvicorn: ASGI server for running FastAPI
   - requests: HTTP client for GitHub API calls
+  - docker: Docker SDK for Python, used to manage Execution_Containers (create, run, remove)
   - PyJWT[crypto]: JWT decoding and JWKS-based signature verification for OIDC token validation (includes cryptography dependency)
 - Development/testing dependencies:
   - hypothesis: Property-based testing library
@@ -1452,6 +1561,7 @@ The project maintains two separate Python dependency configurations to ensure th
 
 **Key Separation:**
 - The remote executor does NOT use boto3 (verified by source code inspection)
+- The remote executor uses the `docker` Python SDK to manage Execution_Containers
 - boto3 is only used by scripts in the scripts/ directory for AWS operations
 - When building the KIWI image, only dependencies from pyproject.toml are installed
 - The two configurations are managed independently using uv
@@ -1482,7 +1592,7 @@ The Python dependency installation is split across two phases:
 
 3. **Installation Verification:**
    - The config.sh script verifies critical packages are importable
-   - Example: `python3 -c "import fastapi"`, `python3 -c "import uvicorn"`, `python3 -c "import requests"`, `python3 -c "import jwt"`
+   - Example: `python3 -c "import fastapi"`, `python3 -c "import uvicorn"`, `python3 -c "import requests"`, `python3 -c "import docker"`, `python3 -c "import jwt"`
    - If verification fails, the KIWI build fails with an error
    - Successful verification is logged for build audit trail
 
@@ -2409,6 +2519,7 @@ If automated cleanup fails:
 - fastapi: HTTP server framework
 - uvicorn: ASGI server
 - requests: HTTP client for GitHub API
+- docker: Docker SDK for Python, used to manage Execution_Containers
 - PyJWT[crypto]: JWT decoding and JWKS-based signature verification for OIDC token validation
 - Development/test dependencies (hypothesis, pytest, pytest-asyncio, httpx) if included
 - Script dependencies from scripts/pyproject.toml (boto3, paramiko) are NOT installed in the image
@@ -2428,7 +2539,7 @@ The KIWI image build process installs Python dependencies using a two-phase appr
 
 3. **Installation Verification:**
    - After installation, the script verifies that key packages are importable
-   - Checks that fastapi, uvicorn, requests, and jwt (PyJWT) are available
+   - Checks that fastapi, uvicorn, requests, docker, and jwt (PyJWT) are available
    - Logs installation results for debugging
 
 4. **System Python Environment:**
@@ -2448,7 +2559,7 @@ The dependency installation is split across two scripts:
 - **config.sh** (runs inside KIWI chroot with no network):
   - Verifies pre-downloaded wheels exist at /tmp/kiwi-build/wheels/
   - Installs from local wheels using `pip3 install --no-index --find-links`
-  - Verifies critical packages are importable (fastapi, uvicorn, requests, jwt)
+  - Verifies critical packages are importable (fastapi, uvicorn, requests, docker, jwt)
 
 This approach ensures that the remote executor service has all required dependencies available when the AMI is launched, without requiring network access during the KIWI image build phase.
 

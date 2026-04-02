@@ -1443,18 +1443,182 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 65. Final checkpoint - Ensure all OIDC tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 66. Add Docker SDK dependency and update ServerConfig for container execution
+  - [ ] 66.1 Add docker Python SDK to pyproject.toml dependencies
+    - Add `docker>=7.0.0` to the `dependencies` list in pyproject.toml
+    - This provides the Docker SDK for managing container lifecycle
+    - _Requirements: 12.8_
+
+  - [ ] 66.2 Add container configuration fields to ServerConfig
+    - Add `container_image: str` field to ServerConfig dataclass (Docker image name for Execution_Containers)
+    - Add `container_memory_limit: str` field to ServerConfig dataclass (e.g., '512m')
+    - Add `container_cpu_limit: float` field to ServerConfig dataclass (e.g., 1.0)
+    - Load `CONTAINER_IMAGE` from environment variable
+    - Load `CONTAINER_MEMORY_LIMIT` from environment variable
+    - Load `CONTAINER_CPU_LIMIT` from environment variable
+    - Add validation: `container_image` must be non-empty, `container_memory_limit` must be non-empty, `container_cpu_limit` must be > 0
+    - _Requirements: 9.6, 9.7_
+
+  - [ ] 66.3 Update .env.example and KIWI env file with container config variables
+    - Add `CONTAINER_IMAGE=python:3.11-slim` to .env.example
+    - Add `CONTAINER_MEMORY_LIMIT=512m` to .env.example
+    - Add `CONTAINER_CPU_LIMIT=1.0` to .env.example
+    - Add same variables to kiwi-descriptions/root/etc/github-actions-remote-executor/env
+    - _Requirements: 9.6, 9.7_
+
+  - [ ] 66.4 Update KIWI config.sh to verify docker package is importable
+    - Add `python3.11 -c "import docker"` verification check alongside existing fastapi/uvicorn/requests/jwt checks
+    - _Requirements: 12.8_
+
+  - [ ] 66.5 Update existing tests that construct ServerConfig to include container fields
+    - Update tests/test_config.py, tests/test_config_properties.py
+    - Update tests/test_health_metrics_unit.py, tests/test_health_metrics_properties.py
+    - Update tests/test_server_unit.py, tests/test_integration.py
+    - Update tests/test_logging_error_handling_properties.py
+    - Add `container_image`, `container_memory_limit`, `container_cpu_limit` to all ServerConfig constructor calls
+    - _Requirements: 9.6, 9.7_
+
+- [ ] 67. Checkpoint - Ensure all tests pass after adding Docker config
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 68. Rewrite ScriptExecutor to use Docker SDK for container-based execution
+  - [ ] 68.1 Update ScriptExecutor constructor for Docker SDK
+    - Replace subprocess-based execution with Docker SDK (`docker` Python package)
+    - Accept `docker_client: docker.DockerClient` parameter
+    - Accept `container_image: str` parameter (Container_Image name)
+    - Accept `memory_limit: str` parameter (Docker memory constraint)
+    - Accept `cpu_limit: float` parameter (Docker CPU constraint)
+    - Keep existing `execution_manager`, `output_collector`, `temp_storage_path` parameters
+    - _Requirements: 5.1, 5.2, 8.1, 8.2, 9.6, 9.7_
+
+  - [ ] 68.2 Implement Docker container lifecycle in execute_async
+    - Create a new Execution_Container from the configured Container_Image for each execution
+    - Assign a unique container name derived from the Execution_ID (e.g., `gare-exec-{execution_id}`)
+    - Configure container with security constraints:
+      - Memory limit from `container_memory_limit` config
+      - CPU limit from `container_cpu_limit` config (via `nano_cpus`)
+      - Read-only root filesystem (`read_only=True`) with a writable tmpfs mount for the execution directory
+      - Network disabled (`network_mode='none'`)
+      - No privilege escalation (`security_opt=['no-new-privileges']`)
+      - Non-root user (`user` parameter)
+    - Copy the script into the container and execute it
+    - Capture stdout and stderr streams from the container
+    - Enforce execution timeout by stopping the container after timeout
+    - Capture exit code from the container
+    - Remove the container after completion, failure, or timeout
+    - _Requirements: 5.1, 5.2, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.13, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
+
+  - [ ] 68.3 Implement container removal with verification
+    - After execution completes (success, failure, or timeout), remove the Execution_Container
+    - After removal, verify the container no longer exists on the Docker host by attempting to inspect it
+    - Log verification result
+    - _Requirements: 5.4, 5.5, 8.9_
+
+  - [ ] 68.4 Implement dangling container cleanup on startup
+    - Create `cleanup_dangling_containers()` method
+    - On startup, list all containers matching the naming convention (e.g., prefix `gare-exec-`)
+    - Stop and remove any found dangling containers
+    - Log each cleaned-up container
+    - _Requirements: 8.10_
+
+  - [ ] 68.5 Implement Docker daemon accessibility check
+    - Create `verify_docker_daemon()` method
+    - Call `docker_client.ping()` to verify the Docker daemon is accessible
+    - Return True if accessible, False otherwise
+    - _Requirements: 9.11, 9.12_
+
+- [ ] 69. Wire Docker ScriptExecutor into application startup
+  - [ ] 69.1 Update src/main.py to initialize Docker client and ScriptExecutor
+    - Create `docker.DockerClient` instance at startup using `docker.from_env()`
+    - Pass Docker client and container config from ServerConfig to ScriptExecutor constructor
+    - Call `verify_docker_daemon()` at startup; fail with descriptive error if Docker is not accessible
+    - Call `cleanup_dangling_containers()` at startup before accepting requests
+    - _Requirements: 9.11, 9.12, 8.10_
+
+  - [ ] 69.2 Update src/server.py to pass Docker config to ScriptExecutor
+    - Update `create_app` to construct ScriptExecutor with Docker client and container config
+    - Pass `config.container_image`, `config.container_memory_limit`, `config.container_cpu_limit`
+    - _Requirements: 9.6, 9.7_
+
+  - [ ] 69.3 Update health endpoint to include Docker availability
+    - Add `docker_available` field to health check response
+    - Call `verify_docker_daemon()` to determine Docker status
+    - _Requirements: 10.2, 10.3_
+
+- [ ] 70. Checkpoint - Ensure Docker ScriptExecutor compiles and wires correctly
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 71. Write property tests for Docker container execution
+  - [ ] 71.1 Write property test for Container Non-Reuse
+    - **Property 109: Container Non-Reuse**
+    - For any two script executions, verify the Execution_Containers used are distinct and no container is reused
+    - **Validates: Requirements 5.3**
+
+  - [ ] 71.2 Write property test for Container Unique Naming
+    - **Property 110: Container Unique Naming**
+    - For any script execution, verify the Execution_Container is assigned a unique name derived from the Execution_ID
+    - **Validates: Requirements 5.13**
+
+  - [ ] 71.3 Write property test for Docker Container Security Constraints
+    - **Property 111: Docker Container Security Constraints**
+    - For any Execution_Container, verify it is configured with: non-root user, network disabled, read-only root filesystem (except execution directory), privilege escalation disabled, memory limits, and CPU limits
+    - **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
+
+  - [ ] 71.4 Write property test for Container Removal Verification
+    - **Property 112: Container Removal Verification**
+    - For any Execution_Container that is removed, verify the container no longer exists on the Docker host
+    - **Validates: Requirements 8.9**
+
+  - [ ] 71.5 Write property test for Dangling Container Cleanup on Startup
+    - **Property 113: Dangling Container Cleanup on Startup**
+    - For any server startup, verify the Script_Executor removes dangling Execution_Containers matching the naming convention
+    - **Validates: Requirements 8.10**
+
+  - [ ] 71.6 Write property test for Docker Daemon Accessibility Check
+    - **Property 114: Docker Daemon Accessibility Check**
+    - For any server startup, verify the Script_Executor checks Docker daemon accessibility; if not accessible, the server fails to start
+    - **Validates: Requirements 9.11, 9.12**
+
+  - [ ] 71.7 Write property test for Container Image Configuration
+    - **Property 115: Container Image Configuration**
+    - For any configured Container_Image name, verify the Script_Executor uses that image when creating Execution_Containers
+    - **Validates: Requirements 9.7**
+
+- [ ] 72. Write unit tests for Docker container management
+  - [ ] 72.1 Write unit tests for Docker ScriptExecutor
+    - Test container creation with correct image, name, and security constraints (memory, CPU, read-only fs, no network, no privilege escalation, non-root user)
+    - Test container execution captures stdout, stderr, and exit code
+    - Test container is removed after successful execution
+    - Test container is removed after failed execution
+    - Test container is removed after timeout
+    - Test container removal verification (container no longer exists)
+    - Test dangling container cleanup on startup
+    - Test Docker daemon accessibility check (success and failure)
+    - Test container name derivation from Execution_ID
+    - Mock Docker SDK client for all tests
+    - _Requirements: 5.1-5.13, 8.1-8.10, 9.7, 9.11, 9.12_
+
+  - [ ] 72.2 Update existing ScriptExecutor tests for Docker-based execution
+    - Update tests/test_script_executor.py to use mocked Docker client instead of subprocess
+    - Update tests/test_script_executor_properties.py to verify Docker container behavior
+    - Ensure Properties 21-28 still pass with Docker-based execution
+    - _Requirements: 5.1, 5.2, 5.6, 5.7, 5.8, 5.9, 5.10_
+
+- [ ] 73. Final checkpoint - Ensure all Docker container tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 108 correctness properties from the design document
+- Property tests validate the 115 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
 - The cleanup implementation (tasks 37-38) covers testing the existing scripts/cleanup.py which is already fully implemented
 - The debug SSH implementation (tasks 39-47) adds opt-in SSH debug access across build-time (KIWI image), deploy-time (Terraform + deploy script), and GitHub Actions workflow
 - Python dependencies are separated into two configurations:
-  - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, hypothesis, pytest, pytest-asyncio, httpx)
+  - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, docker, hypothesis, pytest, pytest-asyncio, httpx)
   - scripts/pyproject.toml: Build/deployment script dependencies (boto3, paramiko)
   - The remote executor does NOT use boto3 - it only runs on the EC2 instance and doesn't interact with AWS APIs
   - boto3 is ONLY used by build/deployment scripts (build-ami.py, cleanup.py, deploy.py) that run outside the KIWI image
@@ -1468,11 +1632,15 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - SSH key provisioning uses cloud-init and ec2-instance-connect (no baked-in keys)
 - NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM
 - Scripts execute as root with full system privileges
+- Docker container execution replaces direct subprocess execution: each script runs in an ephemeral container with memory limits, CPU limits, read-only filesystem, no network, no privilege escalation, and non-root user
+- Docker SDK (`docker` Python package) manages container lifecycle: create, run, capture output, remove, and verify removal
+- Container naming convention uses `gare-exec-{execution_id}` prefix for identification and dangling cleanup
+- Docker container execution (tasks 66-73) replaces subprocess-based script execution with ephemeral Docker containers for isolation and security
 - OIDC authentication (tasks 58-65) replaces the previous shared secret token approach with GitHub Actions OIDC JWT validation
 - PyJWT[crypto] is used for JWT decoding and JWKS-based signature verification
 - OIDC tokens are validated for signature (JWKS), issuer, audience, repository, and expiration claims
 - Protected endpoints (/execute, /execution/{id}/output) require Bearer OIDC tokens; /health remains unauthenticated
-- All 108 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 115 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup

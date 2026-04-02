@@ -4,7 +4,7 @@
 
 This document specifies the requirements for the GitHub Actions Remote Executor system, covering both its runtime behavior and build process.
 
-The GitHub Actions Remote Executor is a secure service that receives script execution requests from GitHub Actions workflows, retrieves scripts from GitHub repositories, generates attestation documents, executes scripts in isolated environments, and returns execution results. The system runs on an Attestable EC2 instance with NitroTPM to provide cryptographic attestation of the execution environment.
+The GitHub Actions Remote Executor is a secure service that receives script execution requests from GitHub Actions workflows, retrieves scripts from GitHub repositories, generates attestation documents, executes scripts in ephemeral Docker containers, and returns execution results. The system runs on an Attestable EC2 instance with NitroTPM to provide cryptographic attestation of the execution environment. Each script execution runs inside a newly created Docker container that is destroyed after the execution completes, ensuring complete isolation between executions.
 
 This specification covers three major aspects:
 
@@ -27,7 +27,9 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 ### Runtime Components
 - **GHA_Server**: HTTP server that receives and processes execution requests from GitHub Actions
 - **Attestation_Generator**: Component that generates cryptographic attestation documents proving execution environment
-- **Script_Executor**: Component that executes scripts in isolated environments
+- **Script_Executor**: Component that executes scripts inside ephemeral Docker containers
+- **Execution_Container**: Ephemeral Docker container created for a single script execution and destroyed after completion
+- **Container_Image**: Docker image used as the base for creating Execution_Containers
 - **Output_Collector**: Component that captures and stores script execution output
 - **Execution_ID**: Unique identifier for each script execution request
 - **Repository_Client**: Component that fetches scripts from GitHub repositories
@@ -139,21 +141,25 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. WHEN the Attestation_Document is generated, THE Script_Executor SHALL initiate script execution
 7. IF attestation generation fails, THEN THE GHA_Server SHALL record an attestation error for the Execution_ID
 
-### Requirement 5: Asynchronous Script Execution
+### Requirement 5: Asynchronous Script Execution in Ephemeral Docker Containers
 
-**User Story:** As a GitHub Actions workflow, I want scripts executed asynchronously, so that I can poll for results without blocking
+**User Story:** As a GitHub Actions workflow, I want scripts executed asynchronously inside ephemeral Docker containers, so that I can poll for results without blocking and each execution is fully isolated
 
 #### Acceptance Criteria
 
-1. THE Script_Executor SHALL execute scripts in isolated processes
-2. THE Script_Executor SHALL execute each script with a unique Execution_ID
-3. THE Output_Collector SHALL capture stdout from the script execution
-4. THE Output_Collector SHALL capture stderr from the script execution
-5. THE Output_Collector SHALL capture the exit code from the script execution
-6. THE Script_Executor SHALL enforce a maximum execution timeout of 30 minutes
-7. IF the script exceeds the timeout, THEN THE Script_Executor SHALL terminate the process and record a timeout error
-8. THE Script_Executor SHALL execute multiple scripts concurrently without interference
-9. THE Output_Collector SHALL store Script_Output associated with the Execution_ID
+1. THE Script_Executor SHALL create a new Execution_Container from the configured Container_Image for each script execution
+2. THE Script_Executor SHALL execute each script inside the Execution_Container with a unique Execution_ID
+3. THE Script_Executor SHALL NOT reuse an Execution_Container for more than one script execution
+4. WHEN script execution completes, THE Script_Executor SHALL remove the Execution_Container and its associated resources
+5. IF script execution fails, THEN THE Script_Executor SHALL remove the Execution_Container and its associated resources
+6. THE Output_Collector SHALL capture stdout from the Execution_Container
+7. THE Output_Collector SHALL capture stderr from the Execution_Container
+8. THE Output_Collector SHALL capture the exit code from the Execution_Container
+9. THE Script_Executor SHALL enforce a maximum execution timeout of 30 minutes
+10. IF the script exceeds the timeout, THEN THE Script_Executor SHALL stop and remove the Execution_Container and record a timeout error
+11. THE Script_Executor SHALL execute multiple scripts concurrently in separate Execution_Containers without interference
+12. THE Output_Collector SHALL store Script_Output associated with the Execution_ID
+13. THE Script_Executor SHALL assign a unique container name derived from the Execution_ID to each Execution_Container
 
 ### Requirement 6: Output Polling Endpoint
 
@@ -192,18 +198,20 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 ### Requirement 8: Security and Resource Management
 
-**User Story:** As a security engineer, I want resource limits and security controls enforced, so that script execution cannot compromise the system
+**User Story:** As a security engineer, I want resource limits and security controls enforced via Docker container isolation, so that script execution cannot compromise the host system
 
 #### Acceptance Criteria
 
-1. THE Script_Executor SHALL enforce a maximum memory limit per script execution
-2. THE Script_Executor SHALL enforce a maximum CPU time limit per script execution
-3. THE Script_Executor SHALL execute scripts with minimal privileges
-4. THE Script_Executor SHALL prevent scripts from accessing the network
-5. THE Script_Executor SHALL prevent scripts from accessing the filesystem outside their execution directory
-6. THE GHA_Server SHALL limit the number of concurrent executions
-7. THE GHA_Server SHALL reject new requests when at maximum capacity with HTTP 503 Service Unavailable
-8. THE Script_Executor SHALL clean up execution directories after completion
+1. THE Script_Executor SHALL enforce a maximum memory limit on each Execution_Container using Docker memory constraints
+2. THE Script_Executor SHALL enforce a maximum CPU time limit on each Execution_Container using Docker CPU constraints
+3. THE Script_Executor SHALL execute scripts inside the Execution_Container with a non-root user
+4. THE Script_Executor SHALL create each Execution_Container with network access disabled
+5. THE Script_Executor SHALL create each Execution_Container with a read-only root filesystem except for a designated execution directory
+6. THE Script_Executor SHALL prevent the Execution_Container from gaining additional privileges by disabling privilege escalation
+7. THE GHA_Server SHALL limit the number of concurrent Execution_Containers
+8. THE GHA_Server SHALL reject new requests when at maximum capacity with HTTP 503 Service Unavailable
+9. WHEN an Execution_Container is removed, THE Script_Executor SHALL verify the container no longer exists on the Docker host
+10. THE Script_Executor SHALL remove any dangling Execution_Containers on startup that match the container naming convention
 
 ### Requirement 9: Configuration Management
 
@@ -217,9 +225,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 4. THE Repository_Client SHALL read the GitHub access token from configuration
 5. THE Script_Executor SHALL read execution timeout limits from configuration
 6. THE Script_Executor SHALL read resource limits from configuration
-7. THE GHA_Server SHALL read the maximum concurrent executions from configuration
-8. THE GHA_Server SHALL validate all configuration values at startup
-9. IF required configuration is missing, THEN THE GHA_Server SHALL fail to start with a descriptive error
+7. THE Script_Executor SHALL read the Container_Image name from configuration
+8. THE GHA_Server SHALL read the maximum concurrent executions from configuration
+9. THE GHA_Server SHALL validate all configuration values at startup
+10. IF required configuration is missing, THEN THE GHA_Server SHALL fail to start with a descriptive error
+11. THE Script_Executor SHALL verify that the Docker daemon is accessible at startup
+12. IF the Docker daemon is not accessible, THEN THE GHA_Server SHALL fail to start with a descriptive error
 
 ### Requirement 10: Health and Monitoring
 
@@ -266,20 +277,21 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 5. THE remote executor configuration SHALL include fastapi for the HTTP server framework
 6. THE remote executor configuration SHALL include uvicorn for the ASGI server
 7. THE remote executor configuration SHALL include requests for HTTP client operations
-8. WHERE development or testing is performed, THE remote executor configuration SHALL include hypothesis for property-based testing
-9. WHERE development or testing is performed, THE remote executor configuration SHALL include pytest for test execution
-10. WHERE development or testing is performed, THE remote executor configuration SHALL include pytest-asyncio for async test support
-11. WHERE development or testing is performed, THE remote executor configuration SHALL include httpx for async HTTP client testing
-12. WHEN building the KIWI image, THE KIWI_Builder SHALL install only the remote executor dependencies from pyproject.toml
-13. THE KIWI_Builder SHALL NOT install script dependencies from scripts/pyproject.toml into the KIWI image
-14. WHEN executing build scripts, THE Build_Workflow SHALL use dependencies from scripts/pyproject.toml
-15. THE scripts configuration and remote executor configuration SHALL be managed independently using uv
-16. THE KIWI_Builder SHALL copy pyproject.toml and uv.lock files into the KIWI image build context
-17. THE Build_Workflow SHALL extract the dependency list from pyproject.toml and pre-download Python dependency wheels using pip3 download in the build script (which has network access)
-18. THE Build_Workflow SHALL copy the pre-downloaded wheels into the KIWI image build context at /tmp/kiwi-build/wheels/
-19. THE KIWI_Builder SHALL install Python dependencies from pre-downloaded wheels using pip3 install --no-index --find-links (fully offline, no network required)
-20. THE KIWI_Builder SHALL install dependencies to the system Python environment in the KIWI image
-21. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
+8. THE remote executor configuration SHALL include docker for Docker container management
+9. WHERE development or testing is performed, THE remote executor configuration SHALL include hypothesis for property-based testing
+10. WHERE development or testing is performed, THE remote executor configuration SHALL include pytest for test execution
+11. WHERE development or testing is performed, THE remote executor configuration SHALL include pytest-asyncio for async test support
+12. WHERE development or testing is performed, THE remote executor configuration SHALL include httpx for async HTTP client testing
+13. WHEN building the KIWI image, THE KIWI_Builder SHALL install only the remote executor dependencies from pyproject.toml
+14. THE KIWI_Builder SHALL NOT install script dependencies from scripts/pyproject.toml into the KIWI image
+15. WHEN executing build scripts, THE Build_Workflow SHALL use dependencies from scripts/pyproject.toml
+16. THE scripts configuration and remote executor configuration SHALL be managed independently using uv
+17. THE KIWI_Builder SHALL copy pyproject.toml and uv.lock files into the KIWI image build context
+18. THE Build_Workflow SHALL extract the dependency list from pyproject.toml and pre-download Python dependency wheels using pip3 download in the build script (which has network access)
+19. THE Build_Workflow SHALL copy the pre-downloaded wheels into the KIWI image build context at /tmp/kiwi-build/wheels/
+20. THE KIWI_Builder SHALL install Python dependencies from pre-downloaded wheels using pip3 install --no-index --find-links (fully offline, no network required)
+21. THE KIWI_Builder SHALL install dependencies to the system Python environment in the KIWI image
+22. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
 
 ### Requirement 13: Artifact Publishing with PCR Annotations
 
