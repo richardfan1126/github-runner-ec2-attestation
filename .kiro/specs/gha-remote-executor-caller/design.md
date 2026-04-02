@@ -2,9 +2,9 @@
 
 ## Overview
 
-The GitHub Actions Remote Executor Caller is the client-side counterpart to the Remote Executor server. It consists of a GitHub Actions workflow (`call-remote-executor.yml`) and a Python caller script (`.github/scripts/call_remote_executor.py`) that together orchestrate the full lifecycle of a remote script execution: health check, submission, attestation validation, output polling, output integrity verification, and result reporting.
+The GitHub Actions Remote Executor Caller is the client-side counterpart to the Remote Executor server. It consists of a GitHub Actions workflow (`call-remote-executor.yml`) and a Python caller script (`.github/scripts/call_remote_executor.py`) that together orchestrate the full lifecycle of a remote script execution: OIDC token acquisition, health check, submission, attestation validation, output polling, output integrity verification, and result reporting.
 
-The caller is designed to be triggered manually via `workflow_dispatch`, targeting a specific Remote Executor server URL. It validates the server's NitroTPM attestation documents at two points: once when the execution request is accepted (server identity attestation) and again when the output is returned (output integrity attestation). This dual-attestation approach ensures both that the server is a genuine attested environment and that the output has not been tampered with in transit.
+The caller is designed to be triggered manually via `workflow_dispatch`, targeting a specific Remote Executor server URL. It authenticates to the server using GitHub Actions OIDC tokens (JWT) passed as Bearer tokens in the Authorization header. It validates the server's NitroTPM attestation documents at two points: once when the execution request is accepted (server identity attestation) and again when the output is returned (output integrity attestation). This dual-attestation approach ensures both that the server is a genuine attested environment and that the output has not been tampered with in transit.
 
 ### Key Design Decisions
 
@@ -13,10 +13,11 @@ The caller is designed to be triggered manually via `workflow_dispatch`, targeti
 3. **`pycose` for COSE Sign1 verification**: The `pycose` library provides `Sign1Message` and `EC2` key types for verifying the COSE signature using the signing certificate's public key.
 4. **`pyOpenSSL` for certificate chain validation**: The `OpenSSL.crypto` module provides `X509Store` and `X509StoreContext` for validating the signing certificate against the CA bundle and root certificate, matching the NitroTPM attestation verification pattern for attestable AMIs.
 5. **`pycryptodome` for key parameter extraction**: The `Crypto.Util.number.long_to_bytes` utility converts the EC public key coordinates from integers to bytes for COSE key construction.
-6. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (health check → execute → poll loop).
+6. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (OIDC token acquisition → health check → execute → poll loop).
 7. **Canonical output format**: The server constructs `Script_Output` as `stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`. The caller must replicate this exact format when computing the SHA-256 digest for output attestation verification.
 8. **Exit code propagation**: The caller script exits with the remote script's exit code, allowing the GitHub Actions workflow to naturally fail when the remote script fails.
 9. **Hardcoded trust anchors**: The NitroTPM attestation root CA certificate PEM and expected PCR4/PCR7 values are hardcoded directly in the GitHub Actions workflow YAML. This eliminates the need for users to supply these values at dispatch time, ensuring every invocation performs full cryptographic verification. PKI validation and PCR validation are always performed. COSE signature verification is always performed when the signing certificate is present.
+10. **OIDC authentication**: The caller acquires a GitHub Actions OIDC token before making authenticated requests. The token is requested from the GitHub OIDC provider using the `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` environment variables (automatically set when `id-token: write` permission is granted). The token is included as a Bearer token in the Authorization header for `/execute` and `/execution/{id}/output` requests, but not for `/health`. This aligns with the server's OIDC validation which requires authentication on protected endpoints only.
 
 ## Architecture
 
@@ -24,12 +25,16 @@ The caller is designed to be triggered manually via `workflow_dispatch`, targeti
 sequenceDiagram
     participant GHA as GitHub Actions Workflow
     participant CS as Caller Script
+    participant OIDC as GitHub OIDC Provider
     participant RE as Remote Executor Server
 
-    GHA->>CS: Invoke with server_url, script_path, commit_hash, root_cert_pem (hardcoded), expected_pcrs (hardcoded)
-    CS->>RE: GET /health
+    GHA->>CS: Invoke with server_url, script_path, commit_hash, audience, root_cert_pem (hardcoded), expected_pcrs (hardcoded)
+    CS->>RE: GET /health (no Authorization header)
     RE-->>CS: {status: "healthy", ...}
-    CS->>RE: POST /execute {repository_url, commit_hash, script_path, github_token}
+    CS->>OIDC: GET ACTIONS_ID_TOKEN_REQUEST_URL?audience={audience} (Bearer ACTIONS_ID_TOKEN_REQUEST_TOKEN)
+    OIDC-->>CS: {value: "<oidc_jwt_token>"}
+    CS->>CS: Store OIDC token for subsequent requests
+    CS->>RE: POST /execute {repository_url, commit_hash, script_path, github_token} (Authorization: Bearer <oidc_token>)
     RE-->>CS: {execution_id, attestation_document, status}
     CS->>CS: Decode base64 → CBOR → COSE Sign1 [phdr, uhdr, payload, sig]
     CS->>CS: CBOR-decode payload → attestation fields
@@ -37,7 +42,7 @@ sequenceDiagram
     CS->>CS: Verify COSE Sign1 signature using certificate's EC2 public key
     CS->>CS: Validate PCR4 and PCR7 values against hardcoded expected values
     loop Poll until complete or timeout
-        CS->>RE: GET /execution/{id}/output
+        CS->>RE: GET /execution/{id}/output (Authorization: Bearer <oidc_token>)
         RE-->>CS: {stdout, stderr, complete, exit_code, output_attestation_document}
         CS->>CS: Log incremental output
     end
@@ -65,9 +70,11 @@ sequenceDiagram
 ### 1. GitHub Actions Workflow (`call-remote-executor.yml`)
 
 Responsibilities:
-- Define `workflow_dispatch` inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`)
+- Define `workflow_dispatch` inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`), `audience` (optional, specifies the OIDC audience value)
+- Declare `id-token: write` in the `permissions` block to enable OIDC token requests
 - Hardcode the NitroTPM attestation root CA certificate PEM inline in the workflow YAML as an environment variable or step output, and pass it to the caller script via `--root-cert-pem`
 - Hardcode the expected PCR4 and PCR7 values as a JSON map inline in the workflow YAML, and pass it to the caller script via `--expected-pcrs`
+- Pass the `audience` input to the caller script via `--audience`
 - Validate that `server_url` is not empty
 - Check out the repository
 - Install Python dependencies from `.github/scripts/pyproject.toml`
@@ -84,7 +91,8 @@ class RemoteExecutorCaller:
                  poll_interval: int = 5, max_poll_duration: int = 600,
                  max_retries: int = 3,
                  root_cert_pem: str = "",
-                 expected_pcrs: dict[int, str] | None = None):
+                 expected_pcrs: dict[int, str] | None = None,
+                 audience: str = ""):
         """
         Initialize caller with server URL and configuration.
         
@@ -93,11 +101,30 @@ class RemoteExecutorCaller:
                            Hardcoded in the workflow and always provided.
             expected_pcrs: Dict mapping PCR index (int) to expected hex value (str).
                            Hardcoded in the workflow for PCR4 and PCR7.
+            audience: Audience value for OIDC token request. Must match the
+                      Remote Executor server's expected audience configuration.
+        """
+
+    def request_oidc_token(self) -> str:
+        """
+        Request an OIDC token from GitHub's OIDC provider.
+        
+        Reads ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN
+        from environment variables. Makes an HTTP GET to the request URL with:
+        - Header: Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}
+        - Query parameter: audience={self.audience}
+        
+        Extracts the JWT token from the response JSON 'value' field.
+        Stores the token on self._oidc_token for use by execute() and poll_output().
+        
+        Returns the OIDC JWT token string.
+        Raises CallerError(phase="oidc") if env vars are missing or request fails.
         """
 
     def health_check(self) -> dict:
         """
         GET /health - verify server is healthy.
+        Does NOT include Authorization header.
         Returns parsed JSON response.
         Raises CallerError if unhealthy or unreachable.
         """
@@ -106,8 +133,9 @@ class RemoteExecutorCaller:
                 script_path: str, github_token: str) -> dict:
         """
         POST /execute - submit execution request.
+        Includes Authorization: Bearer <oidc_token> header.
         Returns parsed JSON response with execution_id and attestation_document.
-        Raises CallerError on HTTP errors or connection failures.
+        Raises CallerError on HTTP errors (including 401/403) or connection failures.
         """
 
     def validate_attestation(self, attestation_b64: str) -> dict:
@@ -149,9 +177,10 @@ class RemoteExecutorCaller:
     def poll_output(self, execution_id: str) -> dict:
         """
         Poll GET /execution/{id}/output until complete or timeout.
+        Includes Authorization: Bearer <oidc_token> header.
         Logs incremental output during polling.
         Returns final response with stdout, stderr, exit_code, output_attestation_document.
-        Raises CallerError on timeout or repeated HTTP failures.
+        Raises CallerError on timeout, repeated HTTP failures, or auth errors (401/403).
         """
 
     def validate_output_attestation(self, output_attestation_b64: str,
@@ -172,8 +201,9 @@ class RemoteExecutorCaller:
     def run(self, repository_url: str, commit_hash: str,
             script_path: str, github_token: str) -> int:
         """
-        Orchestrate full flow: health_check → execute → validate_attestation
-        → poll_output → validate_output_attestation → report results.
+        Orchestrate full flow: health_check → request_oidc_token → execute
+        → validate_attestation → poll_output → validate_output_attestation
+        → report results.
         Returns remote script exit code.
         """
 ```
@@ -183,7 +213,7 @@ class CallerError(Exception):
     """Raised when the caller encounters a fatal error."""
     def __init__(self, message: str, phase: str, details: dict | None = None):
         self.message = message
-        self.phase = phase  # "health_check", "execute", "attestation", "polling", "output_attestation"
+        self.phase = phase  # "health_check", "execute", "attestation", "polling", "output_attestation", "oidc"
         self.details = details or {}
 ```
 
@@ -279,6 +309,13 @@ Validation steps for output integrity attestation (`validate_output_attestation`
 | `server_url` | string | yes | — | Base URL of the Remote Executor server |
 | `script_path` | string | no | `.github/scripts/sample-build.sh` | Path to script in the repository |
 | `commit_hash` | string | no | `${{ github.sha }}` | Git commit SHA to execute |
+| `audience` | string | no | — | Audience value for OIDC token request, must match server's expected audience |
+
+### Workflow Permissions
+
+| Permission | Value | Description |
+|------------|-------|-------------|
+| `id-token` | `write` | Required to request OIDC tokens from GitHub's OIDC provider |
 
 ### Hardcoded Workflow Constants
 
@@ -334,6 +371,29 @@ The following values are hardcoded inline in the workflow YAML definition (not u
   "active_executions": 0
 }
 ```
+
+### OIDC Token Request/Response (GitHub OIDC Provider)
+
+**GET {ACTIONS_ID_TOKEN_REQUEST_URL}?audience={audience} request headers:**
+```
+Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}
+```
+
+**OIDC token response:**
+```json
+{
+  "value": "<jwt_token_string>"
+}
+```
+
+### Authenticated Request Headers
+
+Requests to `/execute` and `/execution/{id}/output` include:
+```
+Authorization: Bearer <oidc_jwt_token>
+```
+
+Requests to `/health` do NOT include an Authorization header.
 
 ### COSE Sign1 Attestation Document Structure
 
@@ -453,16 +513,39 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 
 **Validates: Requirements 4B.8, 4B.11, 4B.12**
 
+### Property 13: OIDC token acquisition
+
+*For any* audience string and valid OIDC provider response containing a JWT token in the `value` field, `request_oidc_token` should make an HTTP GET to `ACTIONS_ID_TOKEN_REQUEST_URL` with the `audience` query parameter set to the configured audience and an `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}` header, and should store the returned token for reuse in subsequent requests.
+
+**Validates: Requirements 9.3, 9.4, 9.7**
+
+### Property 14: OIDC token transmission
+
+*For any* OIDC token stored on the caller instance, `execute` and `poll_output` should include `Authorization: Bearer <token>` in their HTTP request headers, while `health_check` should NOT include an Authorization header regardless of whether a token is stored.
+
+**Validates: Requirements 10.1, 10.2, 10.3**
+
+### Property 15: OIDC authentication error handling
+
+*For any* HTTP 401 or 403 response from the Remote Executor server on `/execute` or `/execution/{id}/output`, the caller should raise a `CallerError` with an appropriate error message: "authentication failure" for 401 and "repository is not authorized" for 403. For any missing `ACTIONS_ID_TOKEN_REQUEST_URL` or `ACTIONS_ID_TOKEN_REQUEST_TOKEN` environment variable, `request_oidc_token` should raise a `CallerError` indicating that `id-token: write` permission is required.
+
+**Validates: Requirements 9.5, 9.6, 10.4, 10.5**
+
 ## Error Handling
 
 ### Error Categories and Responses
 
 | Phase | Error Condition | Behavior |
 |-------|----------------|----------|
+| OIDC | `ACTIONS_ID_TOKEN_REQUEST_URL` not set | Raise `CallerError(phase="oidc")` indicating `id-token: write` permission required |
+| OIDC | `ACTIONS_ID_TOKEN_REQUEST_TOKEN` not set | Raise `CallerError(phase="oidc")` indicating `id-token: write` permission required |
+| OIDC | OIDC provider request fails (HTTP error or connection error) | Raise `CallerError(phase="oidc")` with failure details |
 | Health Check | Server unreachable | Raise `CallerError(phase="health_check")`, workflow step fails |
 | Health Check | Non-200 or status != "healthy" | Raise `CallerError(phase="health_check")`, workflow step fails |
 | Execute | Connection error | Raise `CallerError(phase="execute")`, workflow step fails |
-| Execute | HTTP 4xx/5xx | Raise `CallerError(phase="execute")` with status code and response body |
+| Execute | HTTP 401 Unauthorized | Raise `CallerError(phase="execute")` with authentication failure message |
+| Execute | HTTP 403 Forbidden | Raise `CallerError(phase="execute")` with repository not authorized message |
+| Execute | HTTP 4xx/5xx (other) | Raise `CallerError(phase="execute")` with status code and response body |
 | Attestation | Invalid base64 | Raise `CallerError(phase="attestation")` with decoding details |
 | Attestation | Invalid CBOR or not a 4-element array | Raise `CallerError(phase="attestation")` with COSE Sign1 structure error |
 | Attestation | Payload CBOR decode failure | Raise `CallerError(phase="attestation")` with payload parsing details |
@@ -471,6 +554,8 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 | Attestation | COSE signature verification failure | Raise `CallerError(phase="attestation")` with signature error |
 | Attestation | PCR value missing or mismatch | Raise `CallerError(phase="attestation")` identifying the PCR index |
 | Polling | HTTP error (transient) | Retry up to `max_retries` times, then raise `CallerError(phase="polling")` |
+| Polling | HTTP 401 Unauthorized | Raise `CallerError(phase="polling")` with authentication failure message (no retry) |
+| Polling | HTTP 403 Forbidden | Raise `CallerError(phase="polling")` with repository not authorized message (no retry) |
 | Polling | Timeout exceeded | Raise `CallerError(phase="polling")` with elapsed duration |
 | Output Attestation | Null/missing document | Log warning, continue (verification skipped) |
 | Output Attestation | Invalid base64/CBOR/COSE structure | Raise `CallerError(phase="output_attestation")` |
@@ -557,6 +642,15 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 12. **Certificate chain validation rejects untrusted certificates**: Generate a test root CA and signing certificate chain. Verify `_verify_certificate_chain` accepts. Then use a different root CA and verify rejection.
     `# Feature: gha-remote-executor-caller, Property 12: Certificate chain validation rejects untrusted certificates`
 
+13. **OIDC token acquisition**: Generate random audience strings. Mock the OIDC provider endpoint. Verify `request_oidc_token` makes an HTTP GET to `ACTIONS_ID_TOKEN_REQUEST_URL` with the correct `audience` query parameter and `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}` header, and that the returned token is stored on the instance.
+    `# Feature: gha-remote-executor-caller, Property 13: OIDC token acquisition`
+
+14. **OIDC token transmission**: Generate random OIDC tokens. Set the token on the caller instance. Mock HTTP endpoints. Verify `execute` and `poll_output` include `Authorization: Bearer <token>` in request headers, and `health_check` does NOT include an Authorization header.
+    `# Feature: gha-remote-executor-caller, Property 14: OIDC token transmission`
+
+15. **OIDC authentication error handling**: Generate random 401 and 403 HTTP responses for `/execute` and `/execution/{id}/output`. Verify the caller raises `CallerError` with appropriate auth error messages. Also test missing `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` env vars cause `CallerError` with `id-token: write` permission message.
+    `# Feature: gha-remote-executor-caller, Property 15: OIDC authentication error handling`
+
 **Unit tests** (specific examples and edge cases):
 
 - Empty `server_url` raises error (Req 1.5)
@@ -576,3 +670,13 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - Poll timeout raises `CallerError` after configured duration (Req 5.5, 5.6)
 - Default poll interval is 5 seconds (Req 5.2)
 - Default max poll duration is 600 seconds (Req 5.5)
+- Missing `ACTIONS_ID_TOKEN_REQUEST_URL` raises `CallerError` with phase "oidc" (Req 9.5)
+- Missing `ACTIONS_ID_TOKEN_REQUEST_TOKEN` raises `CallerError` with phase "oidc" (Req 9.5)
+- OIDC provider returns HTTP error raises `CallerError` with phase "oidc" (Req 9.6)
+- Execute with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
+- Execute with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
+- Poll output with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
+- Poll output with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
+- Health check does not include Authorization header (Req 10.3)
+- Workflow YAML contains `id-token: write` permission (Req 9.1)
+- Workflow YAML contains `audience` input (Req 9.2)

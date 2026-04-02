@@ -28,6 +28,11 @@ The caller includes:
 - **Expected_PCRs**: A JSON map of PCR index (integer) to expected hex-encoded PCR value for PCR4 and PCR7, hardcoded in the Caller_Workflow definition, used to validate the attestable AMI's Platform Configuration Registers against known-good values
 - **Certificate_Chain**: The ordered list of intermediate CA certificates (cabundle) included in the attestation document, linking the signing certificate to the Root_CA_Certificate
 - **Signing_Certificate**: The DER-encoded X.509 certificate embedded in the attestation document payload, whose public key is used to verify the COSE Sign1 signature
+- **OIDC_Token**: JSON Web Token (JWT) issued by GitHub's OIDC provider (`https://token.actions.githubusercontent.com`) to a GitHub Actions workflow, used as a Bearer token in the Authorization header to authenticate requests to the Remote_Executor_Server
+- **OIDC_Provider**: GitHub Actions' built-in OpenID Connect identity provider that issues OIDC_Tokens to workflows with `id-token: write` permission
+- **Audience**: A configurable string passed when requesting an OIDC_Token, which must match the Remote_Executor_Server's expected audience configuration to ensure the token was issued for the correct server instance
+- **ACTIONS_ID_TOKEN_REQUEST_TOKEN**: Environment variable automatically set by GitHub Actions when `id-token: write` permission is granted, containing the bearer token used to authenticate the OIDC token request to the OIDC_Provider
+- **ACTIONS_ID_TOKEN_REQUEST_URL**: Environment variable automatically set by GitHub Actions when `id-token: write` permission is granted, containing the URL endpoint to request an OIDC_Token from the OIDC_Provider
 
 ## Requirements
 
@@ -180,3 +185,29 @@ The caller includes:
 3. IF the health endpoint returns a non-200 status or `status` is not `healthy`, THEN THE Caller_Script SHALL fail the workflow step with a server health error
 4. IF the health endpoint is unreachable, THEN THE Caller_Script SHALL fail the workflow step with a connection error message
 5. THE Caller_Script SHALL set a configurable timeout for the health check request
+
+### Requirement 9: OIDC Token Acquisition
+
+**User Story:** As a GitHub Actions workflow, I want to acquire an OIDC token from GitHub's identity provider, so that I can authenticate requests to the Remote Executor server.
+
+#### Acceptance Criteria
+
+1. THE Caller_Workflow SHALL declare `id-token: write` in its `permissions` block to enable OIDC token requests
+2. THE Caller_Workflow SHALL accept an optional input `audience` specifying the Audience value to use when requesting the OIDC_Token
+3. THE Caller_Script SHALL request an OIDC_Token from the OIDC_Provider using the ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN environment variables
+4. THE Caller_Script SHALL include the configured Audience parameter in the OIDC_Token request
+5. IF the ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN environment variables are not set, THEN THE Caller_Script SHALL fail with an error message indicating that `id-token: write` permission is required
+6. IF the OIDC_Token request to the OIDC_Provider fails, THEN THE Caller_Script SHALL fail the workflow step with an error message containing the failure details
+7. THE Caller_Script SHALL store the acquired OIDC_Token for use in subsequent HTTP requests to the Remote_Executor_Server
+
+### Requirement 10: OIDC Token Transmission
+
+**User Story:** As a GitHub Actions workflow, I want to include the OIDC token in requests to the Remote Executor server, so that the server can authenticate and authorize the caller.
+
+#### Acceptance Criteria
+
+1. THE Caller_Script SHALL include the OIDC_Token as a Bearer token in the Authorization header of HTTP POST requests to `{Server_URL}/execute`
+2. THE Caller_Script SHALL include the OIDC_Token as a Bearer token in the Authorization header of HTTP GET requests to `{Server_URL}/execution/{Execution_ID}/output`
+3. THE Caller_Script SHALL NOT include an Authorization header in HTTP GET requests to `{Server_URL}/health`
+4. IF the Remote_Executor_Server returns HTTP 401 Unauthorized, THEN THE Caller_Script SHALL fail the workflow step with an error message indicating authentication failure
+5. IF the Remote_Executor_Server returns HTTP 403 Forbidden, THEN THE Caller_Script SHALL fail the workflow step with an error message indicating the repository is not authorized

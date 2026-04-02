@@ -239,6 +239,134 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 11. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 12. Add OIDC support to RemoteExecutorCaller
+  - [ ] 12.1 Update `RemoteExecutorCaller.__init__` to accept `audience` parameter
+    - Add `audience: str = ""` parameter to `__init__`
+    - Store as `self.audience` instance attribute
+    - Initialize `self._oidc_token: str | None = None` for storing the acquired token
+    - _Requirements: 9.2, 9.4_
+
+  - [ ] 12.2 Implement `request_oidc_token` method
+    - Read `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` from environment variables
+    - If either is missing, raise `CallerError(phase="oidc")` with message indicating `id-token: write` permission is required
+    - Make HTTP GET to `{ACTIONS_ID_TOKEN_REQUEST_URL}?audience={self.audience}` with header `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}`
+    - Extract JWT token from response JSON `value` field
+    - Store token on `self._oidc_token`
+    - Return the token string
+    - Raise `CallerError(phase="oidc")` on HTTP errors or connection failures
+    - _Requirements: 9.3, 9.4, 9.5, 9.6, 9.7_
+
+  - [ ] 12.3 Update `execute` method to include Authorization header
+    - Add `Authorization: Bearer {self._oidc_token}` header to the POST /execute request
+    - Handle HTTP 401 response: raise `CallerError(phase="execute")` with authentication failure message
+    - Handle HTTP 403 response: raise `CallerError(phase="execute")` with repository not authorized message
+    - _Requirements: 10.1, 10.4, 10.5_
+
+  - [ ] 12.4 Update `poll_output` method to include Authorization header
+    - Add `Authorization: Bearer {self._oidc_token}` header to GET /execution/{id}/output requests
+    - Handle HTTP 401 response: raise `CallerError(phase="polling")` with authentication failure message (no retry)
+    - Handle HTTP 403 response: raise `CallerError(phase="polling")` with repository not authorized message (no retry)
+    - _Requirements: 10.2, 10.4, 10.5_
+
+  - [ ] 12.5 Ensure `health_check` does NOT include Authorization header
+    - Verify that the GET /health request does not include an Authorization header regardless of whether `_oidc_token` is set
+    - _Requirements: 10.3_
+
+  - [ ] 12.6 Update `run` method to call `request_oidc_token` after `health_check`
+    - Insert `request_oidc_token()` call between `health_check()` and `execute()` in the orchestration flow
+    - Flow becomes: health_check → request_oidc_token → execute → validate_attestation → poll_output → validate_output_attestation
+    - _Requirements: 9.3, 9.7_
+
+  - [ ] 12.7 Update `__main__` CLI entry point for OIDC
+    - Add `--audience` argument to argparse (optional, default empty string)
+    - Pass `audience` to `RemoteExecutorCaller.__init__`
+    - _Requirements: 9.2_
+
+- [ ] 13. Checkpoint - Ensure OIDC implementation compiles and existing tests are updated
+  - Update existing tests that construct `RemoteExecutorCaller` to include `audience` parameter where needed
+  - Ensure all existing tests pass with the updated signatures
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 14. Write property tests for OIDC
+  - [ ] 14.1 Write property test for OIDC token acquisition
+    - **Property 13: OIDC token acquisition**
+    - Generate random audience strings, mock OIDC provider endpoint
+    - Verify `request_oidc_token` makes HTTP GET with correct audience query param and Bearer header
+    - Verify returned token is stored on the instance
+    - **Validates: Requirements 9.3, 9.4, 9.7**
+
+  - [ ] 14.2 Write property test for OIDC token transmission
+    - **Property 14: OIDC token transmission**
+    - Generate random OIDC tokens, set on caller instance, mock HTTP endpoints
+    - Verify `execute` and `poll_output` include `Authorization: Bearer <token>` header
+    - Verify `health_check` does NOT include Authorization header
+    - **Validates: Requirements 10.1, 10.2, 10.3**
+
+  - [ ] 14.3 Write property test for OIDC authentication error handling
+    - **Property 15: OIDC authentication error handling**
+    - Generate random 401/403 responses for `/execute` and `/execution/{id}/output`
+    - Verify `CallerError` raised with appropriate auth error messages
+    - Test missing env vars cause `CallerError` with `id-token: write` permission message
+    - **Validates: Requirements 9.5, 9.6, 10.4, 10.5**
+
+- [ ] 15. Write unit tests for OIDC
+  - [ ] 15.1 Write unit tests for OIDC token acquisition errors
+    - Test missing `ACTIONS_ID_TOKEN_REQUEST_URL` raises `CallerError` with phase "oidc" (Req 9.5)
+    - Test missing `ACTIONS_ID_TOKEN_REQUEST_TOKEN` raises `CallerError` with phase "oidc" (Req 9.5)
+    - Test OIDC provider HTTP error raises `CallerError` with phase "oidc" (Req 9.6)
+    - _Requirements: 9.5, 9.6_
+
+  - [ ] 15.2 Write unit tests for OIDC-authenticated endpoint error handling
+    - Test execute with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
+    - Test execute with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
+    - Test poll output with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
+    - Test poll output with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
+    - _Requirements: 10.4, 10.5_
+
+  - [ ] 15.3 Write unit test for health check Authorization header exclusion
+    - Test health check does not include Authorization header even when `_oidc_token` is set (Req 10.3)
+    - _Requirements: 10.3_
+
+- [ ] 16. Update existing tests for OIDC compatibility
+  - [ ] 16.1 Update `tests/test_caller_unit.py` for OIDC
+    - Add `audience` parameter to all `RemoteExecutorCaller` constructor calls
+    - Set `_oidc_token` on caller instances where execute/poll_output tests need it
+    - Ensure existing unit tests pass with OIDC-aware signatures
+    - _Requirements: 9.2, 10.1, 10.2_
+
+  - [ ] 16.2 Update `tests/test_caller_properties.py` for OIDC
+    - Add `audience` parameter to all `RemoteExecutorCaller` constructor calls in property tests
+    - Set `_oidc_token` on caller instances where execute/poll_output property tests need it
+    - Ensure existing property tests pass with OIDC-aware signatures
+    - _Requirements: 9.2, 10.1, 10.2_
+
+- [ ] 17. Update GitHub Actions workflow for OIDC
+  - [ ] 17.1 Add `id-token: write` permission to workflow
+    - Add `id-token: write` to the `permissions` block in `.github/workflows/call-remote-executor.yml`
+    - _Requirements: 9.1_
+
+  - [ ] 17.2 Add `audience` input to workflow dispatch
+    - Add optional `audience` input to `workflow_dispatch` inputs
+    - _Requirements: 9.2_
+
+  - [ ] 17.3 Pass `--audience` to caller script invocation
+    - Add `--audience ${{ inputs.audience }}` to the caller script invocation step
+    - _Requirements: 9.2_
+
+- [ ] 18. Update CLI entry point
+  - [ ] 18.1 Add `--audience` argument to argparse
+    - Add `--audience` optional argument with default empty string
+    - Pass `audience` value to `RemoteExecutorCaller` constructor
+    - _Requirements: 9.2_
+
+  - [ ] 18.2 Write unit tests for workflow OIDC configuration
+    - Test workflow YAML contains `id-token: write` permission (Req 9.1)
+    - Test workflow YAML contains `audience` input (Req 9.2)
+    - _Requirements: 9.1, 9.2_
+
+- [ ] 19. Final checkpoint - Ensure all OIDC tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -248,3 +376,5 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - Unit tests validate specific examples and edge cases
 - All test files go in `tests/test_caller_properties.py` and `tests/test_caller_unit.py`
 - The caller's `pyproject.toml` at `.github/scripts/pyproject.toml` is separate from the existing `scripts/pyproject.toml`
+- Tasks 1-11 cover the original caller implementation (all completed)
+- Tasks 12-19 cover OIDC authentication support (Requirements 9, 10; Properties 13-15)
