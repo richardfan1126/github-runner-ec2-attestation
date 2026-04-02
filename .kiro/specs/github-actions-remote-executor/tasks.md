@@ -1346,44 +1346,44 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Ensure all existing tests pass with the updated signatures
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 62. Write property tests for OIDC token validation
-  - [ ] 62.1 Write property test for OIDC Issuer Claim Validation
+- [x] 62. Write property tests for OIDC token validation
+  - [x] 62.1 Write property test for OIDC Issuer Claim Validation
     - **Property 104: OIDC Issuer Claim Validation**
     - Generate OIDC tokens with arbitrary `iss` claims that do not match `https://token.actions.githubusercontent.com`
     - Verify the Request Validator rejects with HTTP 401
     - **Validates: Requirements 2.7, 2.8**
 
-  - [ ] 62.2 Write property test for OIDC Audience Claim Validation
+  - [x] 62.2 Write property test for OIDC Audience Claim Validation
     - **Property 105: OIDC Audience Claim Validation**
     - Generate OIDC tokens with arbitrary `aud` claims that do not match the configured Expected_Audience
     - Verify the Request Validator rejects with HTTP 401
     - **Validates: Requirements 2.9, 2.10**
 
-  - [ ] 62.3 Write property test for OIDC Repository Authorization
+  - [x] 62.3 Write property test for OIDC Repository Authorization
     - **Property 106: OIDC Repository Authorization**
     - Generate OIDC tokens with arbitrary `repository` claims not in the Allowed_Repositories list
     - Verify the Request Validator rejects with HTTP 403
     - **Validates: Requirements 2.11, 2.12**
 
-  - [ ] 62.4 Write property test for OIDC Token Expiration Validation
+  - [x] 62.4 Write property test for OIDC Token Expiration Validation
     - **Property 107: OIDC Token Expiration Validation**
     - Generate OIDC tokens with `exp` claims in the past
     - Verify the Request Validator rejects with HTTP 401
     - **Validates: Requirements 2.13, 2.14**
 
-  - [ ] 62.5 Write property test for Health Endpoint No Authentication
+  - [x] 62.5 Write property test for Health Endpoint No Authentication
     - **Property 108: Health Endpoint No Authentication**
     - Send requests to /health without any Authorization header
     - Verify the server responds with HTTP 200 without requiring authentication
     - **Validates: Requirements 2.20**
 
-  - [ ] 62.6 Write property test for OIDC Token Required on Protected Endpoints
+  - [x] 62.6 Write property test for OIDC Token Required on Protected Endpoints
     - **Property 8: OIDC Token Required on Protected Endpoints**
     - Send requests to /execute and /execution/{id}/output without Authorization header
     - Verify both return HTTP 401
     - **Validates: Requirements 2.1, 2.2, 2.3**
 
-  - [ ] 62.7 Write property test for OIDC Token Signature Verification
+  - [x] 62.7 Write property test for OIDC Token Signature Verification
     - **Property 10: OIDC Token Signature Verification**
     - Generate tokens signed with a different key than the JWKS
     - Verify the Request Validator rejects with HTTP 401
