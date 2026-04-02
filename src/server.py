@@ -95,21 +95,32 @@ class RateLimiter:
             return True, remaining
 
 
-def create_app(config: ServerConfig) -> FastAPI:
+def create_app(config: ServerConfig, docker_client=None) -> FastAPI:
     """
     Create and configure FastAPI application
     
     Args:
         config: Server configuration
+        docker_client: Optional pre-initialized Docker client. If None, creates one via docker.from_env().
     
     Returns:
         Configured FastAPI application
     """
+    import docker as docker_lib
+
     app = FastAPI(
         title="GitHub Actions Remote Executor",
         description="Attestable script execution service for GitHub Actions",
         version="1.0.0"
     )
+    
+    # Initialize Docker client if not provided
+    if docker_client is None:
+        try:
+            docker_client = docker_lib.from_env()
+        except docker_lib.errors.DockerException:
+            logger.warning("Docker daemon not available; ScriptExecutor will not function")
+            docker_client = None
     
     # Initialize components
     execution_manager = ExecutionManager(config.output_retention_hours)
@@ -117,9 +128,14 @@ def create_app(config: ServerConfig) -> FastAPI:
     repository_client = RepositoryClient(config.temp_storage_path)
     attestation_generator = AttestationGenerator(config.tpm_attest_path)
     script_executor = ScriptExecutor(
-        execution_manager,
-        output_collector,
-        config.temp_storage_path
+        docker_client=docker_client,
+        container_image=config.container_image,
+        memory_limit=config.container_memory_limit,
+        cpu_limit=config.container_cpu_limit,
+        timeout_seconds=config.execution_timeout_seconds,
+        execution_manager=execution_manager,
+        output_collector=output_collector,
+        temp_storage_path=config.temp_storage_path,
     )
     request_validator = RequestValidator(
         allowed_repositories=config.allowed_repositories,
@@ -620,6 +636,7 @@ def add_routes(app: FastAPI) -> None:
         {
             "status": "healthy",
             "attestation_available": true,
+            "docker_available": true,
             "disk_space_mb": 10240,
             "active_executions": 3
         }
@@ -630,6 +647,10 @@ def add_routes(app: FastAPI) -> None:
             # Check attestation capability
             attestation_gen = request.app.state.attestation_generator
             attestation_available = attestation_gen.verify_tpm_available()
+
+            # Check Docker daemon availability
+            script_exec = request.app.state.script_executor
+            docker_available = script_exec.verify_docker_daemon()
 
             # Check disk space
             config = request.app.state.config
@@ -646,6 +667,7 @@ def add_routes(app: FastAPI) -> None:
                 content={
                     "status": "healthy",
                     "attestation_available": attestation_available,
+                    "docker_available": docker_available,
                     "disk_space_mb": disk_space_mb,
                     "active_executions": active_executions
                 }
@@ -659,6 +681,7 @@ def add_routes(app: FastAPI) -> None:
                 content={
                     "status": "degraded",
                     "attestation_available": False,
+                    "docker_available": False,
                     "disk_space_mb": 0,
                     "active_executions": 0
                 }

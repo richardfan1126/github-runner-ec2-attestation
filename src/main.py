@@ -6,9 +6,12 @@ import signal
 import os
 from typing import Optional
 
+import docker
+
 from src.config import load_config, ConfigurationError
 from src.logging_config import setup_logging
 from src.attestation import AttestationGenerator
+from src.script_executor import ScriptExecutor
 from src.server import create_app
 
 
@@ -53,6 +56,9 @@ def main() -> int:
         logger.info(f"Temp storage path: {config.temp_storage_path}")
         logger.info(f"Output retention: {config.output_retention_hours} hours")
         logger.info(f"NitroTPM device path: {config.tpm_attest_path}")
+        logger.info(f"Container image: {config.container_image}")
+        logger.info(f"Container memory limit: {config.container_memory_limit}")
+        logger.info(f"Container CPU limit: {config.container_cpu_limit}")
         
         # Verify NitroTPM device availability
         logger.info("Verifying NitroTPM device availability...")
@@ -66,6 +72,44 @@ def main() -> int:
         else:
             logger.info("NitroTPM device verified and available")
         
+        # Initialize Docker client and verify daemon accessibility
+        logger.info("Initializing Docker client...")
+        try:
+            docker_client = docker.from_env()
+        except docker.errors.DockerException as e:
+            logger.error(f"Failed to create Docker client: {e}")
+            raise ConfigurationError(
+                "Docker daemon is not accessible. Ensure Docker is installed and running."
+            )
+        
+        # Verify Docker daemon is accessible
+        logger.info("Verifying Docker daemon accessibility...")
+        try:
+            docker_client.ping()
+            logger.info("Docker daemon verified and accessible")
+        except docker.errors.APIError as e:
+            logger.error(f"Docker daemon is not responding: {e}")
+            raise ConfigurationError(
+                "Docker daemon is not responding. Ensure Docker is running and accessible."
+            )
+        
+        # Clean up any dangling execution containers from previous runs
+        logger.info("Cleaning up dangling execution containers...")
+        from src.execution_manager import ExecutionManager
+        from src.output_collector import OutputCollector
+        temp_executor = ScriptExecutor(
+            docker_client=docker_client,
+            container_image=config.container_image,
+            memory_limit=config.container_memory_limit,
+            cpu_limit=config.container_cpu_limit,
+            timeout_seconds=config.execution_timeout_seconds,
+            execution_manager=ExecutionManager(config.output_retention_hours),
+            output_collector=OutputCollector(),
+            temp_storage_path=config.temp_storage_path,
+        )
+        temp_executor.cleanup_dangling_containers()
+        logger.info("Dangling container cleanup complete")
+        
         # Ensure temp storage directory exists
         if not os.path.exists(config.temp_storage_path):
             logger.info(f"Creating temp storage directory: {config.temp_storage_path}")
@@ -73,7 +117,7 @@ def main() -> int:
         
         # Initialize all components via create_app
         logger.info("Initializing application components...")
-        app = create_app(config)
+        app = create_app(config, docker_client=docker_client)
         logger.info("All components initialized successfully")
         
         # Register signal handlers for graceful shutdown

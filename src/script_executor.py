@@ -25,20 +25,20 @@ class ScriptExecutor:
 
     def __init__(
         self,
-        docker_client: docker.DockerClient,
-        container_image: str,
-        memory_limit: str,
-        cpu_limit: float,
-        timeout_seconds: int,
-        execution_manager: ExecutionManager,
-        output_collector: OutputCollector,
-        temp_storage_path: str,
+        docker_client: "docker.DockerClient | None" = None,
+        container_image: str = "",
+        memory_limit: str = "512m",
+        cpu_limit: float = 1.0,
+        timeout_seconds: int = 1800,
+        execution_manager: "ExecutionManager | None" = None,
+        output_collector: "OutputCollector | None" = None,
+        temp_storage_path: str = "/tmp",
     ):
         """
         Initialize script executor with Docker SDK.
 
         Args:
-            docker_client: Docker SDK client instance
+            docker_client: Docker SDK client instance (None if Docker unavailable)
             container_image: Docker image name for Execution_Containers
             memory_limit: Docker memory constraint (e.g. '512m')
             cpu_limit: Docker CPU constraint (e.g. 1.0 for one CPU)
@@ -306,6 +306,9 @@ class ScriptExecutor:
         Remove any dangling Execution_Containers on startup that match
         the container naming convention (prefix 'gare-exec-').
         """
+        if self._docker_client is None:
+            logger.warning("Docker client not available; skipping dangling container cleanup")
+            return
         try:
             all_containers = self._docker_client.containers.list(
                 all=True,
@@ -333,6 +336,8 @@ class ScriptExecutor:
         Returns:
             True if the Docker daemon responds to ping, False otherwise
         """
+        if self._docker_client is None:
+            return False
         try:
             self._docker_client.ping()
             return True

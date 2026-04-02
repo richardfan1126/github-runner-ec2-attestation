@@ -1527,20 +1527,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Return True if accessible, False otherwise
     - _Requirements: 9.11, 9.12_
 
-- [ ] 69. Wire Docker ScriptExecutor into application startup
-  - [ ] 69.1 Update src/main.py to initialize Docker client and ScriptExecutor
+- [x] 69. Wire Docker ScriptExecutor into application startup
+  - [x] 69.1 Update src/main.py to initialize Docker client and ScriptExecutor
     - Create `docker.DockerClient` instance at startup using `docker.from_env()`
     - Pass Docker client and container config from ServerConfig to ScriptExecutor constructor
     - Call `verify_docker_daemon()` at startup; fail with descriptive error if Docker is not accessible
     - Call `cleanup_dangling_containers()` at startup before accepting requests
     - _Requirements: 9.11, 9.12, 8.10_
 
-  - [ ] 69.2 Update src/server.py to pass Docker config to ScriptExecutor
+  - [x] 69.2 Update src/server.py to pass Docker config to ScriptExecutor
     - Update `create_app` to construct ScriptExecutor with Docker client and container config
     - Pass `config.container_image`, `config.container_memory_limit`, `config.container_cpu_limit`
     - _Requirements: 9.6, 9.7_
 
-  - [ ] 69.3 Update health endpoint to include Docker availability
+  - [x] 69.3 Update health endpoint to include Docker availability
     - Add `docker_available` field to health check response
     - Call `verify_docker_daemon()` to determine Docker status
     - _Requirements: 10.2, 10.3_
