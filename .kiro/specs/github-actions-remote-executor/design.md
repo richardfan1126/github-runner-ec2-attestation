@@ -4102,7 +4102,10 @@ The cleanup script is intentionally separate from the build and deployment scrip
 ```mermaid
 flowchart TD
     A[User runs cleanup.py] --> B[Load AMI Build Result JSON]
-    B --> C{User Confirmation?}
+    B --> B1{--keep-ami provided?}
+    B1 -- Yes --> B2[Log: AMI and snapshot will be preserved]
+    B1 -- No --> C
+    B2 --> C{User Confirmation?}
     C -- No --> D[Exit code 0 - Cancelled]
     C -- Yes --> E[Phase 1: Terraform Destroy]
     E --> F{terraform-dir exists?}
@@ -4117,25 +4120,34 @@ flowchart TD
     I --> M
     L --> M
     
-    M --> N{AMI exists?}
+    M --> M1{--keep-ami?}
+    M1 -- Yes --> M2[Log: skipping AMI deregistration and snapshot deletion]
+    M1 -- No --> N{AMI exists?}
     N -- No --> O[Log warning, skip]
     N -- Yes --> P[DeregisterImage with DeleteAssociatedSnapshots=True]
     P --> Q[Wait 2s for propagation]
     Q --> R[Verify AMI deregistered]
     R --> S[Verify snapshot deleted]
     
-    O --> T[Phase 3: Verification]
+    M2 --> T[Phase 3: Verification]
+    O --> T
     S --> T
     
     T --> U[Check EC2 instances tagged Purpose: AMI Build / Attestation Demo]
-    U --> V[Check specific AMI by ami_id]
+    U --> U1{--keep-ami?}
+    U1 -- No --> V[Check specific AMI by ami_id]
     V --> W[Check specific snapshot by snapshot_id]
+    U1 -- Yes --> W1[Skip AMI/snapshot checks]
     W --> X{Remaining resources?}
+    W1 --> X
     X -- Yes --> Y[Report resources with type, ID, status]
-    X -- No --> Z[Log: all resources removed]
+    X -- No --> X1{--keep-ami?}
+    X1 -- No --> Z[Log: all resources removed]
+    X1 -- Yes --> Z1[Log: all resources removed, AMI and snapshot intentionally preserved]
     
     Y --> AA[Exit code 0 on success, 1 on failure]
     Z --> AA
+    Z1 --> AA
 ```
 
 ## Components and Interfaces
@@ -4149,6 +4161,7 @@ The cleanup script consists of five functions:
 Parses CLI arguments:
 - `--ami-build-result`: Path to AMI build result JSON file (default: `ami_build_result.json`)
 - `--terraform-dir`: Path to Terraform configuration directory (default: `terraform/deploy`)
+- `--keep-ami`: Boolean flag that defaults to `False`. When provided, instructs the script to skip AMI deregistration and snapshot deletion.
 
 #### `destroy_infrastructure(terraform_dir: str) -> None`
 
@@ -4161,38 +4174,45 @@ Destroys Terraform-managed infrastructure:
    - `-var 'allowed_http_cidr=0.0.0.0/0'`
 5. Verifies Terraform state file shows no remaining resources by parsing `terraform.tfstate` JSON and checking the `resources` array is empty
 
-#### `deregister_ami(ec2_client, ami_id: str, snapshot_id: str) -> None`
+#### `deregister_ami(ec2_client, ami_id: str, snapshot_id: str, keep_ami: bool = False) -> None`
 
-Deregisters the AMI and associated snapshot:
-1. Calls `describe_images(ImageIds=[ami_id])` to check AMI exists
-2. If `InvalidAMIID.NotFound`, logs warning and returns (skip)
-3. Calls `deregister_image(ImageId=ami_id, DeleteAssociatedSnapshots=True)`
-4. Waits 2 seconds for propagation
-5. Verifies AMI deregistration via `describe_images` (expects `InvalidAMIID.NotFound`)
-6. Verifies snapshot deletion via `describe_snapshots` (expects `InvalidSnapshot.NotFound`)
+Deregisters the AMI and associated snapshot, unless `keep_ami` is `True`:
+1. If `keep_ami` is `True`, logs at INFO level that AMI deregistration and snapshot deletion were skipped, then returns immediately
+2. Calls `describe_images(ImageIds=[ami_id])` to check AMI exists
+3. If `InvalidAMIID.NotFound`, logs warning and returns (skip)
+4. Calls `deregister_image(ImageId=ami_id, DeleteAssociatedSnapshots=True)`
+5. Waits 2 seconds for propagation
+6. Verifies AMI deregistration via `describe_images` (expects `InvalidAMIID.NotFound`)
+7. Verifies snapshot deletion via `describe_snapshots` (expects `InvalidSnapshot.NotFound`)
 
-#### `verify_cleanup(ec2_client, ami_build_result: dict) -> None`
+#### `verify_cleanup(ec2_client, ami_build_result: dict, keep_ami: bool = False) -> None`
 
 Verifies all resources have been cleaned up:
 1. Queries EC2 instances with tag filters:
    - `Purpose: AMI Build` or `Purpose: Attestation Demo`
    - States: `pending`, `running`, `stopping`, `stopped`
-2. Checks specific AMI by `ami_id` from build result
-3. Checks specific EBS snapshot by `snapshot_id` from build result
+2. If `keep_ami` is `False`:
+   - Checks specific AMI by `ami_id` from build result
+   - Checks specific EBS snapshot by `snapshot_id` from build result
+3. If `keep_ami` is `True`:
+   - Skips AMI and EBS snapshot checks entirely (they are intentionally preserved)
 4. Collects remaining resources as list of `{Type, ID, Status}` dicts
-5. Reports remaining resources or confirms complete cleanup
+5. If remaining resources found, reports each resource's type, ID, and status
+6. If no remaining resources found and `keep_ami` is `False`, logs that all resources are removed
+7. If no remaining resources found and `keep_ami` is `True`, logs that cleanup is complete and the AMI and snapshot were intentionally preserved
 
 #### `main() -> int`
 
 Orchestrates the full cleanup flow:
-1. Parses arguments
+1. Parses arguments (including `--keep-ami`)
 2. Loads and validates AMI build result JSON (extracts `ami_id`, `snapshot_id`, `region`)
-3. Prompts user for confirmation — exits with code 0 if declined
-4. Calls `destroy_infrastructure(terraform_dir)`
-5. Creates EC2 client with region from build result
-6. Calls `deregister_ami(ec2_client, ami_id, snapshot_id)`
-7. Calls `verify_cleanup(ec2_client, ami_build_result)`
-8. Returns 0 on success, 1 on any exception
+3. If `keep_ami` is `True`, logs at INFO level that AMI and snapshot will be preserved
+4. Prompts user for confirmation — exits with code 0 if declined
+5. Calls `destroy_infrastructure(terraform_dir)`
+6. Creates EC2 client with region from build result
+7. Calls `deregister_ami(ec2_client, ami_id, snapshot_id, keep_ami=args.keep_ami)`
+8. Calls `verify_cleanup(ec2_client, ami_build_result, keep_ami=args.keep_ami)`
+9. Returns 0 on success, 1 on any exception
 
 ### Logging Configuration
 
@@ -4228,21 +4248,21 @@ Orchestrates the full cleanup flow:
 
 ### Property 87: Cleanup CLI Argument Parsing
 
-*For any* invocation of the cleanup script with or without `--ami-build-result` and `--terraform-dir` arguments, the parser should return the provided values or the defaults (`ami_build_result.json` and `terraform/deploy` respectively).
+*For any* invocation of the cleanup script with or without `--ami-build-result`, `--terraform-dir`, and `--keep-ami` arguments, the parser should return the provided values or the defaults (`ami_build_result.json`, `terraform/deploy`, and `False` respectively).
 
-**Validates: Requirements 28.1, 28.2**
+**Validates: Requirements 28.1, 28.2, 28.3**
 
 ### Property 88: Cleanup Build Result Loading
 
 *For any* valid JSON file containing `ami_id`, `snapshot_id`, and `region` fields, the cleanup script should correctly parse and extract all three fields.
 
-**Validates: Requirements 28.4**
+**Validates: Requirements 28.5**
 
 ### Property 89: Cleanup User Cancellation
 
 *For any* user input string that is not "yes" or "y" (case-insensitive), the cleanup script should exit with return code 0 without performing any resource deletion.
 
-**Validates: Requirements 28.8, 28.9**
+**Validates: Requirements 28.10, 28.11**
 
 ### Property 90: Terraform Subprocess Error Propagation
 
@@ -4258,21 +4278,27 @@ Orchestrates the full cleanup flow:
 
 ### Property 92: AMI Deregistration Verification
 
-*For any* AMI ID that exists, after calling `deregister_image` with `DeleteAssociatedSnapshots=True`, the function should verify both AMI deregistration and snapshot deletion by calling `describe_images` and `describe_snapshots` respectively.
+*For any* AMI ID that exists, after calling `deregister_image` with `DeleteAssociatedSnapshots=True` (when `keep_ami` is `False`), the function should verify both AMI deregistration and snapshot deletion by calling `describe_images` and `describe_snapshots` respectively.
 
 **Validates: Requirements 30.2, 30.4, 30.5, 30.6**
 
 ### Property 93: Cleanup Resource Verification and Reporting
 
-*For any* set of remaining AWS resources (EC2 instances, AMIs, EBS snapshots), the `verify_cleanup` function should report each resource's type, ID, and status. If no resources remain, it should log that all resources are removed.
+*For any* set of remaining AWS resources (EC2 instances, AMIs, EBS snapshots) and any value of `keep_ami`, the `verify_cleanup` function should include AMI and EBS snapshot in the remaining-resource check if and only if `keep_ami` is `False`. If `keep_ami` is `True`, AMI and snapshot should be excluded from the check. If no resources remain, it should log that all resources are removed (with a note about intentional AMI/snapshot preservation when `keep_ami` is `True`).
 
-**Validates: Requirements 31.1, 31.2, 31.3, 31.4, 31.5, 31.6**
+**Validates: Requirements 31.1, 31.2, 31.3, 31.4, 31.5, 31.6, 31.8**
 
 ### Property 94: Cleanup Exit Code Correctness
 
 *For any* execution of the cleanup script, if all steps succeed the exit code should be 0; if any step raises an exception the exit code should be 1.
 
-**Validates: Requirements 31.7, 31.8**
+**Validates: Requirements 31.9, 31.10**
+
+### Property 95: Keep-AMI Controls Deregistration
+
+*For any* AMI ID and snapshot ID, calling `deregister_ami` with `keep_ami=True` should result in zero AWS API calls for deregistration or snapshot deletion. Calling `deregister_ami` with `keep_ami=False` should proceed with the normal deregistration flow (check existence, deregister, verify).
+
+**Validates: Requirements 30.2, 30.4, 30.8, 30.9**
 
 ## Cleanup Error Handling
 
@@ -4312,14 +4338,15 @@ The three cleanup phases are sequential but independent in terms of skip behavio
 - Exit code 0 on success, exit code 1 on failure
 
 **Property-Based Tests** focus on:
-- CLI argument parsing defaults and overrides (Property 87)
+- CLI argument parsing defaults and overrides, including `--keep-ami` (Property 87)
 - AMI build result JSON parsing for all valid structures (Property 88)
 - User cancellation for all non-confirming inputs (Property 89)
 - Terraform error propagation for all non-zero exit codes (Property 90)
 - Post-destroy state verification for all state file contents (Property 91)
-- AMI deregistration verification flow (Property 92)
-- Resource verification and reporting for all resource combinations (Property 93)
+- AMI deregistration verification flow when `keep_ami` is `False` (Property 92)
+- Resource verification and reporting for all resource combinations, conditional on `keep_ami` (Property 93)
 - Exit code correctness across success and failure paths (Property 94)
+- `keep_ami` flag controlling whether deregistration API calls are made (Property 95)
 
 ### Property-Based Testing Configuration
 
@@ -4331,7 +4358,7 @@ The three cleanup phases are sequential but independent in terms of skip behavio
 ### Cleanup Unit Testing
 
 **CLI Argument Parsing**
-- Unit tests: No args (defaults), custom `--ami-build-result`, custom `--terraform-dir`, both custom
+- Unit tests: No args (defaults), custom `--ami-build-result`, custom `--terraform-dir`, both custom, `--keep-ami` flag present, `--keep-ami` flag absent (defaults to `False`)
 - Property tests: Argument round-trip (Property 87)
 
 **Build Result Loading**
@@ -4347,11 +4374,11 @@ The three cleanup phases are sequential but independent in terms of skip behavio
 - Property tests: Error propagation (Property 90), state verification (Property 91)
 
 **AMI Deregistration**
-- Unit tests: AMI exists and deregisters, AMI not found (skip), API error on deregister
-- Property tests: Deregistration verification (Property 92)
+- Unit tests: AMI exists and deregisters, AMI not found (skip), API error on deregister, `keep_ami=True` skips all API calls and logs skip message, `keep_ami=False` proceeds with deregistration
+- Property tests: Deregistration verification (Property 92), keep-ami controls deregistration (Property 95)
 
 **Cleanup Verification**
-- Unit tests: No remaining resources, EC2 instances found, AMI found, snapshot found, mixed resources
+- Unit tests: No remaining resources, EC2 instances found, AMI found, snapshot found, mixed resources, `keep_ami=True` excludes AMI/snapshot from checks, `keep_ami=True` with no remaining resources logs preservation message
 - Property tests: Resource reporting (Property 93)
 
 **Exit Code**

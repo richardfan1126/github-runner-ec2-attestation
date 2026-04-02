@@ -898,6 +898,45 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 38. Final checkpoint - Ensure all cleanup tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 38a. Implement --keep-ami flag in cleanup script
+  - [ ] 38a.1 Add --keep-ami CLI argument to parse_arguments()
+    - Add `--keep-ami` as a boolean flag (store_true) defaulting to False
+    - Log at INFO level when --keep-ami is provided that AMI and snapshot will be preserved
+    - _Requirements: 28.3, 28.8_
+
+  - [ ] 38a.2 Update deregister_ami() to respect keep_ami parameter
+    - Add `keep_ami: bool = False` parameter to deregister_ami function signature
+    - When keep_ami is True, log at INFO level that AMI deregistration and snapshot deletion were skipped, then return immediately
+    - When keep_ami is False, proceed with existing deregistration logic unchanged
+    - _Requirements: 30.2, 30.4, 30.8, 30.9_
+
+  - [ ] 38a.3 Update verify_cleanup() to respect keep_ami parameter
+    - Add `keep_ami: bool = False` parameter to verify_cleanup function signature
+    - When keep_ami is True, skip AMI and EBS snapshot checks (do not include them in remaining-resource list)
+    - When keep_ami is True and no remaining resources found, log that cleanup is complete and AMI/snapshot were intentionally preserved
+    - When keep_ami is False, retain existing verification logic unchanged
+    - _Requirements: 31.2, 31.3, 31.4, 31.8_
+
+  - [ ] 38a.4 Update main() to pass keep_ami through
+    - Pass args.keep_ami to deregister_ami() and verify_cleanup() calls
+    - Log AMI preservation intent early in main() when flag is set
+    - _Requirements: 28.3, 28.8, 30.8, 31.4_
+
+  - [ ] 38a.5 Write property test for keep-ami controls deregistration
+    - **Property 95: Keep-AMI Controls Deregistration**
+    - Test that deregister_ami with keep_ami=True makes zero AWS API calls for deregistration or snapshot deletion
+    - Test that deregister_ami with keep_ami=False proceeds with normal deregistration flow
+    - **Validates: Requirements 30.2, 30.4, 30.8, 30.9**
+
+  - [ ] 38a.6 Update existing property and unit tests for --keep-ami
+    - Update Property 87 test to cover --keep-ami flag parsing (present and absent)
+    - Update Property 93 test to cover keep_ami=True excluding AMI/snapshot from checks and logging preservation message
+    - Update unit tests for parse_arguments, deregister_ami, verify_cleanup, and main with --keep-ami scenarios
+    - _Requirements: 28.1, 28.2, 28.3, 30.8, 30.9, 31.2, 31.3, 31.4, 31.8_
+
+- [ ] 38b. Checkpoint - Ensure all --keep-ami tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 - [x] 39. Implement build-time SSH debug support in build-kiwi-image.sh
   - [x] 39.1 Add --enable-ssh flag parsing to build-kiwi-image.sh
     - Add `ENABLE_SSH="false"` default and a `while` loop to parse `--enable-ssh` flag (exit on unknown args)
@@ -1659,5 +1698,6 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Deployment script auto-detects user IP via checkip.amazonaws.com for /32 CIDR whitelisting
 - On deployment failure, user must manually run terraform destroy (no automated cleanup — infrastructure is meant to persist)
 - Cleanup script (scripts/cleanup.py) is already fully implemented; tasks 37-38 focus exclusively on writing property and unit tests for the existing code
+- Cleanup script supports --keep-ami flag to skip AMI deregistration and snapshot deletion while still destroying Terraform infrastructure (tasks 38a-38b)
 - Cleanup script uses subprocess to invoke Terraform and boto3 for AWS API calls (deregister AMI, describe resources)
 - Cleanup verification checks for EC2 instances, AMIs, and EBS snapshots using project-specific tags and resource IDs

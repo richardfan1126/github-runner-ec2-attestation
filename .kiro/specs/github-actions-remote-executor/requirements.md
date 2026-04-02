@@ -52,6 +52,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 ### Cleanup Components
 - **Cleanup_Script**: Python script (scripts/cleanup.py) that orchestrates the removal of all AWS resources created during the build and deployment process
 - **AMI_Build_Result**: JSON file containing ami_id, snapshot_id, and region fields produced by the AMI build process
+- **Keep_AMI_Flag**: Optional CLI flag (--keep-ami) that instructs the Cleanup_Script to skip AMI deregistration and snapshot deletion while still destroying Terraform infrastructure
 
 ### Build Components
 - **Build_Workflow**: The GitHub Actions workflow that builds the KIWI image and attests artifacts
@@ -562,13 +563,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 1. THE Cleanup_Script SHALL accept a --ami-build-result argument with default value ami_build_result.json
 2. THE Cleanup_Script SHALL accept a --terraform-dir argument with default value terraform/deploy
-3. IF the AMI build result file does not exist, THEN THE Cleanup_Script SHALL fail with a FileNotFoundError
-4. THE Cleanup_Script SHALL parse the AMI build result file as JSON and extract ami_id, snapshot_id, and region fields
-5. IF the AMI build result file cannot be parsed, THEN THE Cleanup_Script SHALL fail with a RuntimeError
-6. THE Cleanup_Script SHALL log the loaded ami_id, snapshot_id, and region values at INFO level
-7. THE Cleanup_Script SHALL configure logging to output to both stdout and a cleanup.log file
-8. THE Cleanup_Script SHALL prompt the user for confirmation before proceeding with resource destruction
-9. IF the user does not confirm with "yes" or "y", THEN THE Cleanup_Script SHALL exit with return code 0 without deleting resources
+3. THE Cleanup_Script SHALL accept a --keep-ami flag that defaults to disabled
+4. IF the AMI build result file does not exist, THEN THE Cleanup_Script SHALL fail with a FileNotFoundError
+5. THE Cleanup_Script SHALL parse the AMI build result file as JSON and extract ami_id, snapshot_id, and region fields
+6. IF the AMI build result file cannot be parsed, THEN THE Cleanup_Script SHALL fail with a RuntimeError
+7. THE Cleanup_Script SHALL log the loaded ami_id, snapshot_id, and region values at INFO level
+8. WHEN --keep-ami is provided, THE Cleanup_Script SHALL log at INFO level that AMI and snapshot will be preserved
+9. THE Cleanup_Script SHALL configure logging to output to both stdout and a cleanup.log file
+10. THE Cleanup_Script SHALL prompt the user for confirmation before proceeding with resource destruction
+11. IF the user does not confirm with "yes" or "y", THEN THE Cleanup_Script SHALL exit with return code 0 without deleting resources
 
 ### Requirement 29: Terraform Infrastructure Destruction
 
@@ -592,12 +595,14 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 #### Acceptance Criteria
 
 1. THE Cleanup_Script SHALL create an EC2 client using the region from the AMI build result
-2. THE Cleanup_Script SHALL check if the AMI exists before attempting deregistration using describe_images
+2. WHEN --keep-ami is not provided, THE Cleanup_Script SHALL check if the AMI exists before attempting deregistration using describe_images
 3. IF the AMI is not found (InvalidAMIID.NotFound), THEN THE Cleanup_Script SHALL log a warning and skip AMI deregistration
-4. THE Cleanup_Script SHALL deregister the AMI using the EC2 DeregisterImage API with DeleteAssociatedSnapshots set to True
+4. WHEN --keep-ami is not provided, THE Cleanup_Script SHALL deregister the AMI using the EC2 DeregisterImage API with DeleteAssociatedSnapshots set to True
 5. WHEN the AMI is deregistered, THE Cleanup_Script SHALL wait 2 seconds and verify the deregistration propagated using describe_images
 6. WHEN the AMI is deregistered, THE Cleanup_Script SHALL verify the snapshot deletion propagated using describe_snapshots
 7. IF the EC2 DeregisterImage API call fails, THEN THE Cleanup_Script SHALL log the error and raise the ClientError
+8. WHEN --keep-ami is provided, THE Cleanup_Script SHALL skip AMI deregistration and snapshot deletion entirely
+9. WHEN --keep-ami is provided, THE Cleanup_Script SHALL log at INFO level that AMI deregistration and snapshot deletion were skipped
 
 ### Requirement 31: Cleanup Verification and Reporting
 
@@ -606,13 +611,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 #### Acceptance Criteria
 
 1. WHEN AMI deregistration completes, THE Cleanup_Script SHALL check for remaining EC2 instances tagged with Purpose "AMI Build" or "Attestation Demo" in pending, running, stopping, or stopped states
-2. THE Cleanup_Script SHALL check for the specific AMI by ami_id from the build result
-3. THE Cleanup_Script SHALL check for the specific EBS snapshot by snapshot_id from the build result
-4. IF remaining resources are found, THEN THE Cleanup_Script SHALL log a warning listing each resource type, ID, and status
-5. IF remaining resources are found, THEN THE Cleanup_Script SHALL advise the user to manually delete the listed resources
-6. IF no remaining resources are found, THEN THE Cleanup_Script SHALL log that cleanup verification is complete and all resources are removed
-7. IF any step in the cleanup process fails, THEN THE Cleanup_Script SHALL return exit code 1 and log that some resources may still exist
-8. WHEN all cleanup steps succeed, THE Cleanup_Script SHALL return exit code 0
+2. WHEN --keep-ami is not provided, THE Cleanup_Script SHALL check for the specific AMI by ami_id from the build result
+3. WHEN --keep-ami is not provided, THE Cleanup_Script SHALL check for the specific EBS snapshot by snapshot_id from the build result
+4. WHEN --keep-ami is provided, THE Cleanup_Script SHALL exclude the AMI and EBS snapshot from the remaining-resource check
+5. IF remaining resources are found, THEN THE Cleanup_Script SHALL log a warning listing each resource type, ID, and status
+6. IF remaining resources are found, THEN THE Cleanup_Script SHALL advise the user to manually delete the listed resources
+7. IF no remaining resources are found, THEN THE Cleanup_Script SHALL log that cleanup verification is complete and all resources are removed
+8. WHEN --keep-ami is provided and no remaining resources are found (excluding the preserved AMI and snapshot), THE Cleanup_Script SHALL log that cleanup verification is complete and the AMI and snapshot were intentionally preserved
+9. IF any step in the cleanup process fails, THEN THE Cleanup_Script SHALL return exit code 1 and log that some resources may still exist
+10. WHEN all cleanup steps succeed, THE Cleanup_Script SHALL return exit code 0
 
 ## Debug Requirements
 
