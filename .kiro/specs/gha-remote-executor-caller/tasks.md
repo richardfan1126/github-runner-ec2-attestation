@@ -327,14 +327,14 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test health check does not include Authorization header even when `_oidc_token` is set (Req 10.3)
     - _Requirements: 10.3_
 
-- [ ] 16. Update existing tests for OIDC compatibility
-  - [ ] 16.1 Update `tests/test_caller_unit.py` for OIDC
+- [x] 16. Update existing tests for OIDC compatibility
+  - [x] 16.1 Update `tests/test_caller_unit.py` for OIDC
     - Add `audience` parameter to all `RemoteExecutorCaller` constructor calls
     - Set `_oidc_token` on caller instances where execute/poll_output tests need it
     - Ensure existing unit tests pass with OIDC-aware signatures
     - _Requirements: 9.2, 10.1, 10.2_
 
-  - [ ] 16.2 Update `tests/test_caller_properties.py` for OIDC
+  - [x] 16.2 Update `tests/test_caller_properties.py` for OIDC
     - Add `audience` parameter to all `RemoteExecutorCaller` constructor calls in property tests
     - Set `_oidc_token` on caller instances where execute/poll_output property tests need it
     - Ensure existing property tests pass with OIDC-aware signatures

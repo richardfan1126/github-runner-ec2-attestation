@@ -82,7 +82,7 @@ _TEST_CA_PEM, _TEST_CA_DER, _TEST_SIGN_KEY, _TEST_SIGN_CERT_DER = _generate_test
 
 def _make_caller() -> RemoteExecutorCaller:
     """Create a caller instance for testing (no root_cert_pem/expected_pcrs => crypto skipped)."""
-    return RemoteExecutorCaller(server_url="http://localhost:8080")
+    return RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
 
 
 def _wrap_cose_sign1(payload_dict: dict) -> str:
@@ -288,6 +288,7 @@ class TestExecuteHTTPErrorPropagation:
     @settings(max_examples=20)
     def test_execute_http_error_propagation(self, status_code: int, response_body: str):
         caller = _make_caller()
+        caller._oidc_token = "test-token"
 
         mock_response = MagicMock()
         mock_response.status_code = status_code
@@ -334,6 +335,7 @@ class TestCOSESignatureRejectsTamperedPayloads:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             root_cert_pem=_TEST_CA_PEM,
+            audience="test-audience",
         )
 
         with pytest.raises(CallerError) as exc_info:
@@ -365,6 +367,7 @@ class TestPCRValidation:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             expected_pcrs=expected,
+            audience="test-audience",
         )
         # Should not raise
         caller._validate_pcrs(pcr_values)
@@ -389,6 +392,7 @@ class TestPCRValidation:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             expected_pcrs=expected,
+            audience="test-audience",
         )
         with pytest.raises(CallerError) as exc_info:
             caller._validate_pcrs(pcr_values)
@@ -406,6 +410,7 @@ class TestPCRValidation:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             expected_pcrs=expected,
+            audience="test-audience",
         )
         with pytest.raises(CallerError) as exc_info:
             caller._validate_pcrs(document_pcrs)
@@ -426,6 +431,7 @@ class TestCertificateChainValidation:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             root_cert_pem=_TEST_CA_PEM,
+            audience="test-audience",
         )
         # Should not raise
         caller._verify_certificate_chain(_TEST_SIGN_CERT_DER, [_TEST_CA_DER])
@@ -455,6 +461,7 @@ class TestCertificateChainValidation:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             root_cert_pem=other_ca_pem,
+            audience="test-audience",
         )
         with pytest.raises(CallerError) as exc_info:
             caller._verify_certificate_chain(_TEST_SIGN_CERT_DER, [])
@@ -491,6 +498,7 @@ class TestOutputIntegrityVerification:
             server_url="http://localhost:8080",
             root_cert_pem=_TEST_CA_PEM,
             expected_pcrs={4: b'\xaa' * 48, 7: b'\xbb' * 48},
+            audience="test-audience",
         )
         # Fix expected_pcrs to hex strings
         caller.expected_pcrs = {4: "aa" * 48, 7: "bb" * 48}
@@ -519,6 +527,7 @@ class TestOutputIntegrityVerification:
             server_url="http://localhost:8080",
             root_cert_pem=_TEST_CA_PEM,
             expected_pcrs={4: "aa" * 48, 7: "bb" * 48},
+            audience="test-audience",
         )
 
         # Tamper the stdout
@@ -574,7 +583,9 @@ class TestPollingTerminationOnCompletion:
             server_url="http://localhost:8080",
             poll_interval=0,  # No sleep in tests
             max_poll_duration=9999,
+            audience="test-audience",
         )
+        caller._oidc_token = "test-token"
 
         with patch("call_remote_executor.requests.get", side_effect=responses) as mock_get:
             with patch("call_remote_executor.time.sleep"):
@@ -626,7 +637,9 @@ class TestPollingRetryOnTransientErrors:
             poll_interval=0,
             max_poll_duration=9999,
             max_retries=max_retries,
+            audience="test-audience",
         )
+        caller._oidc_token = "test-token"
 
         with patch("call_remote_executor.requests.get", side_effect=responses):
             with patch("call_remote_executor.time.sleep"):
@@ -652,7 +665,9 @@ class TestPollingRetryOnTransientErrors:
             poll_interval=0,
             max_poll_duration=9999,
             max_retries=max_retries,
+            audience="test-audience",
         )
+        caller._oidc_token = "test-token"
 
         with patch("call_remote_executor.requests.get", side_effect=responses):
             with patch("call_remote_executor.time.sleep"):
@@ -686,7 +701,9 @@ class TestPollingRetryOnTransientErrors:
             poll_interval=0,
             max_poll_duration=9999,
             max_retries=max_retries,
+            audience="test-audience",
         )
+        caller._oidc_token = "test-token"
 
         with patch("call_remote_executor.requests.get", side_effect=side_effects):
             with patch("call_remote_executor.time.sleep"):
@@ -714,6 +731,7 @@ class TestExitCodePropagation:
             server_url="http://localhost:8080",
             poll_interval=0,
             max_poll_duration=9999,
+            audience="test-audience",
         )
 
         health_response = MagicMock()
@@ -769,6 +787,7 @@ class TestSummaryContainsExecutionResults:
             server_url="http://localhost:8080",
             poll_interval=0,
             max_poll_duration=9999,
+            audience="test-audience",
         )
 
         health_response = MagicMock()
@@ -877,7 +896,7 @@ class TestOIDCTokenTransmission:
     @settings(max_examples=50)
     def test_execute_includes_bearer_token(self, oidc_token: str):
         """execute() includes Authorization: Bearer <token> header."""
-        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         caller._oidc_token = oidc_token
 
         mock_response = MagicMock()
@@ -904,6 +923,7 @@ class TestOIDCTokenTransmission:
             server_url="http://localhost:8080",
             poll_interval=0,
             max_poll_duration=9999,
+            audience="test-audience",
         )
         caller._oidc_token = oidc_token
 
@@ -930,7 +950,7 @@ class TestOIDCTokenTransmission:
     @settings(max_examples=50)
     def test_health_check_excludes_authorization(self, oidc_token: str):
         """health_check() does NOT include Authorization header even when token is set."""
-        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         caller._oidc_token = oidc_token
 
         mock_response = MagicMock()
@@ -963,7 +983,7 @@ class TestOIDCAuthenticationErrorHandling:
     @settings(max_examples=50)
     def test_execute_auth_errors(self, status_code: int, response_body: str):
         """execute() raises CallerError with correct message for 401/403."""
-        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         caller._oidc_token = "some-token"
 
         mock_response = MagicMock()
@@ -993,6 +1013,7 @@ class TestOIDCAuthenticationErrorHandling:
             poll_interval=0,
             max_poll_duration=9999,
             max_retries=5,
+            audience="test-audience",
         )
         caller._oidc_token = "some-token"
 

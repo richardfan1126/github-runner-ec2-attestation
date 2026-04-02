@@ -25,7 +25,7 @@ from call_remote_executor import (
 
 def _make_caller() -> RemoteExecutorCaller:
     """Create a caller instance for testing."""
-    return RemoteExecutorCaller(server_url="http://localhost:8080")
+    return RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
 
 
 class TestAttestationValidationEdgeCases:
@@ -157,6 +157,7 @@ class TestCOSESign1EdgeCases:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             root_cert_pem=ca_pem,
+            audience="test-audience",
         )
         with pytest.raises(CallerError) as exc_info:
             caller.validate_attestation(b64_str)
@@ -220,6 +221,7 @@ class TestCOSESign1EdgeCases:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             root_cert_pem=ca_pem,
+            audience="test-audience",
         )
         with pytest.raises(CallerError) as exc_info:
             caller.validate_attestation(b64_str)
@@ -231,6 +233,7 @@ class TestCOSESign1EdgeCases:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             expected_pcrs={4: "aa" * 48},
+            audience="test-audience",
         )
         # Document has PCR 0 but not PCR 4
         document_pcrs = {0: b'\x00' * 48}
@@ -245,6 +248,7 @@ class TestCOSESign1EdgeCases:
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             expected_pcrs={4: "aa" * 48},
+            audience="test-audience",
         )
         # Document has PCR 4 but with different value
         document_pcrs = {4: b'\xbb' * 48}
@@ -270,6 +274,7 @@ class TestHealthCheckAndExecuteEdgeCases:
         """Connection refused on execute raises CallerError with phase 'execute'.
         Validates: Requirement 3.6"""
         caller = _make_caller()
+        caller._oidc_token = "test-token"
         with patch("call_remote_executor.requests.post", side_effect=requests.ConnectionError("Connection refused")):
             with pytest.raises(CallerError) as exc_info:
                 caller.execute(
@@ -292,7 +297,9 @@ class TestPollingEdgeCases:
             server_url="http://localhost:8080",
             poll_interval=0,
             max_poll_duration=0,  # Immediate timeout
+            audience="test-audience",
         )
+        caller._oidc_token = "test-token"
 
         incomplete_response = patch("call_remote_executor.requests.get")
         mock_get = incomplete_response.start()
@@ -318,13 +325,13 @@ class TestPollingEdgeCases:
     def test_default_poll_interval_is_5_seconds(self):
         """Default poll interval is 5 seconds.
         Validates: Requirement 5.2"""
-        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         assert caller.poll_interval == 5
 
     def test_default_max_poll_duration_is_600_seconds(self):
         """Default max poll duration is 600 seconds.
         Validates: Requirement 5.5"""
-        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         assert caller.max_poll_duration == 600
 
 
@@ -339,7 +346,7 @@ class TestOutputAttestationEdgeCases:
         # This tests that the caller can handle None output_attestation_document
         # at the orchestration level. The validate_output_attestation method
         # expects a string, so the run() method should check for None first.
-        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
 
         # Passing None should raise a TypeError or CallerError — the run() method
         # is responsible for checking None before calling validate_output_attestation.
