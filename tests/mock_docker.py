@@ -20,6 +20,7 @@ class MockContainer:
     def __init__(self, name, command, **kwargs):
         self.name = name
         self._command = command
+        self._creation_kwargs = kwargs
         self._process = None
         self._stdout = b""
         self._stderr = b""
@@ -118,12 +119,15 @@ class MockContainersAPI:
     def __init__(self):
         self._containers = {}
         self._lock = threading.Lock()
+        self._creation_calls = []  # Track all create() calls with full kwargs
 
     def create(self, image, name, command, **kwargs):
         """Create a new mock container."""
         container = MockContainer(name=name, command=command, **kwargs)
+        call_record = {"image": image, "name": name, "command": command, **kwargs}
         with self._lock:
             self._containers[name] = container
+            self._creation_calls.append(call_record)
         return container
 
     def get(self, name):

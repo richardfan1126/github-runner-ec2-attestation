@@ -1548,38 +1548,38 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 70. Checkpoint - Ensure Docker ScriptExecutor compiles and wires correctly
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 71. Write property tests for Docker container execution
-  - [ ] 71.1 Write property test for Container Non-Reuse
+- [x] 71. Write property tests for Docker container execution
+  - [x] 71.1 Write property test for Container Non-Reuse
     - **Property 109: Container Non-Reuse**
     - For any two script executions, verify the Execution_Containers used are distinct and no container is reused
     - **Validates: Requirements 5.3**
 
-  - [ ] 71.2 Write property test for Container Unique Naming
+  - [x] 71.2 Write property test for Container Unique Naming
     - **Property 110: Container Unique Naming**
     - For any script execution, verify the Execution_Container is assigned a unique name derived from the Execution_ID
     - **Validates: Requirements 5.13**
 
-  - [ ] 71.3 Write property test for Docker Container Security Constraints
+  - [x] 71.3 Write property test for Docker Container Security Constraints
     - **Property 111: Docker Container Security Constraints**
     - For any Execution_Container, verify it is configured with: non-root user, network disabled, read-only root filesystem (except execution directory), privilege escalation disabled, memory limits, and CPU limits
     - **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
 
-  - [ ] 71.4 Write property test for Container Removal Verification
+  - [x] 71.4 Write property test for Container Removal Verification
     - **Property 112: Container Removal Verification**
     - For any Execution_Container that is removed, verify the container no longer exists on the Docker host
     - **Validates: Requirements 8.9**
 
-  - [ ] 71.5 Write property test for Dangling Container Cleanup on Startup
+  - [x] 71.5 Write property test for Dangling Container Cleanup on Startup
     - **Property 113: Dangling Container Cleanup on Startup**
     - For any server startup, verify the Script_Executor removes dangling Execution_Containers matching the naming convention
     - **Validates: Requirements 8.10**
 
-  - [ ] 71.6 Write property test for Docker Daemon Accessibility Check
+  - [x] 71.6 Write property test for Docker Daemon Accessibility Check
     - **Property 114: Docker Daemon Accessibility Check**
     - For any server startup, verify the Script_Executor checks Docker daemon accessibility; if not accessible, the server fails to start
     - **Validates: Requirements 9.11, 9.12**
 
-  - [ ] 71.7 Write property test for Container Image Configuration
+  - [x] 71.7 Write property test for Container Image Configuration
     - **Property 115: Container Image Configuration**
     - For any configured Container_Image name, verify the Script_Executor uses that image when creating Execution_Containers
     - **Validates: Requirements 9.7**
