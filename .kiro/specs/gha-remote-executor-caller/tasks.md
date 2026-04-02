@@ -282,27 +282,27 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Pass `audience` to `RemoteExecutorCaller.__init__`
     - _Requirements: 9.2_
 
-- [ ] 13. Checkpoint - Ensure OIDC implementation compiles and existing tests are updated
+- [x] 13. Checkpoint - Ensure OIDC implementation compiles and existing tests are updated
   - Update existing tests that construct `RemoteExecutorCaller` to include `audience` parameter where needed
   - Ensure all existing tests pass with the updated signatures
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 14. Write property tests for OIDC
-  - [ ] 14.1 Write property test for OIDC token acquisition
+- [x] 14. Write property tests for OIDC
+  - [x] 14.1 Write property test for OIDC token acquisition
     - **Property 13: OIDC token acquisition**
     - Generate random audience strings, mock OIDC provider endpoint
     - Verify `request_oidc_token` makes HTTP GET with correct audience query param and Bearer header
     - Verify returned token is stored on the instance
     - **Validates: Requirements 9.3, 9.4, 9.7**
 
-  - [ ] 14.2 Write property test for OIDC token transmission
+  - [x] 14.2 Write property test for OIDC token transmission
     - **Property 14: OIDC token transmission**
     - Generate random OIDC tokens, set on caller instance, mock HTTP endpoints
     - Verify `execute` and `poll_output` include `Authorization: Bearer <token>` header
     - Verify `health_check` does NOT include Authorization header
     - **Validates: Requirements 10.1, 10.2, 10.3**
 
-  - [ ] 14.3 Write property test for OIDC authentication error handling
+  - [x] 14.3 Write property test for OIDC authentication error handling
     - **Property 15: OIDC authentication error handling**
     - Generate random 401/403 responses for `/execute` and `/execution/{id}/output`
     - Verify `CallerError` raised with appropriate auth error messages

@@ -805,3 +805,259 @@ class TestSummaryContainsExecutionResults:
         assert str(exit_code_val) in summary
         assert "pass" in summary  # attestation status
         assert "skipped" in summary  # output integrity (no attestation doc)
+
+
+# ---------------------------------------------------------------------------
+# Property 13: OIDC token acquisition
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 13: OIDC token acquisition
+# **Validates: Requirements 9.3, 9.4, 9.7**
+class TestOIDCTokenAcquisition:
+    """Property 13: For any audience string and valid OIDC provider response,
+    request_oidc_token should make an HTTP GET with the correct audience query
+    param and Bearer header, and store the returned token."""
+
+    @given(
+        audience=st.text(min_size=0, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N"))),
+        token_value=st.text(min_size=1, max_size=200, alphabet=st.characters(whitelist_categories=("L", "N"))),
+        request_token=st.text(min_size=1, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_oidc_token_acquired_and_stored(self, audience: str, token_value: str, request_token: str):
+        """request_oidc_token makes correct HTTP GET and stores the token."""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            audience=audience,
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"value": token_value}
+
+        request_url = "https://token.actions.githubusercontent.com/request"
+        env_vars = {
+            "ACTIONS_ID_TOKEN_REQUEST_URL": request_url,
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": request_token,
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            with patch("call_remote_executor.requests.get", return_value=mock_response) as mock_get:
+                result = caller.request_oidc_token()
+
+        # Verify the returned token matches
+        assert result == token_value
+        # Verify the token is stored on the instance
+        assert caller._oidc_token == token_value
+
+        # Verify the HTTP GET was called with correct URL and headers
+        call_args = mock_get.call_args
+        called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+        if audience:
+            assert f"audience={audience}" in called_url
+        else:
+            assert "audience=" not in called_url
+        called_headers = call_args[1].get("headers", call_args[0][1] if len(call_args[0]) > 1 else {})
+        assert called_headers["Authorization"] == f"Bearer {request_token}"
+
+
+# ---------------------------------------------------------------------------
+# Property 14: OIDC token transmission
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 14: OIDC token transmission
+# **Validates: Requirements 10.1, 10.2, 10.3**
+class TestOIDCTokenTransmission:
+    """Property 14: execute and poll_output include Authorization: Bearer <token>
+    in their HTTP request headers, while health_check does NOT."""
+
+    @given(
+        oidc_token=st.text(min_size=1, max_size=200, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_execute_includes_bearer_token(self, oidc_token: str):
+        """execute() includes Authorization: Bearer <token> header."""
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller._oidc_token = oidc_token
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "execution_id": "test-id",
+            "attestation_document": "dGVzdA==",
+            "status": "queued",
+        }
+
+        with patch("call_remote_executor.requests.post", return_value=mock_response) as mock_post:
+            caller.execute("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        call_kwargs = mock_post.call_args[1]
+        assert call_kwargs["headers"]["Authorization"] == f"Bearer {oidc_token}"
+
+    @given(
+        oidc_token=st.text(min_size=1, max_size=200, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_poll_output_includes_bearer_token(self, oidc_token: str):
+        """poll_output() includes Authorization: Bearer <token> header."""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,
+            max_poll_duration=9999,
+        )
+        caller._oidc_token = oidc_token
+
+        complete_response = MagicMock()
+        complete_response.status_code = 200
+        complete_response.json.return_value = {
+            "stdout": "ok",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        }
+
+        with patch("call_remote_executor.requests.get", return_value=complete_response) as mock_get:
+            with patch("call_remote_executor.time.sleep"):
+                caller.poll_output("test-exec-id")
+
+        call_kwargs = mock_get.call_args[1]
+        assert call_kwargs["headers"]["Authorization"] == f"Bearer {oidc_token}"
+
+    @given(
+        oidc_token=st.text(min_size=1, max_size=200, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_health_check_excludes_authorization(self, oidc_token: str):
+        """health_check() does NOT include Authorization header even when token is set."""
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller._oidc_token = oidc_token
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "healthy"}
+
+        with patch("call_remote_executor.requests.get", return_value=mock_response) as mock_get:
+            caller.health_check()
+
+        # health_check uses requests.get(url, timeout=...) — no headers kwarg
+        call_kwargs = mock_get.call_args[1]
+        assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get("headers", {})
+
+
+# ---------------------------------------------------------------------------
+# Property 15: OIDC authentication error handling
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 15: OIDC authentication error handling
+# **Validates: Requirements 9.5, 9.6, 10.4, 10.5**
+class TestOIDCAuthenticationErrorHandling:
+    """Property 15: HTTP 401/403 on /execute and /execution/{id}/output raise
+    CallerError with appropriate messages. Missing env vars raise CallerError
+    with id-token: write permission message."""
+
+    @given(
+        status_code=st.sampled_from([401, 403]),
+        response_body=st.text(min_size=0, max_size=100),
+    )
+    @settings(max_examples=50)
+    def test_execute_auth_errors(self, status_code: int, response_body: str):
+        """execute() raises CallerError with correct message for 401/403."""
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080")
+        caller._oidc_token = "some-token"
+
+        mock_response = MagicMock()
+        mock_response.status_code = status_code
+        mock_response.text = response_body
+
+        with patch("call_remote_executor.requests.post", return_value=mock_response):
+            with pytest.raises(CallerError) as exc_info:
+                caller.execute("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        assert exc_info.value.phase == "execute"
+        assert exc_info.value.details["status_code"] == status_code
+        if status_code == 401:
+            assert "authentication failure" in exc_info.value.message.lower() or "401" in exc_info.value.message
+        else:
+            assert "not authorized" in exc_info.value.message.lower() or "403" in exc_info.value.message
+
+    @given(
+        status_code=st.sampled_from([401, 403]),
+        response_body=st.text(min_size=0, max_size=100),
+    )
+    @settings(max_examples=50)
+    def test_poll_output_auth_errors(self, status_code: int, response_body: str):
+        """poll_output() raises CallerError with correct message for 401/403 (no retry)."""
+        caller = RemoteExecutorCaller(
+            server_url="http://localhost:8080",
+            poll_interval=0,
+            max_poll_duration=9999,
+            max_retries=5,
+        )
+        caller._oidc_token = "some-token"
+
+        mock_response = MagicMock()
+        mock_response.status_code = status_code
+        mock_response.text = response_body
+
+        with patch("call_remote_executor.requests.get", return_value=mock_response):
+            with patch("call_remote_executor.time.sleep"):
+                with pytest.raises(CallerError) as exc_info:
+                    caller.poll_output("test-exec-id")
+
+        assert exc_info.value.phase == "polling"
+        assert exc_info.value.details["status_code"] == status_code
+        if status_code == 401:
+            assert "authentication failure" in exc_info.value.message.lower() or "401" in exc_info.value.message
+        else:
+            assert "not authorized" in exc_info.value.message.lower() or "403" in exc_info.value.message
+
+    @given(
+        missing_var=st.sampled_from(["ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "both"]),
+    )
+    @settings(max_examples=20)
+    def test_missing_env_vars_raise_oidc_error(self, missing_var: str):
+        """request_oidc_token raises CallerError when OIDC env vars are missing."""
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
+
+        env_vars = {}
+        if missing_var == "ACTIONS_ID_TOKEN_REQUEST_URL":
+            env_vars["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] = "some-token"
+        elif missing_var == "ACTIONS_ID_TOKEN_REQUEST_TOKEN":
+            env_vars["ACTIONS_ID_TOKEN_REQUEST_URL"] = "https://token.example.com"
+        # "both" → neither set
+
+        # Clear both vars, then set only the ones we want
+        cleared = {"ACTIONS_ID_TOKEN_REQUEST_URL": "", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": ""}
+        cleared.update(env_vars)
+
+        with patch.dict(os.environ, cleared, clear=False):
+            with pytest.raises(CallerError) as exc_info:
+                caller.request_oidc_token()
+
+        assert exc_info.value.phase == "oidc"
+        assert "id-token: write" in exc_info.value.message.lower() or "permission" in exc_info.value.message.lower()
+
+    @given(
+        status_code=st.integers(min_value=400, max_value=599),
+    )
+    @settings(max_examples=20)
+    def test_oidc_provider_http_error(self, status_code: int):
+        """request_oidc_token raises CallerError when OIDC provider returns HTTP error."""
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
+
+        mock_response = MagicMock()
+        mock_response.status_code = status_code
+        mock_response.text = "error"
+
+        env_vars = {
+            "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example.com",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "some-token",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            with patch("call_remote_executor.requests.get", return_value=mock_response):
+                with pytest.raises(CallerError) as exc_info:
+                    caller.request_oidc_token()
+
+        assert exc_info.value.phase == "oidc"
