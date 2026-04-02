@@ -85,6 +85,16 @@ class TestParseArguments:
         assert args.ami_build_result == "my_result.json"
         assert args.terraform_dir == "infra/tf"
 
+    def test_parse_arguments_keep_ami_absent(self):
+        with patch("sys.argv", ["cleanup.py"]):
+            args = cleanup.parse_arguments()
+        assert args.keep_ami is False
+
+    def test_parse_arguments_keep_ami_present(self):
+        with patch("sys.argv", ["cleanup.py", "--keep-ami"]):
+            args = cleanup.parse_arguments()
+        assert args.keep_ami is True
+
 
 # =============================================================================
 # Build result loading tests (via main)
@@ -154,6 +164,7 @@ class TestUserConfirmation:
             mock_args = Mock()
             mock_args.ami_build_result = tmp
             mock_args.terraform_dir = "terraform/deploy"
+            mock_args.keep_ami = False
 
             with patch.object(cleanup, "parse_arguments", return_value=mock_args), \
                  patch("builtins.input", return_value=user_input), \
@@ -334,6 +345,34 @@ class TestDeregisterAmi:
         with pytest.raises(ClientError):
             cleanup.deregister_ami(ec2, "ami-err", "snap-err")
 
+    def test_deregister_ami_keep_ami_true_skips_all(self):
+        """keep_ami=True -> skips all API calls and logs skip message."""
+        ec2 = Mock()
+
+        with patch.object(cleanup.logger, "info") as mock_info:
+            cleanup.deregister_ami(ec2, "ami-abc123", "snap-def456", keep_ami=True)
+
+        ec2.describe_images.assert_not_called()
+        ec2.deregister_image.assert_not_called()
+        ec2.describe_snapshots.assert_not_called()
+
+        info_msgs = " ".join(str(c) for c in mock_info.call_args_list)
+        assert "Skipping AMI deregistration" in info_msgs
+
+    def test_deregister_ami_keep_ami_false_proceeds(self):
+        """keep_ami=False -> proceeds with normal deregistration."""
+        ec2 = Mock()
+        ec2.describe_images.side_effect = [
+            {"Images": [{"ImageId": "ami-abc123"}]},
+            _make_client_error("InvalidAMIID.NotFound"),
+        ]
+        ec2.describe_snapshots.side_effect = _make_client_error("InvalidSnapshot.NotFound")
+
+        with patch("time.sleep"):
+            cleanup.deregister_ami(ec2, "ami-abc123", "snap-def456", keep_ami=False)
+
+        ec2.deregister_image.assert_called_once()
+
 
 # =============================================================================
 # verify_cleanup tests
@@ -429,6 +468,41 @@ class TestVerifyCleanup:
         assert "snap-test456" in warn_msgs
         assert "4 remaining" in warn_msgs
 
+    def test_verify_keep_ami_skips_ami_and_snapshot(self):
+        """keep_ami=True -> skips AMI and snapshot checks."""
+        ec2 = Mock()
+        ec2.describe_instances.return_value = {"Reservations": []}
+
+        with patch.object(cleanup.logger, "info") as mock_info, \
+             patch.object(cleanup.logger, "warning"):
+            cleanup.verify_cleanup(ec2, self._build_result(), keep_ami=True)
+
+        ec2.describe_images.assert_not_called()
+        ec2.describe_snapshots.assert_not_called()
+
+        info_msgs = " ".join(str(c) for c in mock_info.call_args_list)
+        assert "intentionally preserved" in info_msgs
+
+    def test_verify_keep_ami_still_reports_instances(self):
+        """keep_ami=True with remaining instances -> reports instances only."""
+        ec2 = Mock()
+        ec2.describe_instances.return_value = {
+            "Reservations": [{
+                "Instances": [{"InstanceId": "i-abc123", "State": {"Name": "running"}}]
+            }]
+        }
+
+        with patch.object(cleanup.logger, "warning") as mock_warn, \
+             patch.object(cleanup.logger, "info"):
+            cleanup.verify_cleanup(ec2, self._build_result(), keep_ami=True)
+
+        ec2.describe_images.assert_not_called()
+        ec2.describe_snapshots.assert_not_called()
+
+        warn_msgs = " ".join(str(c) for c in mock_warn.call_args_list)
+        assert "i-abc123" in warn_msgs
+        assert "1 remaining" in warn_msgs
+
 
 # =============================================================================
 # main exit code tests
@@ -441,6 +515,7 @@ class TestMainExitCodes:
             mock_args = Mock()
             mock_args.ami_build_result = tmp
             mock_args.terraform_dir = "terraform/deploy"
+            mock_args.keep_ami = False
 
             with patch.object(cleanup, "parse_arguments", return_value=mock_args), \
                  patch("builtins.input", return_value="yes"), \
@@ -459,6 +534,7 @@ class TestMainExitCodes:
             mock_args = Mock()
             mock_args.ami_build_result = tmp
             mock_args.terraform_dir = "terraform/deploy"
+            mock_args.keep_ami = False
 
             with patch.object(cleanup, "parse_arguments", return_value=mock_args), \
                  patch("builtins.input", return_value="yes"), \
@@ -474,11 +550,41 @@ class TestMainExitCodes:
             mock_args = Mock()
             mock_args.ami_build_result = tmp
             mock_args.terraform_dir = "terraform/deploy"
+            mock_args.keep_ami = False
 
             with patch.object(cleanup, "parse_arguments", return_value=mock_args), \
                  patch("builtins.input", return_value="no"), \
                  patch.object(cleanup, "destroy_infrastructure") as mock_destroy:
                 assert cleanup.main() == 0
                 mock_destroy.assert_not_called()
+        finally:
+            os.unlink(tmp)
+
+    def test_main_keep_ami_passes_flag(self):
+        """main() passes keep_ami to deregister_ami and verify_cleanup."""
+        tmp = _write_temp_json(VALID_BUILD_RESULT)
+        try:
+            mock_args = Mock()
+            mock_args.ami_build_result = tmp
+            mock_args.terraform_dir = "terraform/deploy"
+            mock_args.keep_ami = True
+
+            with patch.object(cleanup, "parse_arguments", return_value=mock_args), \
+                 patch("builtins.input", return_value="yes"), \
+                 patch.object(cleanup, "destroy_infrastructure"), \
+                 patch.object(cleanup, "boto3") as mock_boto3, \
+                 patch.object(cleanup, "deregister_ami") as mock_deregister, \
+                 patch.object(cleanup, "verify_cleanup") as mock_verify:
+                mock_boto3.client.return_value = Mock()
+                assert cleanup.main() == 0
+
+                # Verify keep_ami was passed through
+                mock_deregister.assert_called_once()
+                _, kwargs = mock_deregister.call_args
+                assert kwargs.get("keep_ami") is True
+
+                mock_verify.assert_called_once()
+                _, kwargs = mock_verify.call_args
+                assert kwargs.get("keep_ami") is True
         finally:
             os.unlink(tmp)

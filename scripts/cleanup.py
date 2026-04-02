@@ -123,7 +123,7 @@ def destroy_infrastructure(terraform_dir: str) -> None:
     except Exception as e:
         logger.warning(f"Could not verify Terraform state: {e}")
 
-def deregister_ami(ec2_client: Any, ami_id: str, snapshot_id: str) -> None:
+def deregister_ami(ec2_client: Any, ami_id: str, snapshot_id: str, keep_ami: bool = False) -> None:
     """
     Deregister the Attestable AMI.
     
@@ -133,7 +133,12 @@ def deregister_ami(ec2_client: Any, ami_id: str, snapshot_id: str) -> None:
         ec2_client: Boto3 EC2 client
         ami_id: AMI ID to deregister
         snapshot_id: Snapshot ID of associated snapshot
+        keep_ami: If True, skip deregistration and snapshot deletion
     """
+    if keep_ami:
+        logger.info("Skipping AMI deregistration and snapshot deletion (--keep-ami flag provided)")
+        return
+
     logger.info(f"Deregistering AMI: {ami_id}")
     
     try:
@@ -179,7 +184,7 @@ def deregister_ami(ec2_client: Any, ami_id: str, snapshot_id: str) -> None:
         logger.error(f"Failed to deregister AMI: {e}")
         raise
 
-def verify_cleanup(ec2_client: Any, ami_build_result: dict) -> None:
+def verify_cleanup(ec2_client: Any, ami_build_result: dict, keep_ami: bool = False) -> None:
     """
     Verify that all resources have been cleaned up.
     
@@ -188,6 +193,7 @@ def verify_cleanup(ec2_client: Any, ami_build_result: dict) -> None:
     Args:
         ec2_client: Boto3 EC2 client
         ami_build_result: AMI build result containing resource identifiers
+        keep_ami: If True, skip AMI and EBS snapshot checks
     """
     logger.info("Verifying cleanup completion...")
     
@@ -217,34 +223,36 @@ def verify_cleanup(ec2_client: Any, ami_build_result: dict) -> None:
         logger.warning(f"Could not check EC2 instances: {e}")
     
     # Check for the specific AMI
-    logger.info("Checking for AMI...")
-    try:
-        response = ec2_client.describe_images(ImageIds=[ami_build_result['ami_id']])
-        if response['Images']:
-            remaining_resources.append({
-                'Type': 'AMI',
-                'ID': ami_build_result['ami_id'],
-                'Status': 'available'
-            })
-            logger.warning(f"  Found AMI: {ami_build_result['ami_id']}")
-    except ClientError as e:
-        if e.response['Error']['Code'] != 'InvalidAMIID.NotFound':
-            logger.warning(f"Could not check AMI: {e}")
+    if not keep_ami:
+        logger.info("Checking for AMI...")
+        try:
+            response = ec2_client.describe_images(ImageIds=[ami_build_result['ami_id']])
+            if response['Images']:
+                remaining_resources.append({
+                    'Type': 'AMI',
+                    'ID': ami_build_result['ami_id'],
+                    'Status': 'available'
+                })
+                logger.warning(f"  Found AMI: {ami_build_result['ami_id']}")
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'InvalidAMIID.NotFound':
+                logger.warning(f"Could not check AMI: {e}")
     
     # Check for the specific snapshot
-    logger.info("Checking for EBS snapshot...")
-    try:
-        response = ec2_client.describe_snapshots(SnapshotIds=[ami_build_result['snapshot_id']])
-        if response['Snapshots']:
-            remaining_resources.append({
-                'Type': 'EBS Snapshot',
-                'ID': ami_build_result['snapshot_id'],
-                'Status': response['Snapshots'][0]['State']
-            })
-            logger.warning(f"  Found snapshot: {ami_build_result['snapshot_id']}")
-    except ClientError as e:
-        if e.response['Error']['Code'] != 'InvalidSnapshot.NotFound':
-            logger.warning(f"Could not check snapshot: {e}")
+    if not keep_ami:
+        logger.info("Checking for EBS snapshot...")
+        try:
+            response = ec2_client.describe_snapshots(SnapshotIds=[ami_build_result['snapshot_id']])
+            if response['Snapshots']:
+                remaining_resources.append({
+                    'Type': 'EBS Snapshot',
+                    'ID': ami_build_result['snapshot_id'],
+                    'Status': response['Snapshots'][0]['State']
+                })
+                logger.warning(f"  Found snapshot: {ami_build_result['snapshot_id']}")
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'InvalidSnapshot.NotFound':
+                logger.warning(f"Could not check snapshot: {e}")
     
     # Display summary
     logger.info("")
@@ -257,7 +265,10 @@ def verify_cleanup(ec2_client: Any, ami_build_result: dict) -> None:
         logger.warning("\nPlease review and manually delete these resources if needed.")
     else:
         logger.info("✓ No remaining resources found")
-        logger.info("Cleanup verification complete - all resources removed")
+        if keep_ami:
+            logger.info("Cleanup verification complete - all resources removed, AMI and snapshot intentionally preserved")
+        else:
+            logger.info("Cleanup verification complete - all resources removed")
     logger.info("-" * 80)
 
 def parse_arguments() -> argparse.Namespace:
@@ -280,7 +291,19 @@ def parse_arguments() -> argparse.Namespace:
         help='Path to Terraform configuration directory (default: terraform)'
     )
 
-    return parser.parse_args()
+    parser.add_argument(
+        '--keep-ami',
+        action='store_true',
+        default=False,
+        help='Preserve AMI and snapshot during cleanup (skip deregistration)'
+    )
+
+    args = parser.parse_args()
+
+    if args.keep_ami:
+        logger.info("--keep-ami flag provided: AMI and snapshot will be preserved")
+
+    return args
 
 def main() -> int:
     """Main entry point for cleanup script."""
@@ -291,6 +314,8 @@ def main() -> int:
     logger.info("=" * 80)
     logger.info(f"AMI Build Result: {args.ami_build_result}")
     logger.info(f"Terraform Directory: {args.terraform_dir}")
+    if args.keep_ami:
+        logger.info("AMI Preservation: AMI and snapshot will be preserved")
     
     try:
         # Load AMI build result
@@ -345,7 +370,7 @@ def main() -> int:
         
         ec2_client = boto3.client('ec2', region_name=ami_build_result['region'])
         
-        deregister_ami(ec2_client, ami_build_result['ami_id'], ami_build_result['snapshot_id'])
+        deregister_ami(ec2_client, ami_build_result['ami_id'], ami_build_result['snapshot_id'], keep_ami=args.keep_ami)
         
         # Verify cleanup
         logger.info("")
@@ -354,7 +379,7 @@ def main() -> int:
         logger.info("=" * 80)
         
         ec2_client = boto3.client('ec2', region_name=ami_build_result['region'])
-        verify_cleanup(ec2_client, ami_build_result)
+        verify_cleanup(ec2_client, ami_build_result, keep_ami=args.keep_ami)
         
         # Success summary
         logger.info("")

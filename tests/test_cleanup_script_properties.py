@@ -60,9 +60,10 @@ def test_property_87_cleanup_cli_defaults(_):
     Property 87: Cleanup CLI Argument Parsing (defaults)
 
     Invoking parse_arguments() with no args returns the default values:
-    ami_build_result='ami_build_result.json' and terraform_dir='terraform/deploy'.
+    ami_build_result='ami_build_result.json', terraform_dir='terraform/deploy',
+    and keep_ami=False.
 
-    **Validates: Requirements 28.1, 28.2**
+    **Validates: Requirements 28.1, 28.2, 28.3**
     """
     with patch("sys.argv", ["cleanup.py"]):
         args = cleanup.parse_arguments()
@@ -73,6 +74,9 @@ def test_property_87_cleanup_cli_defaults(_):
     expected_terraform_dir = Path(__file__).parent.parent / "scripts" / ".." / "terraform" / "deploy"
     assert Path(str(args.terraform_dir)).resolve() == expected_terraform_dir.resolve(), (
         f"Expected default terraform_dir to resolve to '{expected_terraform_dir.resolve()}', got '{args.terraform_dir}'"
+    )
+    assert args.keep_ami is False, (
+        f"Expected default keep_ami=False, got {args.keep_ami}"
     )
 
 
@@ -89,7 +93,7 @@ def test_property_87_cleanup_cli_custom_args(file_path, dir_path):
     --ami-build-result and --terraform-dir values are correctly parsed
     and returned by parse_arguments().
 
-    **Validates: Requirements 28.1, 28.2**
+    **Validates: Requirements 28.1, 28.2, 28.3**
     """
     with patch("sys.argv", [
         "cleanup.py",
@@ -103,6 +107,42 @@ def test_property_87_cleanup_cli_custom_args(file_path, dir_path):
     )
     assert args.terraform_dir == dir_path, (
         f"Expected terraform_dir='{dir_path}', got '{args.terraform_dir}'"
+    )
+    assert args.keep_ami is False, (
+        f"Expected keep_ami=False when not provided, got {args.keep_ami}"
+    )
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    file_path=valid_file_path_strategy(),
+    dir_path=valid_dir_path_strategy(),
+)
+def test_property_87_cleanup_cli_keep_ami_flag(file_path, dir_path):
+    """
+    Property 87: Cleanup CLI Argument Parsing (--keep-ami flag)
+
+    For any valid file path and directory path, providing --keep-ami
+    sets keep_ami to True.
+
+    **Validates: Requirements 28.1, 28.2, 28.3**
+    """
+    with patch("sys.argv", [
+        "cleanup.py",
+        "--ami-build-result", file_path,
+        "--terraform-dir", dir_path,
+        "--keep-ami",
+    ]):
+        args = cleanup.parse_arguments()
+
+    assert args.ami_build_result == file_path, (
+        f"Expected ami_build_result='{file_path}', got '{args.ami_build_result}'"
+    )
+    assert args.terraform_dir == dir_path, (
+        f"Expected terraform_dir='{dir_path}', got '{args.terraform_dir}'"
+    )
+    assert args.keep_ami is True, (
+        f"Expected keep_ami=True when --keep-ami provided, got {args.keep_ami}"
     )
 
 # --- Additional imports for Property 88 ---
@@ -721,6 +761,101 @@ def test_property_93_verify_cleanup_reports_no_remaining_resources(ami_id, snaps
     )
 
 
+@settings(max_examples=20, deadline=None)
+@given(
+    ami_id=ami_id_strategy(),
+    snapshot_id=snapshot_id_strategy(),
+)
+def test_property_93_verify_cleanup_keep_ami_excludes_ami_snapshot(ami_id, snapshot_id):
+    """
+    Property 93: Cleanup Resource Verification and Reporting (keep_ami=True)
+
+    When keep_ami is True, verify_cleanup should exclude AMI and EBS snapshot
+    from the remaining-resource check. If no other resources remain, it should
+    log that cleanup is complete and AMI/snapshot were intentionally preserved.
+
+    **Validates: Requirements 31.2, 31.3, 31.4, 31.8**
+    """
+    ec2_client = Mock()
+
+    # No instances found
+    ec2_client.describe_instances.return_value = {"Reservations": []}
+
+    ami_build_result = {"ami_id": ami_id, "snapshot_id": snapshot_id}
+
+    with patch.object(cleanup.logger, "info") as mock_info, \
+         patch.object(cleanup.logger, "warning"):
+        cleanup.verify_cleanup(ec2_client, ami_build_result, keep_ami=True)
+
+    info_messages = " ".join(str(c) for c in mock_info.call_args_list)
+
+    # Should NOT have called describe_images or describe_snapshots
+    ec2_client.describe_images.assert_not_called()
+    ec2_client.describe_snapshots.assert_not_called()
+
+    # Should log preservation message
+    assert "No remaining resources found" in info_messages, (
+        f"Expected 'No remaining resources found' in info logs, got: {info_messages}"
+    )
+    assert "intentionally preserved" in info_messages, (
+        f"Expected 'intentionally preserved' in info logs, got: {info_messages}"
+    )
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    ami_id=ami_id_strategy(),
+    snapshot_id=snapshot_id_strategy(),
+    instance_ids=st.lists(instance_id_strategy(), min_size=1, max_size=3),
+    instance_states=st.lists(instance_state_strategy(), min_size=1, max_size=3),
+)
+def test_property_93_verify_cleanup_keep_ami_still_reports_instances(
+    ami_id, snapshot_id, instance_ids, instance_states,
+):
+    """
+    Property 93: Cleanup Resource Verification and Reporting (keep_ami=True with instances)
+
+    When keep_ami is True but EC2 instances remain, verify_cleanup should still
+    report those instances while excluding AMI and snapshot from checks.
+
+    **Validates: Requirements 31.2, 31.3, 31.4, 31.8**
+    """
+    pairs = list(zip(instance_ids, instance_states))
+
+    ec2_client = Mock()
+
+    instances = [
+        {"InstanceId": iid, "State": {"Name": state}}
+        for iid, state in pairs
+    ]
+    ec2_client.describe_instances.return_value = {
+        "Reservations": [{"Instances": instances}]
+    }
+
+    ami_build_result = {"ami_id": ami_id, "snapshot_id": snapshot_id}
+
+    with patch.object(cleanup.logger, "warning") as mock_warning, \
+         patch.object(cleanup.logger, "info"):
+        cleanup.verify_cleanup(ec2_client, ami_build_result, keep_ami=True)
+
+    warning_messages = " ".join(str(c) for c in mock_warning.call_args_list)
+
+    # Should NOT have called describe_images or describe_snapshots
+    ec2_client.describe_images.assert_not_called()
+    ec2_client.describe_snapshots.assert_not_called()
+
+    # Each instance should still be reported
+    for iid, state in pairs:
+        assert iid in warning_messages, (
+            f"Expected instance ID {iid} in warnings, got: {warning_messages}"
+        )
+
+    # Count should only include instances (not AMI/snapshot)
+    assert str(len(pairs)) in warning_messages, (
+        f"Expected count {len(pairs)} in warnings, got: {warning_messages}"
+    )
+
+
 # --- Property 94: Cleanup Exit Code Correctness ---
 
 
@@ -764,6 +899,7 @@ def test_property_94_main_returns_0_when_all_steps_succeed(ami_id, snapshot_id, 
         mock_args = Mock()
         mock_args.ami_build_result = tmp_file
         mock_args.terraform_dir = "terraform/deploy"
+        mock_args.keep_ami = False
 
         mock_ec2_client = Mock()
 
@@ -819,6 +955,7 @@ def test_property_94_main_returns_1_when_exception_raised(ami_id, snapshot_id, r
         mock_args = Mock()
         mock_args.ami_build_result = tmp_file
         mock_args.terraform_dir = "terraform/deploy"
+        mock_args.keep_ami = False
 
         with patch.object(cleanup, 'parse_arguments', return_value=mock_args), \
              patch('builtins.input', return_value='yes'), \
@@ -832,3 +969,68 @@ def test_property_94_main_returns_1_when_exception_raised(ami_id, snapshot_id, r
     finally:
         if tmp_file and os.path.exists(tmp_file):
             os.unlink(tmp_file)
+
+
+# --- Property 95: Keep-AMI Controls Deregistration ---
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    ami_id=ami_id_strategy(),
+    snapshot_id=snapshot_id_strategy(),
+)
+def test_property_95_keep_ami_true_makes_zero_api_calls(ami_id, snapshot_id):
+    """
+    Property 95: Keep-AMI Controls Deregistration (keep_ami=True)
+
+    For any AMI ID and snapshot ID, calling deregister_ami with keep_ami=True
+    should result in zero AWS API calls for deregistration or snapshot deletion.
+
+    **Validates: Requirements 30.2, 30.4, 30.8, 30.9**
+    """
+    ec2_client = Mock()
+
+    cleanup.deregister_ami(ec2_client, ami_id, snapshot_id, keep_ami=True)
+
+    # No AWS API calls should be made
+    ec2_client.describe_images.assert_not_called()
+    ec2_client.deregister_image.assert_not_called()
+    ec2_client.describe_snapshots.assert_not_called()
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    ami_id=ami_id_strategy(),
+    snapshot_id=snapshot_id_strategy(),
+)
+def test_property_95_keep_ami_false_proceeds_with_deregistration(ami_id, snapshot_id):
+    """
+    Property 95: Keep-AMI Controls Deregistration (keep_ami=False)
+
+    For any AMI ID and snapshot ID, calling deregister_ami with keep_ami=False
+    should proceed with the normal deregistration flow (check existence, deregister, verify).
+
+    **Validates: Requirements 30.2, 30.4, 30.8, 30.9**
+    """
+    ec2_client = Mock()
+
+    # AMI exists, then deregistration verified
+    ec2_client.describe_images.side_effect = [
+        {"Images": [{"ImageId": ami_id}]},
+        _make_client_error("InvalidAMIID.NotFound"),
+    ]
+    ec2_client.describe_snapshots.side_effect = _make_client_error(
+        "InvalidSnapshot.NotFound"
+    )
+
+    with patch("time.sleep"):
+        cleanup.deregister_ami(ec2_client, ami_id, snapshot_id, keep_ami=False)
+
+    # Should have called deregister_image
+    ec2_client.deregister_image.assert_called_once_with(
+        ImageId=ami_id, DeleteAssociatedSnapshots=True
+    )
+    # Should have called describe_images (existence check + verification)
+    assert ec2_client.describe_images.call_count == 2
+    # Should have called describe_snapshots for verification
+    ec2_client.describe_snapshots.assert_called_once_with(SnapshotIds=[snapshot_id])
