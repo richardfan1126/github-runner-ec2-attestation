@@ -41,6 +41,19 @@ class ContextFilter(logging.Filter):
 _context_filter = ContextFilter()
 
 
+class SafeContextFormatter(logging.Formatter):
+    """Formatter that injects default values for missing context fields,
+    preventing KeyError when a log record is emitted without the filter."""
+
+    DEFAULTS = {'execution_id': '-', 'request_id': '-'}
+
+    def format(self, record):
+        for key, default in self.DEFAULTS.items():
+            if not hasattr(record, key):
+                setattr(record, key, default)
+        return super().format(record)
+
+
 def setup_logging(
     log_level: str = "INFO",
     log_dir: Optional[str] = None,
@@ -64,7 +77,7 @@ def setup_logging(
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     
     # Create formatter with ISO 8601 timestamp and context
-    formatter = logging.Formatter(
+    formatter = SafeContextFormatter(
         fmt='%(asctime)s - %(name)s - %(levelname)s - [execution_id=%(execution_id)s request_id=%(request_id)s] - %(message)s',
         datefmt='%Y-%m-%dT%H:%M:%S%z'
     )
