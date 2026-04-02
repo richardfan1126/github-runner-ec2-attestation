@@ -541,3 +541,25 @@ class TestWorkflowValidation:
         # non-empty before invoking the script. The script itself should still
         # fail when it tries to connect to an empty URL.
         assert result.returncode != 0
+
+    def test_workflow_contains_id_token_write_permission(self):
+        """Workflow YAML must declare id-token: write permission for OIDC.
+        Validates: Requirement 9.1"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        permissions = workflow.get("permissions", {})
+        assert permissions.get("id-token") == "write", (
+            "Workflow must declare 'id-token: write' in permissions"
+        )
+
+    def test_workflow_contains_audience_input(self):
+        """Workflow YAML must accept an 'audience' input for OIDC token request.
+        Validates: Requirement 9.2"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        # yaml.safe_load parses the YAML key 'on' as boolean True
+        on_block = workflow.get("on") or workflow.get(True, {})
+        inputs = on_block.get("workflow_dispatch", {}).get("inputs", {})
+        assert "audience" in inputs, (
+            "Workflow must define an 'audience' input under workflow_dispatch"
+        )

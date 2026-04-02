@@ -353,18 +353,18 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Add `--audience ${{ inputs.audience }}` to the caller script invocation step
     - _Requirements: 9.2_
 
-- [ ] 18. Update CLI entry point
-  - [ ] 18.1 Add `--audience` argument to argparse
+- [x] 18. Update CLI entry point
+  - [x] 18.1 Add `--audience` argument to argparse
     - Add `--audience` optional argument with default empty string
     - Pass `audience` value to `RemoteExecutorCaller` constructor
     - _Requirements: 9.2_
 
-  - [ ] 18.2 Write unit tests for workflow OIDC configuration
+  - [x] 18.2 Write unit tests for workflow OIDC configuration
     - Test workflow YAML contains `id-token: write` permission (Req 9.1)
     - Test workflow YAML contains `audience` input (Req 9.2)
     - _Requirements: 9.1, 9.2_
 
-- [ ] 19. Final checkpoint - Ensure all OIDC tests pass
+- [x] 19. Final checkpoint - Ensure all OIDC tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
