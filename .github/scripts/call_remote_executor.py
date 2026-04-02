@@ -61,6 +61,7 @@ class RemoteExecutorCaller:
         max_retries: int = 3,
         root_cert_pem: str = "",
         expected_pcrs: dict[int, str] | None = None,
+        audience: str = "",
     ):
         self.server_url = server_url.rstrip("/")
         self.timeout = timeout
@@ -69,6 +70,63 @@ class RemoteExecutorCaller:
         self.max_retries = max_retries
         self.root_cert_pem = root_cert_pem
         self.expected_pcrs = expected_pcrs
+        self.audience = audience
+        self._oidc_token: str | None = None
+
+    def request_oidc_token(self) -> str:
+        """Request an OIDC token from GitHub's OIDC provider.
+
+        Reads ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN
+        from environment variables. Makes an HTTP GET to the request URL with
+        the audience query parameter and Bearer authorization header.
+
+        Returns the OIDC JWT token string.
+        Raises CallerError(phase="oidc") if env vars are missing or request fails.
+        """
+        request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+        request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+
+        if not request_url or not request_token:
+            raise CallerError(
+                message="OIDC token request requires id-token: write permission in the workflow",
+                phase="oidc",
+                details={
+                    "ACTIONS_ID_TOKEN_REQUEST_URL": "set" if request_url else "missing",
+                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "set" if request_token else "missing",
+                },
+            )
+
+        url = f"{request_url}?audience={self.audience}" if self.audience else request_url
+        headers = {"Authorization": f"Bearer {request_token}"}
+
+        try:
+            response = requests.get(url, headers=headers, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise CallerError(
+                message=f"OIDC token request failed: {exc}",
+                phase="oidc",
+                details={"error": str(exc)},
+            )
+
+        if response.status_code != 200:
+            raise CallerError(
+                message=f"OIDC token request failed with HTTP {response.status_code}",
+                phase="oidc",
+                details={"status_code": response.status_code, "body": response.text},
+            )
+
+        try:
+            token = response.json()["value"]
+        except (KeyError, ValueError) as exc:
+            raise CallerError(
+                message=f"OIDC token response missing 'value' field: {exc}",
+                phase="oidc",
+                details={"error": str(exc)},
+            )
+
+        self._oidc_token = token
+        logger.info("OIDC token acquired successfully")
+        return token
 
     def health_check(self) -> dict:
         """GET /health - verify server is healthy.
@@ -131,8 +189,11 @@ class RemoteExecutorCaller:
             "script_path": script_path,
             "github_token": github_token,
         }
+        headers = {}
+        if self._oidc_token:
+            headers["Authorization"] = f"Bearer {self._oidc_token}"
         try:
-            response = requests.post(url, json=payload, timeout=self.timeout)
+            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
         except requests.ConnectionError as exc:
             raise CallerError(
                 message=f"Failed to connect to server execute endpoint: {exc}",
@@ -146,6 +207,18 @@ class RemoteExecutorCaller:
                 details={"url": url, "error": str(exc)},
             )
 
+        if response.status_code == 401:
+            raise CallerError(
+                message="Authentication failure: server returned HTTP 401 Unauthorized",
+                phase="execute",
+                details={"status_code": 401, "body": response.text},
+            )
+        if response.status_code == 403:
+            raise CallerError(
+                message="Repository is not authorized: server returned HTTP 403 Forbidden",
+                phase="execute",
+                details={"status_code": 403, "body": response.text},
+            )
         if response.status_code != 200:
             raise CallerError(
                 message=f"Execute failed with HTTP {response.status_code}",
@@ -382,6 +455,9 @@ class RemoteExecutorCaller:
         consecutive_errors = 0
         prev_stdout_offset = 0
         prev_stderr_offset = 0
+        headers = {}
+        if self._oidc_token:
+            headers["Authorization"] = f"Bearer {self._oidc_token}"
 
         while True:
             elapsed = time.monotonic() - start_time
@@ -393,7 +469,7 @@ class RemoteExecutorCaller:
                 )
 
             try:
-                response = requests.get(url, timeout=self.timeout)
+                response = requests.get(url, headers=headers, timeout=self.timeout)
             except requests.RequestException as exc:
                 consecutive_errors += 1
                 if consecutive_errors >= self.max_retries:
@@ -405,6 +481,19 @@ class RemoteExecutorCaller:
                 logger.warning("Poll request error (%d/%d): %s", consecutive_errors, self.max_retries, exc)
                 time.sleep(self.poll_interval)
                 continue
+
+            if response.status_code == 401:
+                raise CallerError(
+                    message="Authentication failure: server returned HTTP 401 Unauthorized",
+                    phase="polling",
+                    details={"status_code": 401, "body": response.text},
+                )
+            if response.status_code == 403:
+                raise CallerError(
+                    message="Repository is not authorized: server returned HTTP 403 Forbidden",
+                    phase="polling",
+                    details={"status_code": 403, "body": response.text},
+                )
 
             if response.status_code != 200:
                 consecutive_errors += 1
@@ -596,6 +685,11 @@ class RemoteExecutorCaller:
         self.health_check()
         logger.info("Server is healthy")
 
+        # Acquire OIDC token
+        logger.info("Requesting OIDC token...")
+        self.request_oidc_token()
+        logger.info("OIDC token acquired")
+
         # Execute
         logger.info("Submitting execution request...")
         exec_response = self.execute(repository_url, commit_hash, script_path, github_token)
@@ -650,6 +744,7 @@ def main():
     parser.add_argument("--github-token", default="", help="GitHub token for authentication")
     parser.add_argument("--root-cert-pem", required=True, help="AWS NitroTPM attestation root CA certificate PEM string")
     parser.add_argument("--expected-pcrs", required=True, help="JSON string mapping PCR index to expected hex value")
+    parser.add_argument("--audience", default="", help="Audience value for OIDC token request")
 
     args = parser.parse_args()
 
@@ -674,6 +769,7 @@ def main():
         max_retries=max_retries,
         root_cert_pem=args.root_cert_pem,
         expected_pcrs=expected_pcrs,
+        audience=args.audience,
     )
 
     try:

@@ -741,7 +741,8 @@ class TestExitCodePropagation:
         with patch("call_remote_executor.requests.get", side_effect=[health_response, poll_response]):
             with patch("call_remote_executor.requests.post", return_value=exec_response):
                 with patch.object(caller, "validate_attestation", return_value={}):
-                    result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+                    with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                        result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
 
         assert result == exit_code
 
@@ -795,7 +796,8 @@ class TestSummaryContainsExecutionResults:
         with patch("call_remote_executor.requests.get", side_effect=[health_response, poll_response]):
             with patch("call_remote_executor.requests.post", return_value=exec_response):
                 with patch.object(caller, "validate_attestation", return_value={}):
-                    caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+                    with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                        caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
 
         summary = caller.summary
         assert stdout_val in summary

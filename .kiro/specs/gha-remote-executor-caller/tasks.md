@@ -239,14 +239,14 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 11. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 12. Add OIDC support to RemoteExecutorCaller
-  - [ ] 12.1 Update `RemoteExecutorCaller.__init__` to accept `audience` parameter
+- [x] 12. Add OIDC support to RemoteExecutorCaller
+  - [x] 12.1 Update `RemoteExecutorCaller.__init__` to accept `audience` parameter
     - Add `audience: str = ""` parameter to `__init__`
     - Store as `self.audience` instance attribute
     - Initialize `self._oidc_token: str | None = None` for storing the acquired token
     - _Requirements: 9.2, 9.4_
 
-  - [ ] 12.2 Implement `request_oidc_token` method
+  - [x] 12.2 Implement `request_oidc_token` method
     - Read `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` from environment variables
     - If either is missing, raise `CallerError(phase="oidc")` with message indicating `id-token: write` permission is required
     - Make HTTP GET to `{ACTIONS_ID_TOKEN_REQUEST_URL}?audience={self.audience}` with header `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}`
@@ -256,28 +256,28 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Raise `CallerError(phase="oidc")` on HTTP errors or connection failures
     - _Requirements: 9.3, 9.4, 9.5, 9.6, 9.7_
 
-  - [ ] 12.3 Update `execute` method to include Authorization header
+  - [x] 12.3 Update `execute` method to include Authorization header
     - Add `Authorization: Bearer {self._oidc_token}` header to the POST /execute request
     - Handle HTTP 401 response: raise `CallerError(phase="execute")` with authentication failure message
     - Handle HTTP 403 response: raise `CallerError(phase="execute")` with repository not authorized message
     - _Requirements: 10.1, 10.4, 10.5_
 
-  - [ ] 12.4 Update `poll_output` method to include Authorization header
+  - [x] 12.4 Update `poll_output` method to include Authorization header
     - Add `Authorization: Bearer {self._oidc_token}` header to GET /execution/{id}/output requests
     - Handle HTTP 401 response: raise `CallerError(phase="polling")` with authentication failure message (no retry)
     - Handle HTTP 403 response: raise `CallerError(phase="polling")` with repository not authorized message (no retry)
     - _Requirements: 10.2, 10.4, 10.5_
 
-  - [ ] 12.5 Ensure `health_check` does NOT include Authorization header
+  - [x] 12.5 Ensure `health_check` does NOT include Authorization header
     - Verify that the GET /health request does not include an Authorization header regardless of whether `_oidc_token` is set
     - _Requirements: 10.3_
 
-  - [ ] 12.6 Update `run` method to call `request_oidc_token` after `health_check`
+  - [x] 12.6 Update `run` method to call `request_oidc_token` after `health_check`
     - Insert `request_oidc_token()` call between `health_check()` and `execute()` in the orchestration flow
     - Flow becomes: health_check → request_oidc_token → execute → validate_attestation → poll_output → validate_output_attestation
     - _Requirements: 9.3, 9.7_
 
-  - [ ] 12.7 Update `__main__` CLI entry point for OIDC
+  - [x] 12.7 Update `__main__` CLI entry point for OIDC
     - Add `--audience` argument to argparse (optional, default empty string)
     - Pass `audience` to `RemoteExecutorCaller.__init__`
     - _Requirements: 9.2_
