@@ -1698,26 +1698,26 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Include descriptive echo statements for build audit trail
     - _Requirements: 34.4, 34.5, 34.7_
 
-- [ ] 78. Write property tests for Container Image pre-pull
-  - [ ] 78.1 Write property test for Container Image Pre-Pull Round-Trip
+- [x] 78. Write property tests for Container Image pre-pull
+  - [x] 78.1 Write property test for Container Image Pre-Pull Round-Trip
     - **Property 118: Container Image Pre-Pull Round-Trip**
     - Verify that for any configured Container_Image name, the build process pulls the image, exports it as a tar, copies it into the KIWI build context, and loads it in config.sh — resulting in the image being available in the local Docker store
     - Test by parsing `build-kiwi-image.sh` for `docker pull` and `docker save` commands referencing the CONTAINER_IMAGE variable, and parsing `config.sh` for `docker load -i /tmp/kiwi-build/container-image.tar`
     - **Validates: Requirements 34.1, 34.2, 34.3, 34.4, 34.5**
 
-  - [ ] 78.2 Write property test for Container Image Pull Failure Halts Build
+  - [x] 78.2 Write property test for Container Image Pull Failure Halts Build
     - **Property 119: Container Image Pull Failure Halts Build**
     - Verify that if `docker pull` fails in `build-kiwi-image.sh`, the script exits with a non-zero exit code and a descriptive error message
     - Parse `build-kiwi-image.sh` for error handling around the `docker pull` command (e.g., `if ! docker pull` pattern with `exit 1`)
     - **Validates: Requirements 34.6**
 
-  - [ ] 78.3 Write property test for Container Image Load Failure Halts Build
+  - [x] 78.3 Write property test for Container Image Load Failure Halts Build
     - **Property 120: Container Image Load Failure Halts Build**
     - Verify that if `docker load` fails in `config.sh`, the script exits with a non-zero exit code and a descriptive error message
     - Parse `config.sh` for error handling around the `docker load` command (e.g., `if ! docker load` pattern with `exit 1`)
     - **Validates: Requirements 34.7**
 
-- [ ] 79. Final checkpoint - Ensure all Docker daemon and container image pre-pull tests pass
+- [x] 79. Final checkpoint - Ensure all Docker daemon and container image pre-pull tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
