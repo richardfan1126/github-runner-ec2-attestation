@@ -1749,22 +1749,22 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - This places the pull at step 4 in the startup sequence: config → Docker daemon → dangling cleanup → **pull image** → start accepting requests
     - _Requirements: 34.1, 34.2, 34.4_
 
-- [ ] 82. Update property tests for server-startup container image pull
-  - [ ] 82.1 Rewrite property test for Container Image Pull at Server Startup
+- [x] 82. Update property tests for server-startup container image pull
+  - [x] 82.1 Rewrite property test for Container Image Pull at Server Startup
     - **Property 118: Container Image Pull at Server Startup**
     - For any configured Container_Image name, verify the GHA_Server pulls the image from the container registry at startup and verifies it is available in the local Docker image store before accepting requests
     - Mock the Docker SDK client: `images.get()` raises `ImageNotFound` (image not present), then `images.pull()` succeeds, then `images.get()` succeeds
     - Verify `pull_container_image()` calls pull and verify in the correct order
     - **Validates: Requirements 34.1, 34.2, 34.3**
 
-  - [ ] 82.2 Rewrite property test for Container Image Pull Failure Halts Startup
+  - [x] 82.2 Rewrite property test for Container Image Pull Failure Halts Startup
     - **Property 119: Container Image Pull Failure Halts Startup**
     - For any Container_Image name that cannot be pulled (network error, image not found, authentication failure), verify the GHA_Server fails to start with a descriptive error message indicating the image name and failure reason
     - Mock the Docker SDK client: `images.get()` raises `ImageNotFound`, then `images.pull()` raises an exception
     - Verify `pull_container_image()` raises an exception with the image name in the error message
     - **Validates: Requirements 34.4**
 
-  - [ ] 82.3 Rewrite property test for Container Image Skip Pull When Already Present
+  - [x] 82.3 Rewrite property test for Container Image Skip Pull When Already Present
     - **Property 120: Container Image Skip Pull When Already Present**
     - For any Container_Image that is already present in the local Docker image store, verify the GHA_Server skips pulling from the registry and uses the existing image
     - Mock the Docker SDK client: `images.get()` succeeds (image already present)

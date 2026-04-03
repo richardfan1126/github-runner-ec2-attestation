@@ -1,164 +1,136 @@
 """
-Property-based tests for Container Image pre-pull in the KIWI build process.
+Property-based tests for Container Image pull at server startup.
 
-These tests validate that the build pipeline correctly pulls a container image,
-exports it as a tar archive, copies it into the KIWI build context, and loads
-it during config.sh — ensuring the image is available in the local Docker store
-at runtime.
+These tests validate that the GHA_Server pulls the configured Container_Image
+from the container registry at startup, verifies it is available in the local
+Docker image store, and handles failure cases correctly.
 """
 
-import re
-from pathlib import Path
+from unittest.mock import MagicMock, PropertyMock, call
 
+import docker.errors
 import pytest
+from hypothesis import given, strategies as st, settings
+
+from src.script_executor import ScriptExecutor
 
 
-def test_container_image_prepull_round_trip():
+# Strategy for generating valid Docker image names
+image_name_st = st.from_regex(r"[a-z][a-z0-9_\-]{2,30}(/[a-z][a-z0-9_\-]{2,30})?(:[a-z0-9][a-z0-9.\-]{0,20})?", fullmatch=True)
+
+
+@given(image_name=image_name_st)
+@settings(max_examples=50)
+def test_container_image_pull_at_server_startup(image_name: str):
     """
-    Property 118: Container Image Pre-Pull Round-Trip
+    Property 118: Container Image Pull at Server Startup
 
-    For any configured Container_Image name, the build process pulls the image,
-    exports it as a tar, copies it into the KIWI build context, and loads it
-    in config.sh — resulting in the image being available in the local Docker
-    store.
+    For any configured Container_Image name, verify the GHA_Server pulls the
+    image from the container registry at startup and verifies it is available
+    in the local Docker image store before accepting requests.
 
-    Verifies by parsing build-kiwi-image.sh for `docker pull` and `docker save`
-    commands referencing the CONTAINER_IMAGE variable, and parsing config.sh for
-    `docker load -i /tmp/kiwi-build/container-image.tar`.
+    Mock the Docker SDK client: images.get() raises ImageNotFound (image not
+    present), then images.pull() succeeds, then images.get() succeeds.
 
-    **Validates: Requirements 34.1, 34.2, 34.3, 34.4, 34.5**
+    **Validates: Requirements 34.1, 34.2, 34.3**
     """
-    build_script = Path(".github/scripts/build-kiwi-image.sh")
-    config_script = Path("kiwi-descriptions/config.sh")
+    mock_client = MagicMock()
 
-    assert build_script.exists(), "build-kiwi-image.sh must exist"
-    assert config_script.exists(), "config.sh must exist"
+    # First images.get() raises ImageNotFound (not present locally)
+    # Second images.get() succeeds (available after pull)
+    mock_image = MagicMock()
+    mock_image.attrs = {"Size": 150_000_000}
+    mock_client.images.get.side_effect = [
+        docker.errors.ImageNotFound(f"Image {image_name} not found"),
+        mock_image,
+    ]
+    mock_client.images.pull.return_value = mock_image
 
-    build_content = build_script.read_text()
-    config_content = config_script.read_text()
-
-    # 1. build-kiwi-image.sh reads CONTAINER_IMAGE from the env file
-    assert "CONTAINER_IMAGE" in build_content, (
-        "build-kiwi-image.sh must reference CONTAINER_IMAGE variable"
+    executor = ScriptExecutor(
+        docker_client=mock_client,
+        container_image=image_name,
     )
 
-    # 2. build-kiwi-image.sh pulls the container image
-    assert re.search(r'docker\s+pull\s+.*CONTAINER_IMAGE', build_content), (
-        "build-kiwi-image.sh must contain a 'docker pull' command "
-        "referencing the CONTAINER_IMAGE variable"
-    )
+    executor.pull_container_image()
 
-    # 3. build-kiwi-image.sh exports the image as a tar archive via docker save
-    assert re.search(r'docker\s+save\s+.*CONTAINER_IMAGE', build_content), (
-        "build-kiwi-image.sh must contain a 'docker save' command "
-        "referencing the CONTAINER_IMAGE variable"
-    )
+    # Verify pull was called with the image name
+    mock_client.images.pull.assert_called_once_with(image_name)
 
-    # 4. The tar is placed at the expected path inside the build context
-    assert "container-image.tar" in build_content, (
-        "build-kiwi-image.sh must reference container-image.tar"
-    )
-
-    # 5. config.sh loads the image from the tar archive
-    assert re.search(
-        r'docker\s+load\s+-i\s+/tmp/kiwi-build/container-image\.tar',
-        config_content,
-    ), (
-        "config.sh must contain 'docker load -i /tmp/kiwi-build/container-image.tar'"
-    )
+    # Verify images.get was called twice: once to check, once to verify after pull
+    assert mock_client.images.get.call_count == 2
+    mock_client.images.get.assert_any_call(image_name)
 
 
-def test_container_image_pull_failure_halts_build():
+@given(image_name=image_name_st)
+@settings(max_examples=50)
+def test_container_image_pull_failure_halts_startup(image_name: str):
     """
-    Property 119: Container Image Pull Failure Halts Build
+    Property 119: Container Image Pull Failure Halts Startup
 
-    If `docker pull` fails in build-kiwi-image.sh, the script must exit with
-    a non-zero exit code and a descriptive error message.
+    For any Container_Image name that cannot be pulled (network error, image
+    not found, authentication failure), verify the GHA_Server fails to start
+    with a descriptive error message indicating the image name and failure
+    reason.
 
-    Parses build-kiwi-image.sh for error handling around the `docker pull`
-    command (e.g., `if ! docker pull` pattern with `exit 1`).
+    Mock the Docker SDK client: images.get() raises ImageNotFound, then
+    images.pull() raises an exception.
 
-    **Validates: Requirements 34.6**
+    **Validates: Requirements 34.4**
     """
-    build_script = Path(".github/scripts/build-kiwi-image.sh")
-    assert build_script.exists(), "build-kiwi-image.sh must exist"
+    mock_client = MagicMock()
 
-    content = build_script.read_text()
-
-    # The script must use an error-handling pattern around docker pull.
-    # Expected pattern: `if ! docker pull ...; then ... exit 1 ... fi`
-    assert re.search(
-        r'if\s+!\s+docker\s+pull\b', content
-    ), (
-        "build-kiwi-image.sh must guard 'docker pull' with an "
-        "'if ! docker pull' error-handling pattern"
+    # images.get() raises ImageNotFound (not present locally)
+    mock_client.images.get.side_effect = docker.errors.ImageNotFound(
+        f"Image {image_name} not found"
     )
 
-    # There must be an exit 1 associated with the pull failure path
-    # Find the block between `if ! docker pull` and the next `fi`
-    pull_block = re.search(
-        r'if\s+!\s+docker\s+pull\b.*?fi',
-        content,
-        re.DOTALL,
-    )
-    assert pull_block is not None, (
-        "build-kiwi-image.sh must have a complete if/fi block around docker pull"
+    # images.pull() raises an error (network, auth, not found, etc.)
+    mock_client.images.pull.side_effect = docker.errors.ImageNotFound(
+        f"pull access denied for {image_name}"
     )
 
-    block_text = pull_block.group(0)
-    assert "exit 1" in block_text, (
-        "The docker pull error-handling block must contain 'exit 1'"
+    executor = ScriptExecutor(
+        docker_client=mock_client,
+        container_image=image_name,
     )
 
-    # A descriptive error message should be present
-    assert re.search(r'(echo|::error)', block_text), (
-        "The docker pull error-handling block must include a descriptive "
-        "error message (echo or ::error)"
-    )
+    with pytest.raises(RuntimeError) as exc_info:
+        executor.pull_container_image()
+
+    # Error message must include the image name
+    assert image_name in str(exc_info.value)
 
 
-def test_container_image_load_failure_halts_build():
+@given(image_name=image_name_st)
+@settings(max_examples=50)
+def test_container_image_skip_pull_when_already_present(image_name: str):
     """
-    Property 120: Container Image Load Failure Halts Build
+    Property 120: Container Image Skip Pull When Already Present
 
-    If `docker load` fails in config.sh, the script must exit with a non-zero
-    exit code and a descriptive error message.
+    For any Container_Image that is already present in the local Docker image
+    store, verify the GHA_Server skips pulling from the registry and uses the
+    existing image.
 
-    Parses config.sh for error handling around the `docker load` command
-    (e.g., `if ! docker load` pattern with `exit 1`).
+    Mock the Docker SDK client: images.get() succeeds (image already present).
+    Verify images.pull() is NOT called.
 
-    **Validates: Requirements 34.7**
+    **Validates: Requirements 34.5**
     """
-    config_script = Path("kiwi-descriptions/config.sh")
-    assert config_script.exists(), "config.sh must exist"
+    mock_client = MagicMock()
 
-    content = config_script.read_text()
+    # images.get() succeeds — image is already present
+    mock_image = MagicMock()
+    mock_client.images.get.return_value = mock_image
 
-    # The script must use an error-handling pattern around docker load.
-    assert re.search(
-        r'if\s+!\s+docker\s+load\b', content
-    ), (
-        "config.sh must guard 'docker load' with an "
-        "'if ! docker load' error-handling pattern"
+    executor = ScriptExecutor(
+        docker_client=mock_client,
+        container_image=image_name,
     )
 
-    # Find the block between `if ! docker load` and the next `fi`
-    load_block = re.search(
-        r'if\s+!\s+docker\s+load\b.*?fi',
-        content,
-        re.DOTALL,
-    )
-    assert load_block is not None, (
-        "config.sh must have a complete if/fi block around docker load"
-    )
+    executor.pull_container_image()
 
-    block_text = load_block.group(0)
-    assert "exit 1" in block_text, (
-        "The docker load error-handling block must contain 'exit 1'"
-    )
+    # Verify images.get was called to check
+    mock_client.images.get.assert_called_once_with(image_name)
 
-    # A descriptive error message should be present
-    assert re.search(r'(echo|ERROR)', block_text), (
-        "The docker load error-handling block must include a descriptive "
-        "error message"
-    )
+    # Verify pull was NOT called
+    mock_client.images.pull.assert_not_called()
