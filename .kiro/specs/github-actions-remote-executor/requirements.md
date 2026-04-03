@@ -67,6 +67,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **GHCR**: GitHub Container Registry where artifacts are stored
 - **Coldsnap**: AWS tool for uploading raw disk images to EBS snapshots
 - **Build_Instance**: Temporary EC2 instance used to convert KIWI image to AMI
+- **Docker_Daemon**: The Docker Engine service (dockerd) that must be installed and enabled in the KIWI image to support creation and management of Execution_Containers at runtime
 
 ## Requirements
 
@@ -459,6 +460,31 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE AMI_Converter SHALL perform cleanup in a finally block to ensure execution even if AMI creation fails
 13. IF cleanup fails, THEN THE AMI_Converter SHALL log cleanup errors but not fail the overall process
 14. THE AMI_Converter SHALL log all cleanup operations including infrastructure destruction and key deletion
+
+### Requirement 33: Docker Daemon Provisioning in KIWI Image
+
+**User Story:** As a DevOps engineer, I want the KIWI image to include Docker with the daemon enabled, so that the Remote Executor can create and manage Execution_Containers at runtime without additional provisioning
+
+#### Acceptance Criteria
+
+1. THE appliance.kiwi package definition SHALL include the docker package in the image packages list
+2. THE config.sh configuration script SHALL enable the docker service using systemctl enable during image creation
+3. WHEN the KIWI image boots, THE Docker daemon SHALL be running and accessible to the Script_Executor
+4. IF the docker package is not present in appliance.kiwi, THEN THE KIWI_Builder SHALL fail to produce an image capable of running Execution_Containers
+
+### Requirement 34: Pre-Pull Container Image During KIWI Image Build
+
+**User Story:** As a DevOps engineer, I want the Container_Image pre-pulled into the KIWI image during the build process, so that Execution_Containers can be created immediately at runtime without requiring network access to a container registry
+
+#### Acceptance Criteria
+
+1. THE build-kiwi-image.sh script SHALL pull the configured Container_Image using docker pull during the build phase (which has network access)
+2. THE build-kiwi-image.sh script SHALL export the pulled Container_Image as a tar archive using docker save
+3. THE build-kiwi-image.sh script SHALL copy the exported Container_Image tar archive into the KIWI image build context
+4. THE config.sh configuration script SHALL load the Container_Image tar archive into the local Docker image store using docker load during image creation
+5. WHEN the KIWI image boots, THE Container_Image SHALL be available in the local Docker image store without requiring a registry pull
+6. IF the Container_Image pull fails during the build phase, THEN THE build-kiwi-image.sh script SHALL fail with a descriptive error message
+7. IF the Container_Image load fails during KIWI image creation, THEN THE config.sh script SHALL fail with a descriptive error message
 
 ## Deployment Requirements
 

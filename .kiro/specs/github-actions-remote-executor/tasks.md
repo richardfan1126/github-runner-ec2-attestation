@@ -1646,11 +1646,85 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 73. Final checkpoint - Ensure all Docker container tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 74. Add Docker package to KIWI image and enable Docker service
+  - [ ] 74.1 Add docker package to appliance.kiwi
+    - Add `<package name="docker"/>` to the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
+    - Place it alongside existing packages (e.g., after `python3.11-pip`)
+    - _Requirements: 33.1, 33.4_
+
+  - [ ] 74.2 Enable Docker service in config.sh
+    - Add a `systemctl enable docker` block to `kiwi-descriptions/config.sh`
+    - Place it after the existing `systemctl enable github-actions-remote-executor.service` line and before the conditional SSH block
+    - Include descriptive echo statements for build audit trail
+    - _Requirements: 33.2, 33.3_
+
+  - [ ] 74.3 Write property test for Docker Package Inclusion
+    - **Property 116: Docker Package Inclusion in KIWI Image**
+    - Parse `kiwi-descriptions/appliance.kiwi` XML and verify the `docker` package is listed in the `<packages type="image">` section
+    - **Validates: Requirements 33.1**
+
+  - [ ] 74.4 Write property test for Docker Service Enablement
+    - **Property 117: Docker Service Enablement**
+    - Parse `kiwi-descriptions/config.sh` and verify it contains `systemctl enable docker`
+    - **Validates: Requirements 33.2**
+
+- [ ] 75. Checkpoint - Ensure Docker daemon provisioning tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 76. Pre-pull Container Image in build-kiwi-image.sh
+  - [ ] 76.1 Read CONTAINER_IMAGE from env file in build-kiwi-image.sh
+    - Extract the `CONTAINER_IMAGE` variable from `kiwi-descriptions/root/etc/github-actions-remote-executor/env` (currently `python:3.11-slim`)
+    - Use grep/sed to parse the value from the env file
+    - Fail with a descriptive error if `CONTAINER_IMAGE` is not set or empty
+    - _Requirements: 34.1_
+
+  - [ ] 76.2 Pull and export Container Image in build-kiwi-image.sh
+    - After the Python dependency wheel download section and before the KIWI Docker build step, add a new section to:
+      1. Pull the Container_Image using `docker pull "${CONTAINER_IMAGE}"`
+      2. Export the pulled image as a tar archive using `docker save "${CONTAINER_IMAGE}" -o "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/container-image.tar"`
+      3. Ensure the target directory exists with `mkdir -p`
+    - If `docker pull` fails, exit with `::error::` and non-zero exit code
+    - If `docker save` fails, exit with `::error::` and non-zero exit code
+    - Include descriptive echo statements for build audit trail
+    - _Requirements: 34.1, 34.2, 34.3, 34.6_
+
+- [ ] 77. Load Container Image in config.sh
+  - [ ] 77.1 Add container image load block to config.sh
+    - Add a new section to `kiwi-descriptions/config.sh` after the Docker service enablement block and before the Python dependency installation section
+    - Verify the container image tar exists at `/tmp/kiwi-build/container-image.tar`
+    - Load the image using `docker load -i /tmp/kiwi-build/container-image.tar`
+    - If the tar file is missing, fail with a descriptive error and `exit 1`
+    - If `docker load` fails, fail with a descriptive error and `exit 1`
+    - Include descriptive echo statements for build audit trail
+    - _Requirements: 34.4, 34.5, 34.7_
+
+- [ ] 78. Write property tests for Container Image pre-pull
+  - [ ] 78.1 Write property test for Container Image Pre-Pull Round-Trip
+    - **Property 118: Container Image Pre-Pull Round-Trip**
+    - Verify that for any configured Container_Image name, the build process pulls the image, exports it as a tar, copies it into the KIWI build context, and loads it in config.sh — resulting in the image being available in the local Docker store
+    - Test by parsing `build-kiwi-image.sh` for `docker pull` and `docker save` commands referencing the CONTAINER_IMAGE variable, and parsing `config.sh` for `docker load -i /tmp/kiwi-build/container-image.tar`
+    - **Validates: Requirements 34.1, 34.2, 34.3, 34.4, 34.5**
+
+  - [ ] 78.2 Write property test for Container Image Pull Failure Halts Build
+    - **Property 119: Container Image Pull Failure Halts Build**
+    - Verify that if `docker pull` fails in `build-kiwi-image.sh`, the script exits with a non-zero exit code and a descriptive error message
+    - Parse `build-kiwi-image.sh` for error handling around the `docker pull` command (e.g., `if ! docker pull` pattern with `exit 1`)
+    - **Validates: Requirements 34.6**
+
+  - [ ] 78.3 Write property test for Container Image Load Failure Halts Build
+    - **Property 120: Container Image Load Failure Halts Build**
+    - Verify that if `docker load` fails in `config.sh`, the script exits with a non-zero exit code and a descriptive error message
+    - Parse `config.sh` for error handling around the `docker load` command (e.g., `if ! docker load` pattern with `exit 1`)
+    - **Validates: Requirements 34.7**
+
+- [ ] 79. Final checkpoint - Ensure all Docker daemon and container image pre-pull tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 115 correctness properties from the design document
+- Property tests validate the 120 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
@@ -1679,7 +1753,9 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - PyJWT[crypto] is used for JWT decoding and JWKS-based signature verification
 - OIDC tokens are validated for signature (JWKS), issuer, audience, repository, and expiration claims
 - Protected endpoints (/execute, /execution/{id}/output) require Bearer OIDC tokens; /health remains unauthenticated
-- All 115 properties should be tested with hypothesis library (minimum 100 iterations each)
+- Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
+- Container image pre-pull (tasks 76-79) bakes the configured Container_Image into the KIWI image during build, following the same two-phase pattern as Python dependency installation: pre-pull in build-kiwi-image.sh (network available), offline load in config.sh (no network)
+- All 120 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
