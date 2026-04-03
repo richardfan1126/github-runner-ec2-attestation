@@ -110,6 +110,15 @@ def main() -> int:
         temp_executor.cleanup_dangling_containers()
         logger.info("Dangling container cleanup complete")
         
+        # Pull container image if not already present
+        logger.info(f"Ensuring container image '{config.container_image}' is available...")
+        try:
+            temp_executor.pull_container_image()
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to pull container image '{config.container_image}': {e}"
+            )
+        
         # Ensure temp storage directory exists
         if not os.path.exists(config.temp_storage_path):
             logger.info(f"Creating temp storage directory: {config.temp_storage_path}")

@@ -1733,8 +1733,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Do not remove the Docker service enablement (`systemctl enable docker`) or any other sections
     - _Requirements: 34.1 (updated — build no longer handles image load)_
 
-- [ ] 81. Implement server-startup container image pull
-  - [ ] 81.1 Add `pull_container_image` method to ScriptExecutor
+- [x] 81. Implement server-startup container image pull
+  - [x] 81.1 Add `pull_container_image` method to ScriptExecutor
     - Add a `pull_container_image(self) -> None` method to `src/script_executor.py`
     - Check if the Container_Image is already present in the local Docker image store using `docker_client.images.get(container_image)`; if present, log that the pull is being skipped and return early
     - If not present, pull the image from the registry using `docker_client.images.pull(container_image)`
@@ -1743,7 +1743,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - If the pull fails (network error, image not found, authentication failure), raise an exception with a descriptive error message indicating the image name and failure reason
     - _Requirements: 34.1, 34.2, 34.3, 34.4, 34.5, 34.6_
 
-  - [ ] 81.2 Wire container image pull into server startup in src/main.py
+  - [x] 81.2 Wire container image pull into server startup in src/main.py
     - In `src/main.py`, after the dangling container cleanup step and before the "Ensure temp storage directory exists" step, call `temp_executor.pull_container_image()`
     - If the pull raises an exception, catch it and raise `ConfigurationError` with a descriptive message so the server fails to start
     - This places the pull at step 4 in the startup sequence: config → Docker daemon → dangling cleanup → **pull image** → start accepting requests

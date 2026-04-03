@@ -2,6 +2,7 @@
 import io
 import os
 import tarfile
+import time
 import threading
 import logging
 from typing import Optional
@@ -343,6 +344,61 @@ class ScriptExecutor:
             return True
         except Exception:
             return False
+
+    def pull_container_image(self) -> None:
+        """Pull the configured Container_Image if not already present locally.
+
+        Checks the local Docker image store first. If the image exists, skips
+        the pull. Otherwise pulls from the registry and verifies availability.
+
+        Raises:
+            RuntimeError: If the Docker client is unavailable, the pull fails,
+                or the image cannot be verified after pulling.
+        """
+        if self._docker_client is None:
+            raise RuntimeError(
+                f"Cannot pull container image '{self._container_image}': Docker client is not available"
+            )
+
+        image_name = self._container_image
+
+        # Check if image already exists locally
+        try:
+            self._docker_client.images.get(image_name)
+            logger.info(f"Container image '{image_name}' already present locally, skipping pull")
+            return
+        except docker.errors.ImageNotFound:
+            logger.info(f"Container image '{image_name}' not found locally, pulling from registry...")
+        except docker.errors.APIError as e:
+            logger.warning(f"Error checking local image '{image_name}': {e}. Attempting pull...")
+
+        # Pull the image
+        start = time.monotonic()
+        try:
+            image = self._docker_client.images.pull(image_name)
+            duration = time.monotonic() - start
+            size_bytes = image.attrs.get("Size", 0) if image.attrs else 0
+            size_mb = size_bytes / (1024 * 1024)
+            logger.info(
+                f"Pulled container image '{image_name}' in {duration:.1f}s "
+                f"(size: {size_mb:.1f} MB)"
+            )
+        except docker.errors.ImageNotFound:
+            raise RuntimeError(
+                f"Container image '{image_name}' not found in registry"
+            )
+        except docker.errors.APIError as e:
+            raise RuntimeError(
+                f"Failed to pull container image '{image_name}': {e}"
+            )
+
+        # Verify the image is available after pull
+        try:
+            self._docker_client.images.get(image_name)
+        except docker.errors.ImageNotFound:
+            raise RuntimeError(
+                f"Container image '{image_name}' not available after pull"
+            )
 
     def _cleanup_temp_files(self, execution_id: str, script_path: str) -> None:
         """
