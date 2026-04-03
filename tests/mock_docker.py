@@ -40,30 +40,56 @@ class MockContainer:
                     self._script_content = f.read()
 
     def start(self):
-        """Start executing the script via subprocess."""
+        """Start executing the script via subprocess.
+
+        The real container uses a shell loop that waits for the script file
+        to appear (it is copied in via put_archive after the container starts).
+        We replicate that here by deferring execution to a background thread
+        that polls for ``_script_content`` to be set.
+        """
         self._started = True
-        if self._script_content is None:
-            self._exit_code = -1
-            return
 
-        # Write script to a temp file and execute
-        import tempfile
+        def _run():
+            # Wait for the script to be copied in (up to 5 s)
+            for _ in range(50):
+                if self._script_content is not None:
+                    break
+                time.sleep(0.1)
 
-        self._tmp_script = tempfile.NamedTemporaryFile(
-            mode="wb", suffix=".sh", delete=False
-        )
-        self._tmp_script.write(self._script_content)
-        self._tmp_script.close()
-        os.chmod(self._tmp_script.name, 0o755)
+            if self._script_content is None:
+                self._exit_code = -1
+                return
 
-        self._process = subprocess.Popen(
-            ["bash", self._tmp_script.name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+            # Write script to a temp file and execute
+            import tempfile
+
+            self._tmp_script = tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".sh", delete=False
+            )
+            self._tmp_script.write(self._script_content)
+            self._tmp_script.close()
+            os.chmod(self._tmp_script.name, 0o755)
+
+            self._process = subprocess.Popen(
+                ["bash", self._tmp_script.name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        self._run_thread = threading.Thread(target=_run, daemon=True)
+        self._run_thread.start()
 
     def wait(self, timeout=None):
-        """Wait for the process to complete, with optional timeout."""
+        """Wait for the process to complete, with optional timeout.
+
+        The background _run thread (started by ``start()``) may still be
+        setting up the subprocess, so we first join that thread before
+        inspecting ``_process``.
+        """
+        # Wait for the background start thread to finish launching the process
+        if hasattr(self, "_run_thread"):
+            self._run_thread.join(timeout=timeout)
+
         if self._process is None:
             return {"StatusCode": self._exit_code if self._exit_code is not None else -1}
 

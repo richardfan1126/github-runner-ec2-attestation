@@ -112,11 +112,19 @@ class ScriptExecutor:
             logger.info(f"Starting execution {execution_id}: {script_path}")
 
             # Create container with security constraints
+            # The container command waits briefly for the script to be copied
+            # in via put_archive, then executes it.  The tmpfs mount at
+            # /tmp/execution only exists once the container is running, so we
+            # must start the container *before* copying the script.
             nano_cpus = int(self._cpu_limit * 1e9)
             container = self._docker_client.containers.create(
                 image=self._container_image,
                 name=container_name,
-                command=["sh", "/tmp/execution/script.sh"],
+                command=[
+                    "sh", "-c",
+                    "while [ ! -f /tmp/execution/script.sh ]; do sleep 0.1; done; "
+                    "sh /tmp/execution/script.sh",
+                ],
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
                 read_only=True,
@@ -131,12 +139,12 @@ class ScriptExecutor:
             with self._container_lock:
                 self._active_containers[execution_id] = container
 
-            # Copy script into the container
-            self._copy_script_to_container(container, script_path)
-
-            # Start the container
+            # Start the container so the tmpfs mount becomes available
             container.start()
             logger.info(f"Container {container_name} started for execution {execution_id}")
+
+            # Copy script into the running container (tmpfs is now mounted)
+            self._copy_script_to_container(container, script_path)
 
             # Wait for completion with timeout
             try:
