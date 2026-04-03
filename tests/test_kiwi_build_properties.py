@@ -342,3 +342,59 @@ def test_dockerfile_has_pinned_versions():
     
     # Validate dnf clean is present (for smaller image size)
     assert "dnf clean" in content, "Dockerfile should clean dnf cache"
+
+
+def test_docker_package_inclusion_in_kiwi_image():
+    """
+    Property 116: Docker Package Inclusion in KIWI Image
+
+    The docker package must be listed in the <packages type="image"> section
+    of kiwi-descriptions/appliance.kiwi so the Docker daemon is available
+    at runtime for managing Execution_Containers.
+
+    **Validates: Requirements 33.1**
+    """
+    import xml.etree.ElementTree as ET
+
+    appliance_path = Path("kiwi-descriptions/appliance.kiwi")
+    assert appliance_path.exists(), "appliance.kiwi must exist"
+
+    tree = ET.parse(appliance_path)
+    root = tree.getroot()
+
+    # Find the <packages type="image"> section
+    image_packages = None
+    for packages_elem in root.findall("packages"):
+        if packages_elem.get("type") == "image":
+            image_packages = packages_elem
+            break
+
+    assert image_packages is not None, "Must have a <packages type='image'> section"
+
+    # Collect all package names
+    package_names = [
+        pkg.get("name") for pkg in image_packages.findall("package")
+    ]
+
+    assert "docker" in package_names, (
+        "docker package must be listed in <packages type='image'> section"
+    )
+
+
+def test_docker_service_enablement():
+    """
+    Property 117: Docker Service Enablement
+
+    The config.sh script must contain 'systemctl enable docker' so the
+    Docker daemon starts automatically at boot.
+
+    **Validates: Requirements 33.2**
+    """
+    config_path = Path("kiwi-descriptions/config.sh")
+    assert config_path.exists(), "config.sh must exist"
+
+    content = config_path.read_text()
+
+    assert "systemctl enable docker" in content, (
+        "config.sh must enable the docker service via systemctl"
+    )

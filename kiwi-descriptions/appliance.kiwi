@@ -63,6 +63,7 @@
         <package name="binutils"/>
         <package name="python3.11"/>
         <package name="python3.11-pip"/>
+        <package name="docker"/>
         <!-- Don't install these packages -->
         <ignore name="ec2-hibinit-agent"/>
         <ignore name="grubby"/>

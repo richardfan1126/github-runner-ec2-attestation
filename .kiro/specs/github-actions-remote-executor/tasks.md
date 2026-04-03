@@ -1646,24 +1646,24 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 73. Final checkpoint - Ensure all Docker container tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 74. Add Docker package to KIWI image and enable Docker service
-  - [ ] 74.1 Add docker package to appliance.kiwi
+- [x] 74. Add Docker package to KIWI image and enable Docker service
+  - [x] 74.1 Add docker package to appliance.kiwi
     - Add `<package name="docker"/>` to the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
     - Place it alongside existing packages (e.g., after `python3.11-pip`)
     - _Requirements: 33.1, 33.4_
 
-  - [ ] 74.2 Enable Docker service in config.sh
+  - [x] 74.2 Enable Docker service in config.sh
     - Add a `systemctl enable docker` block to `kiwi-descriptions/config.sh`
     - Place it after the existing `systemctl enable github-actions-remote-executor.service` line and before the conditional SSH block
     - Include descriptive echo statements for build audit trail
     - _Requirements: 33.2, 33.3_
 
-  - [ ] 74.3 Write property test for Docker Package Inclusion
+  - [x] 74.3 Write property test for Docker Package Inclusion
     - **Property 116: Docker Package Inclusion in KIWI Image**
     - Parse `kiwi-descriptions/appliance.kiwi` XML and verify the `docker` package is listed in the `<packages type="image">` section
     - **Validates: Requirements 33.1**
 
-  - [ ] 74.4 Write property test for Docker Service Enablement
+  - [x] 74.4 Write property test for Docker Service Enablement
     - **Property 117: Docker Service Enablement**
     - Parse `kiwi-descriptions/config.sh` and verify it contains `systemctl enable docker`
     - **Validates: Requirements 33.2**

@@ -12,6 +12,11 @@ systemctl preset set-hostname-imds
 # Enable the GitHub Actions Remote Executor service
 systemctl enable github-actions-remote-executor.service
 
+# Enable the Docker daemon so containers can be managed at runtime
+echo "Enabling Docker service..."
+systemctl enable docker
+echo "✓ Docker service enabled"
+
 ################################
 # Conditional sshd Enablement  #
 ################################
