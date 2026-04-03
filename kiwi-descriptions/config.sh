@@ -27,13 +27,41 @@ if [ ! -f "/tmp/kiwi-build/container-image.tar" ]; then
     exit 1
 fi
 
+# Start Docker temporarily — systemctl enable only creates symlinks for boot,
+# the daemon isn't running during KIWI image build
+echo "Starting Docker daemon for image loading..."
+dockerd &
+DOCKERD_PID=$!
+
+# Wait for the Docker socket to become available
+for i in $(seq 1 30); do
+    if docker info >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+if ! docker info >/dev/null 2>&1; then
+    echo "ERROR: Docker daemon failed to start within 30 seconds"
+    kill "$DOCKERD_PID" 2>/dev/null || true
+    exit 1
+fi
+echo "✓ Docker daemon started"
+
 echo "Loading container image from /tmp/kiwi-build/container-image.tar..."
 if ! docker load -i /tmp/kiwi-build/container-image.tar; then
     echo "ERROR: Failed to load container image from /tmp/kiwi-build/container-image.tar"
+    kill "$DOCKERD_PID" 2>/dev/null || true
     exit 1
 fi
 
 echo "✓ Container image loaded successfully"
+
+# Stop the temporary Docker daemon — it'll start via systemd on boot
+echo "Stopping temporary Docker daemon..."
+kill "$DOCKERD_PID" 2>/dev/null || true
+wait "$DOCKERD_PID" 2>/dev/null || true
+echo "✓ Docker daemon stopped"
 
 ################################
 # Conditional sshd Enablement  #
