@@ -345,8 +345,11 @@ def main() -> int:
         logger.warning("!" * 80)
         logger.warning("Resources to be deleted:")
         logger.warning(f"  - Terraform infrastructure in {args.terraform_dir}")
-        logger.warning(f"  - AMI: {ami_build_result['ami_id']}")
-        logger.warning(f"  - Snapshot: {ami_build_result['snapshot_id']}")
+
+        if not args.keep_ami:
+            logger.warning(f"  - AMI: {ami_build_result['ami_id']}")
+            logger.warning(f"  - Snapshot: {ami_build_result['snapshot_id']}")
+
         logger.warning("")
         
         response = input("Are you sure you want to proceed? (yes/no): ")
