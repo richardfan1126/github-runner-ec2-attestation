@@ -128,6 +128,43 @@ pip3 download \
 
 echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
 
+################################
+# Pre-pull Container Image     #
+################################
+echo ""
+echo "=== Pre-pulling Container Image ==="
+
+# Read CONTAINER_IMAGE from the env file
+ENV_FILE="${IMAGE_DESCRIPTION_DIR}/root/etc/github-actions-remote-executor/env"
+if [ ! -f "${ENV_FILE}" ]; then
+    echo "::error::Environment file not found: ${ENV_FILE}"
+    exit 1
+fi
+
+CONTAINER_IMAGE=$(grep -E '^CONTAINER_IMAGE=' "${ENV_FILE}" | sed 's/^CONTAINER_IMAGE=//')
+if [ -z "${CONTAINER_IMAGE}" ]; then
+    echo "::error::CONTAINER_IMAGE is not set or empty in ${ENV_FILE}"
+    exit 1
+fi
+echo "Container image: ${CONTAINER_IMAGE}"
+
+# Pull the container image
+echo "Pulling container image: ${CONTAINER_IMAGE}..."
+if ! docker pull "${CONTAINER_IMAGE}"; then
+    echo "::error::Failed to pull container image: ${CONTAINER_IMAGE}"
+    exit 1
+fi
+echo "✓ Container image pulled successfully"
+
+# Export the container image as a tar archive for offline loading during KIWI build
+echo "Exporting container image to tar archive..."
+mkdir -p "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build"
+if ! docker save "${CONTAINER_IMAGE}" -o "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/container-image.tar"; then
+    echo "::error::Failed to export container image: ${CONTAINER_IMAGE}"
+    exit 1
+fi
+echo "✓ Container image exported to container-image.tar"
+
 # Make scripts executable
 chmod +x "${TEMP_IMAGE_DIR}/config.sh"
 chmod +x "${TEMP_IMAGE_DIR}/edit_boot_install.sh"

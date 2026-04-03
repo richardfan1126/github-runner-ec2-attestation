@@ -1668,17 +1668,17 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Parse `kiwi-descriptions/config.sh` and verify it contains `systemctl enable docker`
     - **Validates: Requirements 33.2**
 
-- [ ] 75. Checkpoint - Ensure Docker daemon provisioning tests pass
+- [x] 75. Checkpoint - Ensure Docker daemon provisioning tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 76. Pre-pull Container Image in build-kiwi-image.sh
-  - [ ] 76.1 Read CONTAINER_IMAGE from env file in build-kiwi-image.sh
+- [x] 76. Pre-pull Container Image in build-kiwi-image.sh
+  - [x] 76.1 Read CONTAINER_IMAGE from env file in build-kiwi-image.sh
     - Extract the `CONTAINER_IMAGE` variable from `kiwi-descriptions/root/etc/github-actions-remote-executor/env` (currently `python:3.11-slim`)
     - Use grep/sed to parse the value from the env file
     - Fail with a descriptive error if `CONTAINER_IMAGE` is not set or empty
     - _Requirements: 34.1_
 
-  - [ ] 76.2 Pull and export Container Image in build-kiwi-image.sh
+  - [x] 76.2 Pull and export Container Image in build-kiwi-image.sh
     - After the Python dependency wheel download section and before the KIWI Docker build step, add a new section to:
       1. Pull the Container_Image using `docker pull "${CONTAINER_IMAGE}"`
       2. Export the pulled image as a tar archive using `docker save "${CONTAINER_IMAGE}" -o "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/container-image.tar"`
