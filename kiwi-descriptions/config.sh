@@ -18,6 +18,24 @@ systemctl enable docker
 echo "✓ Docker service enabled"
 
 ################################
+# Load Container Image          #
+################################
+echo "=== Loading Container Image ==="
+
+if [ ! -f "/tmp/kiwi-build/container-image.tar" ]; then
+    echo "ERROR: Container image tar not found at /tmp/kiwi-build/container-image.tar"
+    exit 1
+fi
+
+echo "Loading container image from /tmp/kiwi-build/container-image.tar..."
+if ! docker load -i /tmp/kiwi-build/container-image.tar; then
+    echo "ERROR: Failed to load container image from /tmp/kiwi-build/container-image.tar"
+    exit 1
+fi
+
+echo "✓ Container image loaded successfully"
+
+################################
 # Conditional sshd Enablement  #
 ################################
 if [ "${ENABLE_SSH}" = "true" ]; then
