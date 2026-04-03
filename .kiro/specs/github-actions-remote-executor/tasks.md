@@ -1720,14 +1720,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 79. Final checkpoint - Ensure all Docker daemon and container image pre-pull tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 80. Remove build-time container image pre-pull code
-  - [ ] 80.1 Remove container image pull/save section from build-kiwi-image.sh
+- [x] 80. Remove build-time container image pre-pull code
+  - [x] 80.1 Remove container image pull/save section from build-kiwi-image.sh
     - Remove the section in `.github/scripts/build-kiwi-image.sh` that reads CONTAINER_IMAGE from the env file, runs `docker pull`, and runs `docker save` to export the image as a tar archive
     - Remove the `mkdir -p` for the container-image.tar target directory if it was added solely for this purpose
     - Do not remove any other sections (Python wheel download, KIWI Docker build, etc.)
     - _Requirements: 34.1 (updated — build no longer handles image pull)_
 
-  - [ ] 80.2 Remove container image load section from config.sh
+  - [x] 80.2 Remove container image load section from config.sh
     - Remove the section in `kiwi-descriptions/config.sh` that verifies and loads the container image tar via `docker load -i /tmp/kiwi-build/container-image.tar`
     - Remove associated echo statements and error handling for the container image load block
     - Do not remove the Docker service enablement (`systemctl enable docker`) or any other sections
