@@ -165,7 +165,8 @@ The system consists of the following major components:
 **Script Executor**
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
 - Assigns a unique container name derived from the Execution_ID to each container
-- Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory), network disabled, no privilege escalation, non-root user
+- Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), network disabled, no privilege escalation, non-root user
+- Bind-mounts the script file read-only into the container at creation time (avoids `put_archive` issues with read-only root filesystems)
 - Captures stdout and stderr streams from the container
 - Monitors execution progress and enforces timeout
 - Removes the container and its resources after completion, failure, or timeout
@@ -464,9 +465,9 @@ class ScriptExecutor:
 
     def execute_async(self, execution_id: str, script_path: str) -> None:
         """
-        Creates a new Execution_Container from Container_Image, copies the script
-        into it, and executes it asynchronously. The container is assigned a unique
-        name derived from the execution_id.
+        Creates a new Execution_Container from Container_Image, bind-mounts the
+        script read-only into the container, and executes it asynchronously. The
+        container is assigned a unique name derived from the execution_id.
         """
         pass
 

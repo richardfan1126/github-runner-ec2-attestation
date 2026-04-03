@@ -1540,7 +1540,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
       - Network disabled (`network_mode='none'`)
       - No privilege escalation (`security_opt=['no-new-privileges']`)
       - Non-root user (`user` parameter)
-    - Copy the script into the container and execute it
+    - Bind-mount the script file read-only into the container at `/scripts/script.sh` using Docker `volumes` parameter at creation time (avoids `put_archive` failures on read-only root filesystems)
+    - Execute the script via `command=["sh", "/scripts/script.sh"]`
     - Capture stdout and stderr streams from the container
     - Enforce execution timeout by stopping the container after timeout
     - Capture exit code from the container
