@@ -42,19 +42,32 @@ class MockContainer:
     def start(self):
         """Start executing the script via subprocess.
 
-        The real container uses a shell loop that waits for the script file
-        to appear (it is copied in via put_archive after the container starts).
-        We replicate that here by deferring execution to a background thread
-        that polls for ``_script_content`` to be set.
+        Supports two modes:
+        1. Bind-mount: The script host path is passed via the ``volumes``
+           creation kwarg and read directly from disk.
+        2. put_archive: The script content is injected after creation via
+           ``put_archive`` (legacy path).
         """
         self._started = True
 
         def _run():
-            # Wait for the script to be copied in (up to 5 s)
-            for _ in range(50):
-                if self._script_content is not None:
+            # --- Try to resolve the script from bind-mounted volumes first ---
+            script_path = None
+            volumes = self._creation_kwargs.get("volumes", {})
+            for host_path, mount_spec in volumes.items():
+                if isinstance(mount_spec, dict) and mount_spec.get("bind", "").endswith(".sh"):
+                    script_path = host_path
                     break
-                time.sleep(0.1)
+
+            if script_path and os.path.exists(script_path):
+                with open(script_path, "rb") as f:
+                    self._script_content = f.read()
+            else:
+                # Fallback: wait for put_archive to supply the script (up to 5 s)
+                for _ in range(50):
+                    if self._script_content is not None:
+                        break
+                    time.sleep(0.1)
 
             if self._script_content is None:
                 self._exit_code = -1
