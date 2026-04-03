@@ -1771,8 +1771,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify `images.pull()` is NOT called
     - **Validates: Requirements 34.5**
 
-- [ ] 83. Write unit tests for server-startup container image pull
-  - [ ] 83.1 Write unit tests for pull_container_image method
+- [x] 83. Write unit tests for server-startup container image pull
+  - [x] 83.1 Write unit tests for pull_container_image method
     - Test successful pull flow: image not present → pull → verify available
     - Test skip pull when image already present locally
     - Test pull failure: image not found in registry
@@ -1784,7 +1784,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Mock Docker SDK client for all tests
     - _Requirements: 34.1, 34.2, 34.3, 34.4, 34.5, 34.6_
 
-- [ ] 84. Checkpoint - Ensure all server-startup container image pull tests pass
+- [x] 84. Checkpoint - Ensure all server-startup container image pull tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
