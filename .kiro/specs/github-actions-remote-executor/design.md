@@ -1295,7 +1295,7 @@ def test_execution_id_uniqueness(requests):
 
 The build process creates an attestable AMI containing the GitHub Actions Remote Executor. The build is performed in two distinct phases:
 
-1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes the Docker daemon (enabled at boot) and a pre-pulled Container_Image so that Execution_Containers can be created immediately at runtime without network access to a container registry.
+1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes the Docker daemon (enabled at boot). The Container_Image used for Execution_Containers is pulled by the GHA_Server at startup time, not baked into the KIWI image.
 
 2. **AMI Conversion Phase**: A Python script provisions a temporary EC2 instance using Terraform, installs required tools, verifies artifact signatures, downloads the KIWI image, uploads it as an EBS snapshot using coldsnap, and registers it as an AMI with TPM 2.0 support.
 
@@ -1661,89 +1661,40 @@ When the KIWI image boots:
 - The service is enabled in `config.sh` (not at runtime) because systemd unit enablement requires writing to `/etc/systemd/system/` which is in the read-only erofs layer
 - This follows the same pattern as the `github-actions-remote-executor.service` enablement already in `config.sh`
 
-### Container Image Pre-Pull During KIWI Image Build
+### Container Image Pull at Server Startup
 
-Execution_Containers are created from a configured Container_Image (Requirement 9, criteria 7). Since Execution_Containers run with network disabled (Requirement 8, criteria 4), the Container_Image must be available in the local Docker image store before any execution request arrives. The KIWI image build process pre-pulls the Container_Image so it is baked into the image.
+Execution_Containers are created from a configured Container_Image (Requirement 9, criteria 7). The Container_Image is pulled by the GHA_Server at startup time, before the server begins accepting execution requests. This approach avoids baking the container image into the KIWI image at build time, simplifying the build process and allowing the image to be updated without rebuilding the KIWI image.
 
-**Key Constraint:** The KIWI `config.sh` script runs inside a Docker container with no network access. All container image downloads must happen before the KIWI build phase — the same constraint that drives the Python dependency pre-download pattern.
+**Startup Sequence Integration:**
 
-**Build Phase Integration:**
+The Container_Image pull is part of the GHA_Server startup sequence. The full startup order is:
 
-The Container_Image pre-pull follows the same two-phase pattern as Python dependency installation:
+1. **Verify Configuration**: Load and validate all configuration values (Requirement 9)
+2. **Verify Docker Daemon**: Check that the Docker daemon is accessible (Requirement 9, criteria 11-12)
+3. **Cleanup Dangling Containers**: Remove any dangling Execution_Containers from previous runs (Requirement 8, criteria 10)
+4. **Pull Container_Image**: Pull the configured Container_Image from the container registry (Requirement 34)
+5. **Start Accepting Requests**: Begin listening for HTTP requests on the configured port
 
-1. **Pre-Pull Phase (build-kiwi-image.sh — has network access):**
-   - The build script reads the Container_Image name from the runtime environment file at `kiwi-descriptions/root/etc/github-actions-remote-executor/env` by extracting the `CONTAINER_IMAGE` variable (e.g., `python:3.11-slim`)
-   - It pulls the Container_Image using `docker pull`:
-     ```bash
-     echo "=== Pre-Pulling Container Image ==="
-     echo "Pulling container image: ${CONTAINER_IMAGE}..."
-     if ! docker pull "${CONTAINER_IMAGE}"; then
-         echo "::error::Failed to pull container image: ${CONTAINER_IMAGE}"
-         exit 1
-     fi
-     echo "✓ Container image pulled successfully"
-     ```
-   - It exports the pulled image as a tar archive using `docker save`:
-     ```bash
-     echo "Exporting container image as tar archive..."
-     CONTAINER_IMAGE_TAR="${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/container-image.tar"
-     mkdir -p "$(dirname "${CONTAINER_IMAGE_TAR}")"
-     if ! docker save "${CONTAINER_IMAGE}" -o "${CONTAINER_IMAGE_TAR}"; then
-         echo "::error::Failed to export container image: ${CONTAINER_IMAGE}"
-         exit 1
-     fi
-     echo "✓ Container image exported to ${CONTAINER_IMAGE_TAR}"
-     ```
-   - The tar archive is placed in the KIWI image build context at `/tmp/kiwi-build/container-image.tar`, which becomes available inside the KIWI chroot during the config.sh phase
+**Pull Behavior:**
 
-2. **Offline Load Phase (config.sh — no network access):**
-   - The config.sh script loads the Container_Image tar archive into the local Docker image store:
-     ```bash
-     ################################
-     # Load Container Image          #
-     ################################
-     echo "=== Loading Container Image ==="
+The GHA_Server pulls the Container_Image using the Docker daemon at startup:
 
-     CONTAINER_IMAGE_TAR="/tmp/kiwi-build/container-image.tar"
-     if [ ! -f "${CONTAINER_IMAGE_TAR}" ]; then
-         echo "ERROR: Container image tar not found at ${CONTAINER_IMAGE_TAR}"
-         exit 1
-     fi
-
-     echo "Loading container image from tar archive..."
-     if ! docker load -i "${CONTAINER_IMAGE_TAR}"; then
-         echo "ERROR: Failed to load container image from ${CONTAINER_IMAGE_TAR}"
-         exit 1
-     fi
-     echo "✓ Container image loaded successfully"
-     ```
-   - The `docker load` command imports the image layers and tags into the local Docker image store
-   - Note: `config.sh` runs inside the KIWI chroot where Docker is installed (from Requirement 33). The Docker daemon must be running inside the chroot for `docker load` to work — the build script ensures this by starting the daemon before the load step if needed
-
-3. **Runtime Behavior:**
-   - When the KIWI image boots, the Container_Image is already present in the local Docker image store
-   - The Script_Executor can create Execution_Containers immediately using `docker.DockerClient.containers.run(image=container_image, ...)` without requiring a registry pull
-   - Since Execution_Containers run with network disabled, there is no fallback to pulling from a registry — the pre-pulled image is the only source
-
-**Build Script Location:**
-
-The container image pre-pull logic is split across:
-- `.github/scripts/build-kiwi-image.sh` — Pulls and exports the image (network phase)
-- `kiwi-descriptions/config.sh` — Loads the image from tar (offline phase)
-
-This follows the same pattern as the Python dependency installation (pre-download in build script, install offline in config.sh).
+1. **Check Local Availability**: Before pulling, the server checks if the Container_Image is already present in the local Docker image store. If present, the pull is skipped and the existing image is used.
+2. **Pull from Registry**: If the image is not present locally, the server pulls it from the container registry using the Docker SDK (`docker.DockerClient.images.pull(container_image)`).
+3. **Verify Availability**: After pulling (or skipping), the server verifies the Container_Image is available in the local Docker image store.
+4. **Logging**: The server logs the pull operation including the image name, pull duration, and image size.
 
 **Error Handling:**
 
-- If `docker pull` fails during the build phase (network error, image not found, authentication failure), `build-kiwi-image.sh` fails with a descriptive error message and exits with non-zero status
-- If `docker load` fails during KIWI image creation (corrupted tar, Docker daemon not running), `config.sh` fails with a descriptive error message and exits with non-zero status (due to `set -e`)
-- Both failure modes prevent the KIWI image from being finalized, ensuring no image is produced without the Container_Image available
+- If the Container_Image pull fails (network error, image not found, authentication failure), the GHA_Server fails to start with a descriptive error message indicating the image name and failure reason.
+- The server does NOT fall back to any alternative image — the configured Container_Image must be available for the server to start.
+- If the Docker daemon is not accessible (checked in step 2), the server fails before attempting the pull.
 
 **Relationship to Existing Design:**
 
 - The Container_Image name comes from the runtime environment file at `kiwi-descriptions/root/etc/github-actions-remote-executor/env` (the `CONTAINER_IMAGE` variable), which is baked into the KIWI image and read by the Script_Executor at runtime via `ServerConfig.container_image`
-- The build script reads the same file to know which image to pre-pull, ensuring the pre-pulled image matches the runtime configuration
-- The pre-pulled image must match the `container_image` value in the runtime configuration
+- The build scripts (`build-kiwi-image.sh` and `config.sh`) do NOT handle container image pulling — this is entirely a server startup responsibility
+- Since the Container_Image is pulled at runtime (not baked in), the KIWI image does not need to be rebuilt to change the container image — only the environment configuration needs updating
 
 ## Infrastructure Provisioning Architecture
 
@@ -3638,23 +3589,23 @@ class AttestationBundle:
 
 **Validates: Requirements 33.2**
 
-### Property 118: Container Image Pre-Pull Round-Trip
+### Property 118: Container Image Pull at Server Startup
 
-*For any* configured Container_Image name, the build process should pull the image with `docker pull`, export it with `docker save` to a tar archive, copy the tar into the KIWI build context, and load it with `docker load` in `config.sh` — resulting in the Container_Image being available in the local Docker image store when the KIWI image boots.
+*For any* configured Container_Image name, the GHA_Server should pull the image from the container registry at startup and verify it is available in the local Docker image store before accepting any execution requests.
 
-**Validates: Requirements 34.1, 34.2, 34.3, 34.4, 34.5**
+**Validates: Requirements 34.1, 34.2, 34.3**
 
-### Property 119: Container Image Pull Failure Halts Build
+### Property 119: Container Image Pull Failure Halts Startup
 
-*For any* Container_Image name that cannot be pulled (network error, image not found, authentication failure), the `build-kiwi-image.sh` script should fail with a non-zero exit code and a descriptive error message, preventing the KIWI image from being finalized.
+*For any* Container_Image name that cannot be pulled (network error, image not found, authentication failure), the GHA_Server should fail to start with a descriptive error message indicating the image name and failure reason.
 
-**Validates: Requirements 34.6**
+**Validates: Requirements 34.4**
 
-### Property 120: Container Image Load Failure Halts Build
+### Property 120: Container Image Skip Pull When Already Present
 
-*For any* Container_Image tar archive that cannot be loaded (corrupted tar, Docker daemon not running), the `config.sh` script should fail with a non-zero exit code and a descriptive error message, preventing the KIWI image from being finalized.
+*For any* Container_Image that is already present in the local Docker image store, the GHA_Server should skip pulling from the registry and use the existing image.
 
-**Validates: Requirements 34.7**
+**Validates: Requirements 34.5**
 
 ## Build Error Handling
 
@@ -3727,11 +3678,10 @@ class AttestationBundle:
     - `systemctl enable docker` failure during config.sh
     - Docker daemon not starting at boot
 
-12. **Container Image Pre-Pull Errors**
-    - `docker pull` failure in build-kiwi-image.sh (network error, image not found, authentication)
-    - `docker save` failure in build-kiwi-image.sh (disk space, permissions)
-    - Container image tar archive missing in config.sh
-    - `docker load` failure in config.sh (corrupted tar, Docker daemon not running in chroot)
+12. **Container Image Pull Errors (Server Startup)**
+    - Container_Image pull failure at server startup (network error, image not found, authentication failure)
+    - Container_Image verification failure after pull (image not in local Docker store)
+    - Docker daemon not accessible when attempting pull
 
 ### Build Error Handling Strategies
 
@@ -3793,11 +3743,11 @@ class AttestationBundle:
 - At runtime, the Script_Executor verifies Docker daemon accessibility at startup (Requirement 9, criteria 11-12)
 - If Docker daemon is not accessible, the server fails to start with a descriptive error
 
-**Container Image Pre-Pull Errors**
-- If `docker pull` fails in build-kiwi-image.sh, the script exits with a descriptive error message
-- If `docker save` fails (e.g., disk space), the script exits with a descriptive error message
-- If the container image tar archive is missing in config.sh, the script exits with an error
-- If `docker load` fails in config.sh (corrupted tar, Docker daemon not running), the script exits with a descriptive error message
+**Container Image Pull Errors (Server Startup)**
+- If the Container_Image pull fails at server startup, the server fails to start with a descriptive error message indicating the image name and failure reason
+- If the Container_Image is already present locally, the pull is skipped
+- If the Docker daemon is not accessible, the server fails before attempting the pull (handled by Docker daemon check earlier in startup sequence)
+- The server logs the pull operation including image name, pull duration, and image size
 - All failure modes prevent the KIWI image from being finalized — no image is produced without the Container_Image available
 - Error messages include the Container_Image name for debugging
 
@@ -3835,8 +3785,7 @@ The build system requires both unit testing and property-based testing:
 - SSH command execution
 - Snapshot ID extraction
 - Docker package presence in appliance.kiwi XML
-- Container image pre-pull and export in build script
-- Container image load in config.sh
+- Container image pull at server startup
 
 **Property-Based Tests** focus on:
 - PCR measurement format validation across random inputs
@@ -3844,7 +3793,7 @@ The build system requires both unit testing and property-based testing:
 - Build result JSON serialization round-trips
 - Infrastructure cleanup completeness
 - Concurrent build isolation
-- Container image pre-pull round-trip (pull → save → load)
+- Container image pull at server startup (pull → verify → accept requests)
 
 ### Property-Based Testing Configuration
 
@@ -3865,9 +3814,9 @@ The build system requires both unit testing and property-based testing:
 - Unit tests: Verify `docker` package listed in appliance.kiwi XML, verify `systemctl enable docker` in config.sh, verify Docker daemon starts on boot (integration)
 - Property tests: Docker package inclusion (Property 116), Docker service enablement (Property 117)
 
-**Container Image Pre-Pull Testing**
-- Unit tests: Successful pull/save/copy/load flow, docker pull failure (image not found), docker save failure (disk space), missing tar in config.sh, docker load failure (corrupted tar)
-- Property tests: Container image pre-pull round-trip (Property 118), pull failure halts build (Property 119), load failure halts build (Property 120)
+**Container Image Pull at Server Startup Testing**
+- Unit tests: Successful pull flow, pull failure (image not found, network error), skip pull when image already present, pull logging (image name, duration, size), startup failure on pull error
+- Property tests: Container image pull at startup (Property 118), pull failure halts startup (Property 119), skip pull when present (Property 120)
 
 **Artifact Publishing Testing**
 - Unit tests: GHCR authentication, missing files, invalid PCR values
@@ -3905,8 +3854,8 @@ The build system requires both unit testing and property-based testing:
 3. Tool installation failure: Should fail before artifact download
 4. Snapshot upload failure: Should cleanup infrastructure
 5. Concurrent builds: Multiple builds should not interfere
-6. Container image pre-pull failure: Should fail KIWI build before image finalization
-7. Container image load failure: Should fail KIWI build during config.sh phase
+6. Container image pull failure at startup: Should prevent server from accepting requests
+7. Container image already present: Should skip pull and start normally
 
 **External Dependencies**:
 - Mock GitHub Container Registry for artifact operations

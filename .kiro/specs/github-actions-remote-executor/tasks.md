@@ -1720,6 +1720,73 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 79. Final checkpoint - Ensure all Docker daemon and container image pre-pull tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 80. Remove build-time container image pre-pull code
+  - [ ] 80.1 Remove container image pull/save section from build-kiwi-image.sh
+    - Remove the section in `.github/scripts/build-kiwi-image.sh` that reads CONTAINER_IMAGE from the env file, runs `docker pull`, and runs `docker save` to export the image as a tar archive
+    - Remove the `mkdir -p` for the container-image.tar target directory if it was added solely for this purpose
+    - Do not remove any other sections (Python wheel download, KIWI Docker build, etc.)
+    - _Requirements: 34.1 (updated — build no longer handles image pull)_
+
+  - [ ] 80.2 Remove container image load section from config.sh
+    - Remove the section in `kiwi-descriptions/config.sh` that verifies and loads the container image tar via `docker load -i /tmp/kiwi-build/container-image.tar`
+    - Remove associated echo statements and error handling for the container image load block
+    - Do not remove the Docker service enablement (`systemctl enable docker`) or any other sections
+    - _Requirements: 34.1 (updated — build no longer handles image load)_
+
+- [ ] 81. Implement server-startup container image pull
+  - [ ] 81.1 Add `pull_container_image` method to ScriptExecutor
+    - Add a `pull_container_image(self) -> None` method to `src/script_executor.py`
+    - Check if the Container_Image is already present in the local Docker image store using `docker_client.images.get(container_image)`; if present, log that the pull is being skipped and return early
+    - If not present, pull the image from the registry using `docker_client.images.pull(container_image)`
+    - After pulling, verify the image is available by calling `docker_client.images.get(container_image)`
+    - Log the pull operation including image name, pull duration (time the pull call), and image size
+    - If the pull fails (network error, image not found, authentication failure), raise an exception with a descriptive error message indicating the image name and failure reason
+    - _Requirements: 34.1, 34.2, 34.3, 34.4, 34.5, 34.6_
+
+  - [ ] 81.2 Wire container image pull into server startup in src/main.py
+    - In `src/main.py`, after the dangling container cleanup step and before the "Ensure temp storage directory exists" step, call `temp_executor.pull_container_image()`
+    - If the pull raises an exception, catch it and raise `ConfigurationError` with a descriptive message so the server fails to start
+    - This places the pull at step 4 in the startup sequence: config → Docker daemon → dangling cleanup → **pull image** → start accepting requests
+    - _Requirements: 34.1, 34.2, 34.4_
+
+- [ ] 82. Update property tests for server-startup container image pull
+  - [ ] 82.1 Rewrite property test for Container Image Pull at Server Startup
+    - **Property 118: Container Image Pull at Server Startup**
+    - For any configured Container_Image name, verify the GHA_Server pulls the image from the container registry at startup and verifies it is available in the local Docker image store before accepting requests
+    - Mock the Docker SDK client: `images.get()` raises `ImageNotFound` (image not present), then `images.pull()` succeeds, then `images.get()` succeeds
+    - Verify `pull_container_image()` calls pull and verify in the correct order
+    - **Validates: Requirements 34.1, 34.2, 34.3**
+
+  - [ ] 82.2 Rewrite property test for Container Image Pull Failure Halts Startup
+    - **Property 119: Container Image Pull Failure Halts Startup**
+    - For any Container_Image name that cannot be pulled (network error, image not found, authentication failure), verify the GHA_Server fails to start with a descriptive error message indicating the image name and failure reason
+    - Mock the Docker SDK client: `images.get()` raises `ImageNotFound`, then `images.pull()` raises an exception
+    - Verify `pull_container_image()` raises an exception with the image name in the error message
+    - **Validates: Requirements 34.4**
+
+  - [ ] 82.3 Rewrite property test for Container Image Skip Pull When Already Present
+    - **Property 120: Container Image Skip Pull When Already Present**
+    - For any Container_Image that is already present in the local Docker image store, verify the GHA_Server skips pulling from the registry and uses the existing image
+    - Mock the Docker SDK client: `images.get()` succeeds (image already present)
+    - Verify `images.pull()` is NOT called
+    - **Validates: Requirements 34.5**
+
+- [ ] 83. Write unit tests for server-startup container image pull
+  - [ ] 83.1 Write unit tests for pull_container_image method
+    - Test successful pull flow: image not present → pull → verify available
+    - Test skip pull when image already present locally
+    - Test pull failure: image not found in registry
+    - Test pull failure: network error during pull
+    - Test pull failure: authentication error
+    - Test pull logging: verify image name, duration, and size are logged
+    - Test verify failure: image pulled but not available after pull
+    - Test startup failure: verify ConfigurationError is raised in main.py when pull fails
+    - Mock Docker SDK client for all tests
+    - _Requirements: 34.1, 34.2, 34.3, 34.4, 34.5, 34.6_
+
+- [ ] 84. Checkpoint - Ensure all server-startup container image pull tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -1754,7 +1821,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - OIDC tokens are validated for signature (JWKS), issuer, audience, repository, and expiration claims
 - Protected endpoints (/execute, /execution/{id}/output) require Bearer OIDC tokens; /health remains unauthenticated
 - Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
-- Container image pre-pull (tasks 76-79) bakes the configured Container_Image into the KIWI image during build, following the same two-phase pattern as Python dependency installation: pre-pull in build-kiwi-image.sh (network available), offline load in config.sh (no network)
+- Container image pre-pull (tasks 76-79) originally baked the configured Container_Image into the KIWI image during build; tasks 80-84 reverse this by removing the build-time pre-pull code and implementing server-startup pull instead — the GHA_Server now pulls the Container_Image from the registry at startup before accepting requests
 - All 120 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)

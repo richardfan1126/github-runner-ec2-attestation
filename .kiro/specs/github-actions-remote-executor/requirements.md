@@ -472,19 +472,18 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 3. WHEN the KIWI image boots, THE Docker daemon SHALL be running and accessible to the Script_Executor
 4. IF the docker package is not present in appliance.kiwi, THEN THE KIWI_Builder SHALL fail to produce an image capable of running Execution_Containers
 
-### Requirement 34: Pre-Pull Container Image During KIWI Image Build
+### Requirement 34: Pull Container Image at Server Startup
 
-**User Story:** As a DevOps engineer, I want the Container_Image pre-pulled into the KIWI image during the build process, so that Execution_Containers can be created immediately at runtime without requiring network access to a container registry
+**User Story:** As a DevOps engineer, I want the Container_Image pulled when the Remote Executor server starts, so that Execution_Containers can be created without baking the image into the KIWI image at build time
 
 #### Acceptance Criteria
 
-1. THE build-kiwi-image.sh script SHALL pull the configured Container_Image using docker pull during the build phase (which has network access)
-2. THE build-kiwi-image.sh script SHALL export the pulled Container_Image as a tar archive using docker save
-3. THE build-kiwi-image.sh script SHALL copy the exported Container_Image tar archive into the KIWI image build context
-4. THE config.sh configuration script SHALL load the Container_Image tar archive into the local Docker image store using docker load during image creation
-5. WHEN the KIWI image boots, THE Container_Image SHALL be available in the local Docker image store without requiring a registry pull
-6. IF the Container_Image pull fails during the build phase, THEN THE build-kiwi-image.sh script SHALL fail with a descriptive error message
-7. IF the Container_Image load fails during KIWI image creation, THEN THE config.sh script SHALL fail with a descriptive error message
+1. WHEN the GHA_Server starts, THE GHA_Server SHALL pull the configured Container_Image from the container registry using the Docker daemon
+2. THE GHA_Server SHALL pull the Container_Image before accepting any execution requests
+3. THE GHA_Server SHALL verify that the Container_Image is available in the local Docker image store after pulling
+4. IF the Container_Image pull fails, THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating the image name and failure reason
+5. IF the Container_Image is already present in the local Docker image store, THE GHA_Server SHALL skip pulling and use the existing image
+6. THE GHA_Server SHALL log the Container_Image pull operation including image name, pull duration, and image size
 
 ## Deployment Requirements
 
