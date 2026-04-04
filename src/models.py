@@ -5,6 +5,13 @@ from enum import Enum
 from typing import Optional, List
 
 
+@dataclass
+class CloneResult:
+    """Result of cloning a repository"""
+    clone_path: str
+    script_path: str
+
+
 class ExecutionStatus(Enum):
     """Status of script execution"""
     QUEUED = "queued"

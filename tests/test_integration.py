@@ -3,6 +3,7 @@
 Simplified integration tests focusing on core end-to-end flows.
 Tests use mocked external dependencies (GitHub API, NitroTPM device).
 """
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,34 +58,18 @@ def test_config(temp_dir):
 @pytest.fixture
 def mock_github_and_attestation():
     """Mock both GitHub API and attestation generation"""
-    with patch('src.repository.requests.Session') as mock_session_class, \
+    with patch('requests.Session') as mock_session_class, \
+         patch('src.repository.subprocess.run') as mock_git_run, \
          patch('src.attestation.subprocess.run') as mock_attest:
         
-        # Setup GitHub API mock
+        # Setup GitHub API mock for authenticate()
         mock_session = Mock()
         mock_session_class.return_value = mock_session
         mock_session.headers = {}
+        mock_session.get.return_value = Mock(status_code=200)
         
-        # Mock responses
-        mock_auth = Mock(status_code=200, json=lambda: {"login": "test"})
-        mock_content = Mock(
-            status_code=200,
-            json=lambda: {"download_url": "https://raw.githubusercontent.com/test/repo/main/test.sh"}
-        )
-        mock_download = Mock(
-            status_code=200,
-            content=b'#!/bin/bash\necho "Test output"\nexit 0'
-        )
-        
-        def get_side_effect(url, **kwargs):
-            if '/user' in url:
-                return mock_auth
-            elif 'raw.githubusercontent.com' in url:
-                return mock_download
-            else:
-                return mock_content
-        
-        mock_session.get.side_effect = get_side_effect
+        # Setup git clone/checkout mock
+        mock_git_run.return_value = Mock(returncode=0, stdout="", stderr="")
         
         # Setup attestation mock
         mock_attest_result = Mock(
@@ -95,17 +80,37 @@ def mock_github_and_attestation():
         
         yield {
             'session': mock_session,
-            'download': mock_download,
+            'git_run': mock_git_run,
             'attestation': mock_attest
         }
 
 
 @pytest.fixture
-def app(test_config, mock_github_and_attestation):
+def app(test_config, mock_github_and_attestation, temp_dir):
     """Create test application with OIDC validation mocked"""
     application = create_app(test_config, docker_client=create_mock_docker_client())
     # Mock OIDC validation to always succeed for integration tests
     application.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
+    
+    # Mock clone_repo to create a temp dir with the requested script file
+    from src.models import CloneResult
+    
+    def mock_clone_repo(repo_url, commit, token):
+        clone_dir = tempfile.mkdtemp(dir=temp_dir, prefix="clone_")
+        return CloneResult(clone_path=clone_dir, script_path="")
+    
+    def mock_validate_script_exists(clone_path, script_path):
+        # Create the script file so os.path.getsize works
+        full_path = os.path.join(clone_path, script_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "w") as f:
+            f.write('#!/bin/bash\necho "Test output"\nexit 0')
+        os.chmod(full_path, 0o755)
+        return True
+    
+    application.state.repository_client.clone_repo = Mock(side_effect=mock_clone_repo)
+    application.state.repository_client.validate_script_exists = Mock(side_effect=mock_validate_script_exists)
+    
     return application
 
 
@@ -236,15 +241,11 @@ class TestErrorScenarios:
     
     def test_authentication_failure(self, client, test_config):
         """Test GitHub authentication failure"""
-        with patch('src.repository.requests.Session') as mock_session_class, \
-             patch('src.attestation.subprocess.run') as mock_attest:
-            
+        with patch('requests.Session') as mock_session_class:
             mock_session = Mock()
             mock_session_class.return_value = mock_session
             mock_session.headers = {}
             mock_session.get.return_value = Mock(status_code=401)
-            
-            mock_attest.return_value = Mock(returncode=0, stdout=b'mock')
             
             request_data = {
                 "repository_url": "https://github.com/test/repo",
@@ -256,7 +257,7 @@ class TestErrorScenarios:
             response = client.post("/execute", json=request_data)
             assert response.status_code == 401
     
-    def test_execution_timeout(self, test_config, mock_github_and_attestation):
+    def test_execution_timeout(self, test_config, mock_github_and_attestation, temp_dir):
         """Test script execution timeout"""
         # Use a shorter timeout for faster test
         test_config.execution_timeout_seconds = 1
@@ -264,10 +265,25 @@ class TestErrorScenarios:
         # Create fresh app and client to avoid rate limiting from other tests
         app = create_app(test_config, docker_client=create_mock_docker_client())
         app.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
-        client = TestClient(app)
         
-        # Mock long-running script
-        mock_github_and_attestation['download'].content = b'#!/bin/bash\nsleep 10\nexit 0'
+        from src.models import CloneResult
+        
+        def mock_clone_repo(repo_url, commit, token):
+            clone_dir = tempfile.mkdtemp(dir=temp_dir, prefix="clone_")
+            return CloneResult(clone_path=clone_dir, script_path="")
+        
+        def mock_validate_script_exists(clone_path, script_path):
+            full_path = os.path.join(clone_path, script_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "w") as f:
+                f.write('#!/bin/bash\nsleep 10\nexit 0')
+            os.chmod(full_path, 0o755)
+            return True
+        
+        app.state.repository_client.clone_repo = Mock(side_effect=mock_clone_repo)
+        app.state.repository_client.validate_script_exists = Mock(side_effect=mock_validate_script_exists)
+        
+        client = TestClient(app)
         
         request_data = {
             "repository_url": "https://github.com/test/repo",

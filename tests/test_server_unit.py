@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 
 from src.server import create_app
 from src.config import ServerConfig
-from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult
-from src.repository import FileContent, GitHubAPIError
+from src.repository import GitHubAPIError
+from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult, CloneResult
 from src.attestation import AttestationError
 
 
@@ -66,40 +66,41 @@ class TestExecuteEndpoint:
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                 mock_auth.return_value = Mock(success=True, error_message=None)
                 
-                with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                    mock_fetch.return_value = FileContent(
-                        content=b"#!/bin/bash\necho 'test'",
-                        temp_path="/tmp/test.sh",
-                        size_bytes=100
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.return_value = CloneResult(
+                        clone_path="/tmp/test_clone",
+                        script_path=""
                     )
                     
-                    with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
-                        mock_attest.return_value = (
-                            AttestationDocument(
-                                repository_url=request_data['repository_url'],
-                                commit_hash=request_data['commit_hash'],
-                                script_path=request_data['script_path'],
-                                timestamp=datetime.now(timezone.utc),
-                                signature=b"test_signature_bytes"
-                            ),
-                            None
-                        )
-                        
-                        with patch.object(app.state.script_executor, 'execute_async'):
-                            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
+                    with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                        with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                            mock_attest.return_value = (
+                                AttestationDocument(
+                                    repository_url=request_data['repository_url'],
+                                    commit_hash=request_data['commit_hash'],
+                                    script_path=request_data['script_path'],
+                                    timestamp=datetime.now(timezone.utc),
+                                    signature=b"test_signature_bytes"
+                                ),
+                                None
+                            )
                             
-                            # Verify response
-                            assert response.status_code == 200
-                            data = response.json()
-                            
-                            assert "execution_id" in data
-                            assert "attestation_document" in data
-                            assert "status" in data
-                            assert data["status"] == "queued"
-                            
-                            # Verify attestation document is base64 encoded
-                            decoded = base64.b64decode(data["attestation_document"])
-                            assert decoded == b"test_signature_bytes"
+                            with patch('os.path.getsize', return_value=100):
+                                with patch.object(app.state.script_executor, 'execute_async'):
+                                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
+                                    
+                                    # Verify response
+                                    assert response.status_code == 200
+                                    data = response.json()
+                                    
+                                    assert "execution_id" in data
+                                    assert "attestation_document" in data
+                                    assert "status" in data
+                                    assert data["status"] == "queued"
+                                    
+                                    # Verify attestation document is base64 encoded
+                                    decoded = base64.b64decode(data["attestation_document"])
+                                    assert decoded == b"test_signature_bytes"
     
     def test_malformed_json_request(self):
         """Test error response for malformed JSON"""
@@ -242,8 +243,8 @@ class TestExecuteEndpoint:
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                 mock_auth.return_value = Mock(success=True, error_message=None)
                 
-                with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                    mock_fetch.side_effect = GitHubAPIError(
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.side_effect = GitHubAPIError(
                         "Repository not found",
                         404
                     )
@@ -273,8 +274,8 @@ class TestExecuteEndpoint:
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                 mock_auth.return_value = Mock(success=True, error_message=None)
                 
-                with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                    mock_fetch.side_effect = GitHubAPIError(
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.side_effect = GitHubAPIError(
                         "Commit not found",
                         404
                     )
@@ -302,13 +303,17 @@ class TestExecuteEndpoint:
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                 mock_auth.return_value = Mock(success=True, error_message=None)
                 
-                with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                    mock_fetch.side_effect = GitHubAPIError(
-                        "File not found at path",
-                        404
-                    )
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.return_value = CloneResult(clone_path="/tmp/clone", script_path="")
                     
-                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
+                    with patch.object(app.state.repository_client, 'validate_script_exists') as mock_validate_script:
+                        mock_validate_script.side_effect = GitHubAPIError(
+                            "File not found at path",
+                            404
+                        )
+                        
+                        with patch.object(app.state.repository_client, 'cleanup_clone'):
+                            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
                     
                     assert response.status_code == 404
     
@@ -334,24 +339,25 @@ class TestExecuteEndpoint:
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                 mock_auth.return_value = Mock(success=True, error_message=None)
                 
-                with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                    mock_fetch.return_value = FileContent(
-                        content=b"x" * oversized,
-                        temp_path="/tmp/large.sh",
-                        size_bytes=oversized
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.return_value = CloneResult(
+                        clone_path="/tmp/clone_large",
+                        script_path=""
                     )
                     
-                    with patch.object(app.state.repository_client, 'cleanup_temp_file') as mock_cleanup:
-                        response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
-                        
-                        assert response.status_code == 413
-                        data = response.json()
-                        assert data["detail"]["error"] == "file_too_large"
-                        assert data["detail"]["details"]["file_size"] == oversized
-                        assert data["detail"]["details"]["max_size"] == max_size
-                        
-                        # Verify temp file was cleaned up
-                        mock_cleanup.assert_called_once_with("/tmp/large.sh")
+                    with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                        with patch('os.path.getsize', return_value=oversized):
+                            with patch.object(app.state.repository_client, 'cleanup_clone') as mock_cleanup:
+                                response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
+                                
+                                assert response.status_code == 413
+                                data = response.json()
+                                assert data["detail"]["error"] == "file_too_large"
+                                assert data["detail"]["details"]["file_size"] == oversized
+                                assert data["detail"]["details"]["max_size"] == max_size
+                                
+                                # Verify clone was cleaned up
+                                mock_cleanup.assert_called_once_with("/tmp/clone_large")
     
     def test_attestation_failure_500(self):
         """Test 500 error for attestation generation failure"""
@@ -372,34 +378,35 @@ class TestExecuteEndpoint:
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                 mock_auth.return_value = Mock(success=True, error_message=None)
                 
-                with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                    mock_fetch.return_value = FileContent(
-                        content=b"#!/bin/bash\necho test",
-                        temp_path="/tmp/test.sh",
-                        size_bytes=100
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.return_value = CloneResult(
+                        clone_path="/tmp/clone_attest",
+                        script_path=""
                     )
                     
-                    with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
-                        mock_attest.return_value = (
-                            None,
-                            AttestationError(
-                                command="/usr/bin/nitro-tpm-attest",
-                                exit_code=-1,
-                                stdout="",
-                                stderr="NitroTPM device not available",
-                                context="Failed to access NitroTPM device"
-                            )
-                        )
-                        
-                        with patch.object(app.state.repository_client, 'cleanup_temp_file') as mock_cleanup:
-                            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
-                            
-                            assert response.status_code == 500
-                            data = response.json()
-                            assert data["detail"]["error"] == "attestation_failed"
-                            
-                            # Verify temp file was cleaned up
-                            mock_cleanup.assert_called_once()
+                    with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                        with patch('os.path.getsize', return_value=100):
+                            with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                                mock_attest.return_value = (
+                                    None,
+                                    AttestationError(
+                                        command="/usr/bin/nitro-tpm-attest",
+                                        exit_code=-1,
+                                        stdout="",
+                                        stderr="NitroTPM device not available",
+                                        context="Failed to access NitroTPM device"
+                                    )
+                                )
+                                
+                                with patch.object(app.state.repository_client, 'cleanup_clone') as mock_cleanup:
+                                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
+                                    
+                                    assert response.status_code == 500
+                                    data = response.json()
+                                    assert data["detail"]["error"] == "attestation_failed"
+                                    
+                                    # Verify clone was cleaned up
+                                    mock_cleanup.assert_called_once()
 
 
 class TestRateLimiting:
@@ -750,54 +757,55 @@ class TestConcurrentRequests:
             with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                 mock_auth.return_value = Mock(success=True, error_message=None)
                 
-                with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                    def fetch_side_effect(repo_url, commit, path):
-                        return FileContent(
-                            content=b"#!/bin/bash\necho test",
-                            temp_path=f"/tmp/{path}",
-                            size_bytes=100
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    def clone_side_effect(repo_url, commit, token):
+                        return CloneResult(
+                            clone_path=f"/tmp/clone_{commit[:8]}",
+                            script_path=""
                         )
-                    mock_fetch.side_effect = fetch_side_effect
+                    mock_clone.side_effect = clone_side_effect
                     
-                    with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
-                        def attest_side_effect(repo_url, commit, path):
-                            return (
-                                AttestationDocument(
-                                    repository_url=repo_url,
-                                    commit_hash=commit,
-                                    script_path=path,
-                                    timestamp=datetime.now(timezone.utc),
-                                    signature=b"test_sig"
-                                ),
-                                None
-                            )
-                        mock_attest.side_effect = attest_side_effect
-                        
-                        with patch.object(app.state.script_executor, 'execute_async'):
-                            
-                            def make_request(index):
-                                try:
-                                    request_data = {
-                                        "repository_url": f"https://github.com/test/repo{index}",
-                                        "commit_hash": "a" * 40,
-                                        "script_path": f"test{index}.sh",
-                                        "github_token": f"ghp_token_{index}"
-                                    }
-                                    response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
-                                    results.append((index, response))
-                                except Exception as e:
-                                    errors.append((index, str(e)))
-                            
-                            # Launch 5 concurrent requests
-                            threads = []
-                            for i in range(5):
-                                thread = threading.Thread(target=make_request, args=(i,))
-                                threads.append(thread)
-                                thread.start()
-                            
-                            # Wait for all to complete
-                            for thread in threads:
-                                thread.join(timeout=10)
+                    with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                        with patch('os.path.getsize', return_value=100):
+                            with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                                def attest_side_effect(repo_url, commit, path):
+                                    return (
+                                        AttestationDocument(
+                                            repository_url=repo_url,
+                                            commit_hash=commit,
+                                            script_path=path,
+                                            timestamp=datetime.now(timezone.utc),
+                                            signature=b"test_sig"
+                                        ),
+                                        None
+                                    )
+                                mock_attest.side_effect = attest_side_effect
+                                
+                                with patch.object(app.state.script_executor, 'execute_async'):
+                                    
+                                    def make_request(index):
+                                        try:
+                                            request_data = {
+                                                "repository_url": f"https://github.com/test/repo{index}",
+                                                "commit_hash": "a" * 40,
+                                                "script_path": f"test{index}.sh",
+                                                "github_token": f"ghp_token_{index}"
+                                            }
+                                            response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
+                                            results.append((index, response))
+                                        except Exception as e:
+                                            errors.append((index, str(e)))
+                                    
+                                    # Launch 5 concurrent requests
+                                    threads = []
+                                    for i in range(5):
+                                        thread = threading.Thread(target=make_request, args=(i,))
+                                        threads.append(thread)
+                                        thread.start()
+                                    
+                                    # Wait for all to complete
+                                    for thread in threads:
+                                        thread.join(timeout=10)
         
         # Verify all completed without errors
         assert len(errors) == 0, f"Concurrent requests had errors: {errors}"

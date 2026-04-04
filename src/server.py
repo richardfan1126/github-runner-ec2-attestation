@@ -18,7 +18,7 @@ from src.repository import RepositoryClient
 from src.attestation import AttestationGenerator
 from src.script_executor import ScriptExecutor
 from src.validation import RequestValidator
-from src.models import ExecutionStatus
+from src.models import ExecutionStatus, CloneResult
 from src.logging_config import set_log_context, clear_log_context, sanitize_for_logging, sanitize_error_message
 
 logger = logging.getLogger(__name__)
@@ -354,17 +354,29 @@ def add_routes(app: FastAPI) -> None:
             
             phase_times['authentication'] = (time.time() - auth_start) * 1000
             
-            # Fetch file
+            # Clone repository
             fetch_start = time.time()
+            clone_result = None
             try:
                 from src.repository import GitHubAPIError
-                file_content = repo_client.fetch_file(
+                clone_result = repo_client.clone_repo(
                     body['repository_url'],
                     body['commit_hash'],
+                    body['github_token']
+                )
+                # Validate script exists in cloned repo
+                repo_client.validate_script_exists(
+                    clone_result.clone_path,
                     body['script_path']
+                )
+                clone_result = CloneResult(
+                    clone_path=clone_result.clone_path,
+                    script_path=body['script_path']
                 )
             except GitHubAPIError as e:
                 logger.warning(f"GitHub API error: {e.message}")
+                if clone_result:
+                    repo_client.cleanup_clone(clone_result.clone_path)
                 raise HTTPException(
                     status_code=e.status_code,
                     detail=create_error_response(
@@ -377,13 +389,14 @@ def add_routes(app: FastAPI) -> None:
             
             # Validate script file size
             config = request.app.state.config
-            if file_content.size_bytes > config.max_script_size_bytes:
+            script_full_path = os.path.join(clone_result.clone_path, clone_result.script_path)
+            script_size = os.path.getsize(script_full_path)
+            if script_size > config.max_script_size_bytes:
                 logger.warning(
-                    f"Script file too large: {file_content.size_bytes} bytes "
+                    f"Script file too large: {script_size} bytes "
                     f"(max: {config.max_script_size_bytes})"
                 )
-                # Clean up temp file
-                repo_client.cleanup_temp_file(file_content.temp_path)
+                repo_client.cleanup_clone(clone_result.clone_path)
                 
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -391,7 +404,7 @@ def add_routes(app: FastAPI) -> None:
                         "file_too_large",
                         f"Script file exceeds maximum size of {config.max_script_size_bytes} bytes",
                         {
-                            "file_size": file_content.size_bytes,
+                            "file_size": script_size,
                             "max_size": config.max_script_size_bytes
                         }
                     )
@@ -411,8 +424,8 @@ def add_routes(app: FastAPI) -> None:
                 logger.error(
                     f"Attestation generation failed: {attestation_error.context}"
                 )
-                # Clean up temp file
-                repo_client.cleanup_temp_file(file_content.temp_path)
+                # Clean up cloned repo
+                repo_client.cleanup_clone(clone_result.clone_path)
                 
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -449,7 +462,7 @@ def add_routes(app: FastAPI) -> None:
             
             # Initiate async execution
             executor = request.app.state.script_executor
-            executor.execute_async(execution_record.execution_id, file_content.temp_path)
+            executor.execute_async(execution_record.execution_id, script_full_path)
             
             logger.info(f"Initiated async execution: {execution_record.execution_id}")
             

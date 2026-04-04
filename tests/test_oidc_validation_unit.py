@@ -18,9 +18,8 @@ from fastapi.testclient import TestClient
 
 from src.validation import RequestValidator, GITHUB_OIDC_ISSUER, GITHUB_OIDC_JWKS_URL
 from src.config import ServerConfig
-from src.models import OIDCValidationResult, ExecutionRecord, ExecutionStatus, OutputData, AttestationDocument
+from src.models import OIDCValidationResult, ExecutionRecord, ExecutionStatus, OutputData, AttestationDocument, CloneResult
 from src.server import create_app
-from src.repository import FileContent
 
 
 # ---------------------------------------------------------------------------
@@ -366,8 +365,15 @@ class TestOIDCProtectedEndpoints:
             return_value=Mock(success=True, error_message=None),
         ), patch.object(
             app.state.repository_client,
-            "fetch_file",
-            return_value=FileContent(content=b"#!/bin/bash\necho ok", temp_path="/tmp/t.sh", size_bytes=50),
+            "clone_repo",
+            return_value=CloneResult(clone_path="/tmp/clone_oidc", script_path=""),
+        ), patch.object(
+            app.state.repository_client,
+            "validate_script_exists",
+            return_value=True,
+        ), patch(
+            "os.path.getsize",
+            return_value=50,
         ), patch.object(
             app.state.attestation_generator,
             "generate_attestation",

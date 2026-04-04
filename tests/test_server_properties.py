@@ -10,8 +10,8 @@ import pytest
 
 from src.server import create_app
 from src.config import ServerConfig
-from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult
-from src.repository import FileContent, GitHubAPIError
+from src.repository import GitHubAPIError
+from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult, CloneResult
 from src.attestation import AttestationError
 from datetime import datetime, timezone
 
@@ -109,28 +109,29 @@ def test_concurrent_request_handling(requests_list):
                 with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
                     mock_auth.return_value = Mock(success=True, error_message=None)
                     
-                    with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                        mock_fetch.return_value = FileContent(
-                            content=b"#!/bin/bash\necho test",
-                            temp_path="/tmp/test.sh",
-                            size_bytes=100
+                    with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                        mock_clone.return_value = CloneResult(
+                            clone_path="/tmp/clone_test",
+                            script_path=""
                         )
                         
-                        with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
-                            mock_attest.return_value = (
-                                AttestationDocument(
-                                    repository_url=req_data['repository_url'],
-                                    commit_hash=req_data['commit_hash'],
-                                    script_path=req_data['script_path'],
-                                    timestamp=datetime.now(timezone.utc),
-                                    signature=b"test_signature"
-                                ),
-                                None
-                            )
-                            
-                            with patch.object(app.state.script_executor, 'execute_async'):
-                                response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
-                                results.append(response)
+                        with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                            with patch('os.path.getsize', return_value=100):
+                                with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                                    mock_attest.return_value = (
+                                        AttestationDocument(
+                                            repository_url=req_data['repository_url'],
+                                            commit_hash=req_data['commit_hash'],
+                                            script_path=req_data['script_path'],
+                                            timestamp=datetime.now(timezone.utc),
+                                            signature=b"test_signature"
+                                        ),
+                                        None
+                                    )
+                                    
+                                    with patch.object(app.state.script_executor, 'execute_async'):
+                                        response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
+                                        results.append(response)
         except Exception as e:
             errors.append(str(e))
     
@@ -191,27 +192,28 @@ def test_immediate_response_with_attestation(req_data):
         with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
             mock_auth.return_value = Mock(success=True, error_message=None)
             
-            with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                mock_fetch.return_value = FileContent(
-                    content=b"#!/bin/bash\necho test",
-                    temp_path="/tmp/test.sh",
-                    size_bytes=100
+            with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                mock_clone.return_value = CloneResult(
+                    clone_path="/tmp/clone_test",
+                    script_path=""
                 )
                 
-                with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
-                    mock_attest.return_value = (
-                        AttestationDocument(
-                            repository_url=req_data['repository_url'],
-                            commit_hash=req_data['commit_hash'],
-                            script_path=req_data['script_path'],
-                            timestamp=datetime.now(timezone.utc),
-                            signature=b"test_signature"
-                        ),
-                        None
-                    )
-                    
-                    with patch.object(app.state.script_executor, 'execute_async', side_effect=slow_execute):
-                        response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
+                with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                    with patch('os.path.getsize', return_value=100):
+                        with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                            mock_attest.return_value = (
+                                AttestationDocument(
+                                    repository_url=req_data['repository_url'],
+                                    commit_hash=req_data['commit_hash'],
+                                    script_path=req_data['script_path'],
+                                    timestamp=datetime.now(timezone.utc),
+                                    signature=b"test_signature"
+                                ),
+                                None
+                            )
+                            
+                            with patch.object(app.state.script_executor, 'execute_async', side_effect=slow_execute):
+                                response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
                         
                         # Response should be received before execution completes
                         assert not execution_completed.is_set(), \
@@ -413,25 +415,26 @@ def test_script_size_validation(req_data, file_size):
         with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
             mock_auth.return_value = Mock(success=True, error_message=None)
             
-            with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                mock_fetch.return_value = FileContent(
-                    content=b"x" * min(file_size, 1024),  # Don't allocate huge buffers for test
-                    temp_path="/tmp/test.sh",
-                    size_bytes=file_size
+            with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                mock_clone.return_value = CloneResult(
+                    clone_path="/tmp/clone_size",
+                    script_path=""
                 )
                 
-                with patch.object(app.state.repository_client, 'cleanup_temp_file'):
-                    response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
-                    
-                    # Should validate size and reject if too large
-                    max_size = app.state.config.max_script_size_bytes
-                    if file_size > max_size:
-                        assert response.status_code == 413, \
-                            f"Expected 413 for oversized file, got {response.status_code}"
-                    else:
-                        # Size is OK, should proceed (may fail for other reasons in test)
-                        assert response.status_code in [200, 500], \
-                            f"Unexpected status for valid size: {response.status_code}"
+                with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                    with patch('os.path.getsize', return_value=file_size):
+                        with patch.object(app.state.repository_client, 'cleanup_clone'):
+                            response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
+                            
+                            # Should validate size and reject if too large
+                            max_size = app.state.config.max_script_size_bytes
+                            if file_size > max_size:
+                                assert response.status_code == 413, \
+                                    f"Expected 413 for oversized file, got {response.status_code}"
+                            else:
+                                # Size is OK, should proceed (may fail for other reasons in test)
+                                assert response.status_code in [200, 500], \
+                                    f"Unexpected status for valid size: {response.status_code}"
 
 
 # Feature: github-actions-remote-executor, Property 48: Oversized Script Rejection
@@ -457,26 +460,27 @@ def test_oversized_script_rejection(req_data):
         with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
             mock_auth.return_value = Mock(success=True, error_message=None)
             
-            with patch.object(app.state.repository_client, 'fetch_file') as mock_fetch:
-                mock_fetch.return_value = FileContent(
-                    content=b"x" * 1024,  # Small buffer, size_bytes controls validation
-                    temp_path="/tmp/test.sh",
-                    size_bytes=max_size + 1
+            with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                mock_clone.return_value = CloneResult(
+                    clone_path="/tmp/clone_oversized",
+                    script_path=""
                 )
                 
-                with patch.object(app.state.repository_client, 'cleanup_temp_file') as mock_cleanup:
-                    response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
-                    
-                    assert response.status_code == 413, \
-                        f"Expected 413 for oversized file, got {response.status_code}"
-                    
-                    data = response.json()
-                    assert "error" in data.get("detail", {}), "Response missing error field"
-                    assert data["detail"]["error"] == "file_too_large", \
-                        "Error should be 'file_too_large'"
-                    
-                    # Verify temp file was cleaned up
-                    mock_cleanup.assert_called_once()
+                with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                    with patch('os.path.getsize', return_value=max_size + 1):
+                        with patch.object(app.state.repository_client, 'cleanup_clone') as mock_cleanup:
+                            response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
+                            
+                            assert response.status_code == 413, \
+                                f"Expected 413 for oversized file, got {response.status_code}"
+                            
+                            data = response.json()
+                            assert "error" in data.get("detail", {}), "Response missing error field"
+                            assert data["detail"]["error"] == "file_too_large", \
+                                "Error should be 'file_too_large'"
+                            
+                            # Verify clone was cleaned up
+                            mock_cleanup.assert_called_once()
 
 
 # Feature: github-actions-remote-executor, Property 49: Rate Limiting per IP

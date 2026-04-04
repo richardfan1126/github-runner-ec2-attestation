@@ -1788,8 +1788,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 84. Checkpoint - Ensure all server-startup container image pull tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 85. Rewrite RepositoryClient to clone repositories instead of fetching single files
-  - [ ] 85.1 Replace fetch_file with clone_repo method
+- [x] 85. Rewrite RepositoryClient to clone repositories instead of fetching single files
+  - [x] 85.1 Replace fetch_file with clone_repo method
     - Replace the `fetch_file` method with a `clone_repo(repo_url, commit, token)` method
     - Use `git clone --depth 1` with the token embedded in the URL (`https://{token}@github.com/owner/repo.git`) to clone into a temp directory under `temp_storage_path`
     - After cloning, run `git checkout {commit}` to ensure the exact commit is checked out
@@ -1797,21 +1797,21 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle clone failures: authentication errors, repository not found, network errors
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.6, 3.7, 3.8_
 
-  - [ ] 85.2 Add validate_script_exists method
+  - [x] 85.2 Add validate_script_exists method
     - Add a `validate_script_exists(clone_path, script_path)` method that checks the script file exists within the cloned repo
     - Return True if the file exists, raise GitHubAPIError with 404 if not
     - _Requirements: 3.5_
 
-  - [ ] 85.3 Replace cleanup_temp_file with cleanup_clone method
+  - [x] 85.3 Replace cleanup_temp_file with cleanup_clone method
     - Replace `cleanup_temp_file` with `cleanup_clone(clone_path)` that removes the entire cloned repo directory using `shutil.rmtree`
     - Handle cleanup errors gracefully (log but don't raise)
     - _Requirements: 3.5_
 
-  - [ ] 85.4 Add CloneResult data model
+  - [x] 85.4 Add CloneResult data model
     - Add `CloneResult` dataclass to `src/models.py` with fields: `clone_path: str`, `script_path: str`
     - _Requirements: 3.1_
 
-  - [ ] 85.5 Remove FileContent data model and _store_temp_file method
+  - [x] 85.5 Remove FileContent data model and _store_temp_file method
     - Remove the `FileContent` dataclass, `_store_temp_file`, and `_check_commit_exists` methods that are no longer needed
     - Keep `_parse_repo_url` and `_check_repository_exists` if still useful, otherwise remove
     - _Requirements: 3.1_
