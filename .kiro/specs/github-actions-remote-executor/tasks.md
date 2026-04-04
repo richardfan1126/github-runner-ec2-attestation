@@ -188,7 +188,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 11. Implement HTTP server and request handlers
-  - [x] 11.1 Create HTTP server with Flask or FastAPI
+  - [x] 11.1 Create HTTP server with FastAPI
     - Set up HTTP server listening on configured port
     - Implement request routing
     - Implement rate limiting middleware per source IP
@@ -1886,7 +1886,6 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
 - The cleanup implementation (tasks 37-38) covers testing the existing scripts/cleanup.py which is already fully implemented
 - The debug SSH implementation (tasks 39-47) adds opt-in SSH debug access across build-time (KIWI image), deploy-time (Terraform + deploy script), and GitHub Actions workflow
-- The repository cloning implementation (tasks 85-89) replaces single-file fetch with full repository cloning and directory mounting into containers
 - Python dependencies are separated into two configurations:
   - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, docker, hypothesis, pytest, pytest-asyncio, httpx)
   - scripts/pyproject.toml: Build/deployment script dependencies (boto3, paramiko)
@@ -1901,12 +1900,10 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Debug SSH feature requires coordination between build-time and deploy-time: both --enable-ssh flags must be used for SSH to work end-to-end
 - SSH key provisioning uses cloud-init and ec2-instance-connect (no baked-in keys)
 - NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM
-- Scripts execute as root with full system privileges
 - Docker container execution replaces direct subprocess execution: each script runs in an ephemeral container with memory limits, CPU limits, read-only filesystem, no network, no privilege escalation, and non-root user
 - Docker SDK (`docker` Python package) manages container lifecycle: create, run, capture output, remove, and verify removal
 - Container naming convention uses `gare-exec-{execution_id}` prefix for identification and dangling cleanup
-- Docker container execution (tasks 66-73) replaces subprocess-based script execution with ephemeral Docker containers for isolation and security
-- OIDC authentication (tasks 58-65) replaces the previous shared secret token approach with GitHub Actions OIDC JWT validation
+- OIDC authentication (tasks 58-65) adds GitHub Actions OIDC JWT validation for request authentication
 - PyJWT[crypto] is used for JWT decoding and JWKS-based signature verification
 - OIDC tokens are validated for signature (JWKS), issuer, audience, repository, and expiration claims
 - Protected endpoints (/execute, /execution/{id}/output) require Bearer OIDC tokens; /health remains unauthenticated

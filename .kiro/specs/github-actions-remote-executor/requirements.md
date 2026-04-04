@@ -82,7 +82,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE GHA_Server SHALL listen for HTTP POST requests on a configured port
 2. THE GHA_Server SHALL accept Execution_Request payloads in JSON format
 3. WHEN a valid Execution_Request is received, THE GHA_Server SHALL return an Execution_ID
-4. THE GHA_Server SHALL return HTTP 202 Accepted for valid requests
+4. THE GHA_Server SHALL return HTTP 200 OK for valid requests
 5. THE GHA_Server SHALL include the Execution_ID in the response body
 6. IF the request payload is malformed, THEN THE GHA_Server SHALL return HTTP 400 Bad Request
 7. THE GHA_Server SHALL log all incoming requests with timestamps
@@ -173,7 +173,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE GHA_Server SHALL provide an HTTP GET endpoint for retrieving execution results
 2. THE GHA_Server SHALL accept the Execution_ID as a URL parameter
 3. THE GHA_Server SHALL require a valid Bearer OIDC_Token in the Authorization header before returning execution results
-4. WHEN execution is in progress, THE GHA_Server SHALL return HTTP 202 Accepted with status "running"
+4. WHEN execution is in progress, THE GHA_Server SHALL return HTTP 200 OK with status "running"
 5. WHEN execution is complete, THE GHA_Server SHALL return HTTP 200 OK with Script_Output, Attestation_Document, and Output_Attestation_Document
 6. THE response SHALL include stdout, stderr, and exit code
 7. THE response SHALL include the Attestation_Document in base64 encoding

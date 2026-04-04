@@ -227,10 +227,10 @@ The system consists of the following major components:
 
 ### Concurrency Model
 
-- HTTP server handles multiple concurrent connections using thread pool or async I/O
+- HTTP server handles multiple concurrent connections using async I/O (FastAPI with uvicorn)
 - Each execution runs in a separate ephemeral Docker container (Execution_Container) created from the configured Container_Image
 - Containers are never reused — each execution gets a fresh container that is destroyed after completion, failure, or timeout
-- Execution state stored in thread-safe data structure or external store
+- Execution state stored in thread-safe in-memory data structure
 - Output collection uses buffered writes to avoid blocking
 - Maximum concurrent Execution_Containers configurable to prevent resource exhaustion
 - Docker daemon manages container lifecycle and resource isolation
@@ -1201,7 +1201,7 @@ Together, unit tests catch concrete bugs while property tests verify general cor
 
 ### Property-Based Testing Configuration
 
-**Testing Library**: Use `hypothesis` for Python (or `fast-check` for TypeScript, `QuickCheck` for Haskell, depending on implementation language)
+**Testing Library**: Use `hypothesis` for Python
 
 **Test Configuration**:
 - Minimum 100 iterations per property test
@@ -1306,9 +1306,6 @@ def test_execution_id_uniqueness(requests):
 - Verify no sensitive data in error responses
 - Verify proper cleanup of temporary files
 - Verify attestation signature validity
-
-
-## Error Handling
 
 
 ---
@@ -1616,7 +1613,7 @@ The Python dependency installation is split across two phases:
 
 3. **Installation Verification:**
    - The config.sh script verifies critical packages are importable
-   - Example: `python3 -c "import fastapi"`, `python3 -c "import uvicorn"`, `python3 -c "import requests"`, `python3 -c "import docker"`, `python3 -c "import jwt"`
+   - Example: `python3.11 -c "import fastapi"`, `python3.11 -c "import uvicorn"`, `python3.11 -c "import requests"`, `python3.11 -c "import docker"`, `python3.11 -c "import jwt"`
    - If verification fails, the KIWI build fails with an error
    - Successful verification is logged for build audit trail
 
@@ -1883,8 +1880,6 @@ The Terraform configuration exposes the following outputs:
 - Snapshot upload uses AWS internal network
 - No cross-region transfer costs
 
-## Build Components and Interfaces
-
 ## Tool Installation Process
 
 The AMI build process requires several tools to be installed on the temporary EC2 instance. Each tool is installed and verified before proceeding to the next step.
@@ -2088,8 +2083,6 @@ def execute_remote_command(
 - Installation output streamed in real-time
 - Verification results logged with tool version
 - Errors logged at ERROR level with full context
-
-### GitHub Actions Workflow Interface
 
 ## Artifact Download and Validation
 
