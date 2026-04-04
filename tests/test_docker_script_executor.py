@@ -76,8 +76,8 @@ def _create_and_run(executor, manager, temp_dir, script_content, timeout=5):
         script_path="test.sh",
         timeout_seconds=timeout,
     )
-    script_path = create_test_script(temp_dir, script_content)
-    executor.execute_async(record.execution_id, script_path)
+    create_test_script(temp_dir, script_content)
+    executor.execute_async(record.execution_id, temp_dir, "test_script.sh")
     return record.execution_id
 
 
@@ -555,7 +555,7 @@ class TestContainerNameDerivation:
                 )
                 eids.append(record.execution_id)
                 sp = create_test_script(temp_dir, "echo ok\n", f"script_{i}.sh")
-                executor.execute_async(record.execution_id, sp)
+                executor.execute_async(record.execution_id, temp_dir, f"script_{i}.sh")
 
             for eid in eids:
                 wait_for_completion(manager, eid)
@@ -563,3 +563,98 @@ class TestContainerNameDerivation:
             calls = mock_client.containers._creation_calls
             names = [c["name"] for c in calls]
             assert len(names) == len(set(names)), "Container names must be unique"
+
+
+# ===========================================================================
+# 10. Repository directory mounting at /workspace
+# ===========================================================================
+
+class TestRepoDirectoryMounting:
+    """Validates: Requirements 5.1, 5.2, 5.4, 5.5 — repo directory mounting"""
+
+    def test_container_mounts_repo_dir_at_workspace(self):
+        """Verify container is created with repo directory mounted read-only at /workspace."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_client = create_mock_docker_client()
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = _make_executor(mock_client, manager, collector, temp_dir)
+
+            eid = _create_and_run(executor, manager, temp_dir, "echo ok\n")
+            assert wait_for_completion(manager, eid)
+
+            call = mock_client.containers._creation_calls[0]
+            volumes = call.get("volumes", {})
+            # There should be a volume mapping with bind=/workspace and mode=ro
+            workspace_found = False
+            for host_path, mount_spec in volumes.items():
+                if isinstance(mount_spec, dict) and mount_spec.get("bind") == "/workspace":
+                    assert mount_spec.get("mode") == "ro", "Repo mount should be read-only"
+                    workspace_found = True
+                    break
+            assert workspace_found, "Repo directory should be mounted at /workspace"
+
+    def test_container_working_dir_is_workspace(self):
+        """Verify working_dir is set to /workspace."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_client = create_mock_docker_client()
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = _make_executor(mock_client, manager, collector, temp_dir)
+
+            eid = _create_and_run(executor, manager, temp_dir, "echo ok\n")
+            assert wait_for_completion(manager, eid)
+
+            call = mock_client.containers._creation_calls[0]
+            assert call.get("working_dir") == "/workspace"
+
+    def test_container_command_uses_workspace_script_path(self):
+        """Verify command uses /workspace/{script_path}."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_client = create_mock_docker_client()
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = _make_executor(mock_client, manager, collector, temp_dir)
+
+            # Use a specific script filename
+            record = manager.create_execution(
+                repository_url="https://github.com/test/repo",
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                timeout_seconds=5,
+            )
+            create_test_script(temp_dir, "echo ok\n", "build.sh")
+            executor.execute_async(record.execution_id, temp_dir, "build.sh")
+            assert wait_for_completion(manager, record.execution_id)
+
+            call = mock_client.containers._creation_calls[0]
+            assert call["command"] == ["sh", "/workspace/build.sh"]
+
+    def test_repo_directory_cleaned_up_after_execution(self):
+        """Verify repo directory is cleaned up after execution completes."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_client = create_mock_docker_client()
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = _make_executor(mock_client, manager, collector, temp_dir)
+
+            # Create a subdirectory to simulate a cloned repo
+            repo_dir = os.path.join(temp_dir, "repo_clone")
+            os.makedirs(repo_dir, exist_ok=True)
+            script_path = os.path.join(repo_dir, "test.sh")
+            with open(script_path, "w") as f:
+                f.write("#!/bin/bash\necho ok\n")
+            os.chmod(script_path, 0o755)
+
+            record = manager.create_execution(
+                repository_url="https://github.com/test/repo",
+                commit_hash="a" * 40,
+                script_path="test.sh",
+                timeout_seconds=5,
+            )
+            executor.execute_async(record.execution_id, repo_dir, "test.sh")
+            assert wait_for_completion(manager, record.execution_id)
+
+            # Wait for cleanup
+            time.sleep(0.5)
+            assert not os.path.exists(repo_dir), "Repo directory should be cleaned up"

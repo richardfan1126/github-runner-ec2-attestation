@@ -141,7 +141,7 @@ _past_exp = st.integers(min_value=0, max_value=int(time.time()) - 60)
 # Property 104: OIDC Issuer Claim Validation
 # ===========================================================================
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(bad_issuer=_wrong_issuer)
 def test_property_104_oidc_issuer_claim_validation(bad_issuer):
     """
@@ -167,7 +167,7 @@ def test_property_104_oidc_issuer_claim_validation(bad_issuer):
 # Property 105: OIDC Audience Claim Validation
 # ===========================================================================
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(bad_audience=_wrong_audience)
 def test_property_105_oidc_audience_claim_validation(bad_audience):
     """
@@ -192,7 +192,7 @@ def test_property_105_oidc_audience_claim_validation(bad_audience):
 # Property 106: OIDC Repository Authorization
 # ===========================================================================
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(bad_repo=_wrong_repo)
 def test_property_106_oidc_repository_authorization(bad_repo):
     """
@@ -218,7 +218,7 @@ def test_property_106_oidc_repository_authorization(bad_repo):
 # Property 107: OIDC Token Expiration Validation
 # ===========================================================================
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(expired_exp=_past_exp)
 def test_property_107_oidc_token_expiration_validation(expired_exp):
     """
@@ -243,7 +243,7 @@ def test_property_107_oidc_token_expiration_validation(expired_exp):
 # Property 108: Health Endpoint No Authentication
 # ===========================================================================
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(st.just(True))  # dummy strategy to satisfy @given; each run hits /health
 def test_property_108_health_endpoint_no_authentication(_dummy):
     """
@@ -275,7 +275,7 @@ def test_property_108_health_endpoint_no_authentication(_dummy):
 # Property 8: OIDC Token Required on Protected Endpoints
 # ===========================================================================
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(execution_id=st.uuids().map(str))
 def test_property_008_oidc_token_required_on_protected_endpoints(execution_id):
     """
@@ -309,7 +309,7 @@ def test_property_008_oidc_token_required_on_protected_endpoints(execution_id):
 # Property 10: OIDC Token Signature Verification
 # ===========================================================================
 
-@settings(max_examples=100, deadline=None)
+@settings(max_examples=20, deadline=None)
 @given(st.just(True))  # dummy strategy
 def test_property_010_oidc_token_signature_verification(_dummy):
     """

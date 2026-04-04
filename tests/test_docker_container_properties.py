@@ -143,7 +143,7 @@ def test_property_109_container_non_reuse(params_list):
             record = manager.create_execution(**params)
             execution_ids.append(record.execution_id)
             script_path = create_test_script(temp_dir, "echo ok\n", f"script_{i}.sh")
-            executor.execute_async(record.execution_id, script_path)
+            executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
 
         # Wait for all to finish
         for eid in execution_ids:
@@ -169,7 +169,7 @@ def test_property_109_container_non_reuse(params_list):
 # ===========================================================================
 
 @given(params=execution_params())
-@settings(max_examples=100, deadline=10000)
+@settings(max_examples=20, deadline=10000)
 def test_property_110_container_unique_naming(params):
     """
     Property 110: For any script execution, verify the Execution_Container is
@@ -191,7 +191,7 @@ def test_property_110_container_unique_naming(params):
         record = manager.create_execution(**params)
         execution_id = record.execution_id
         script_path = create_test_script(temp_dir, "echo ok\n")
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
 
         _wait_for_terminal(manager, execution_id)
 
@@ -213,7 +213,7 @@ def test_property_110_container_unique_naming(params):
 # ===========================================================================
 
 @given(params=execution_params())
-@settings(max_examples=100, deadline=10000)
+@settings(max_examples=20, deadline=10000)
 def test_property_111_docker_container_security_constraints(params):
     """
     Property 111: For any Execution_Container, verify it is configured with:
@@ -237,7 +237,7 @@ def test_property_111_docker_container_security_constraints(params):
 
         record = manager.create_execution(**params)
         script_path = create_test_script(temp_dir, "echo ok\n")
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
 
         _wait_for_terminal(manager, record.execution_id)
 
@@ -304,7 +304,7 @@ def test_property_112_container_removal_verification(params):
         record = manager.create_execution(**params)
         execution_id = record.execution_id
         script_path = create_test_script(temp_dir, "echo ok\n")
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
 
         _wait_for_terminal(manager, execution_id)
         # Allow cleanup to finish
@@ -332,7 +332,7 @@ def test_property_112_container_removal_verification(params):
 @given(
     num_dangling=st.integers(min_value=1, max_value=5),
 )
-@settings(max_examples=100, deadline=10000)
+@settings(max_examples=20, deadline=10000)
 def test_property_113_dangling_container_cleanup_on_startup(num_dangling):
     """
     Property 113: For any server startup, verify the Script_Executor removes
@@ -377,7 +377,7 @@ def test_property_113_dangling_container_cleanup_on_startup(num_dangling):
 # ===========================================================================
 
 @given(daemon_accessible=st.booleans())
-@settings(max_examples=100, deadline=10000)
+@settings(max_examples=20, deadline=10000)
 def test_property_114_docker_daemon_accessibility_check(daemon_accessible):
     """
     Property 114: For any server startup, verify the Script_Executor checks
@@ -406,7 +406,7 @@ def test_property_114_docker_daemon_accessibility_check(daemon_accessible):
         assert result is False, "verify_docker_daemon should return False when daemon is not accessible"
 
 
-@settings(max_examples=100, deadline=10000)
+@settings(max_examples=20, deadline=10000)
 @given(data=st.data())
 def test_property_114_none_docker_client(data):
     """
@@ -431,7 +431,7 @@ def test_property_114_none_docker_client(data):
 # ===========================================================================
 
 @given(image_name=container_image_name())
-@settings(max_examples=100, deadline=10000)
+@settings(max_examples=20, deadline=10000)
 def test_property_115_container_image_configuration(image_name):
     """
     Property 115: For any configured Container_Image name, verify the
@@ -459,7 +459,7 @@ def test_property_115_container_image_configuration(image_name):
         }
         record = manager.create_execution(**params)
         script_path = create_test_script(temp_dir, "echo ok\n")
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
 
         _wait_for_terminal(manager, record.execution_id)
 

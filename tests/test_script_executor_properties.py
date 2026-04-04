@@ -111,7 +111,7 @@ def test_property_21_asynchronous_script_execution(params, output_text):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute asynchronously
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Verify execute_async returns immediately (non-blocking)
         # The function should return before script completes
@@ -174,7 +174,7 @@ def test_property_21_multiple_async_executions(params_list):
             script_path = create_test_script(temp_dir, script_content, f"script_{i}.sh")
             
             # Execute asynchronously
-            executor.execute_async(record.execution_id, script_path)
+            executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for all executions to complete
         max_wait = 5  # Reduced from 10 seconds
@@ -234,7 +234,7 @@ def test_property_22_process_isolation(params):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for execution to complete
         max_wait = 3
@@ -290,7 +290,7 @@ def test_property_22_process_isolation_crash_safety(params):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for execution to complete
         max_wait = 3
@@ -349,7 +349,7 @@ def test_property_25_execution_timeout_configuration(params):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for execution to complete
         max_wait = configured_timeout + 5
@@ -413,7 +413,7 @@ def test_property_26_timeout_termination(params, sleep_multiplier):
         
         # Execute script
         start_time = time.time()
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for timeout to occur
         max_wait = configured_timeout + 3
@@ -473,7 +473,7 @@ def test_property_26_timeout_exit_code(timeout_seconds):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for timeout
         max_wait = timeout_seconds + 3
@@ -525,7 +525,7 @@ def test_property_27_exit_code_capture(params, exit_code):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for execution to complete
         max_wait = 3
@@ -586,7 +586,7 @@ def test_property_27_exit_code_in_output(params):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for execution to complete
         max_wait = 3
@@ -642,7 +642,7 @@ def test_property_28_temporary_file_cleanup(params, should_succeed):
         assert os.path.exists(script_path), "Script file should exist before execution"
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for execution to complete
         max_wait = 3
@@ -701,7 +701,7 @@ def test_property_28_cleanup_after_timeout(params):
         assert os.path.exists(script_path), "Script file should exist before execution"
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for timeout
         max_wait = timeout + 3
@@ -751,7 +751,7 @@ def test_property_28_cleanup_preserves_output(params):
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute script
-        executor.execute_async(execution_id, script_path)
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for execution to complete
         max_wait = 3

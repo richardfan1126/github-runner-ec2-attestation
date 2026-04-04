@@ -69,7 +69,7 @@ def test_execute_script_with_stdout():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -107,7 +107,7 @@ def test_execute_script_with_stderr():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -145,7 +145,7 @@ def test_execute_script_with_both_streams():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -182,7 +182,7 @@ def test_execute_script_with_exit_code_zero():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -219,7 +219,7 @@ def test_execute_script_with_nonzero_exit_code():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -266,7 +266,7 @@ def test_execute_script_with_multiple_exit_codes():
             os.chmod(script_path, 0o755)
             
             # Execute
-            executor.execute_async(record.execution_id, script_path)
+            executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
             
             # Wait for completion
             assert wait_for_completion(manager, record.execution_id)
@@ -309,7 +309,7 @@ def test_execute_script_timeout():
         
         # Execute
         start_time = time.time()
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for timeout
         max_wait = timeout + 2
@@ -366,7 +366,7 @@ def test_execute_script_timeout_with_different_durations():
             os.chmod(script_path, 0o755)
             
             # Execute
-            executor.execute_async(record.execution_id, script_path)
+            executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
             
             # Wait for timeout
             max_wait = timeout + 3
@@ -410,7 +410,7 @@ def test_cleanup_removes_script_file():
         assert os.path.exists(script_path)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -449,7 +449,7 @@ def test_cleanup_on_success():
         assert os.path.exists(script_path)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -492,7 +492,7 @@ def test_cleanup_on_failure():
         assert os.path.exists(script_path)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -536,7 +536,7 @@ def test_cleanup_on_timeout():
         assert os.path.exists(script_path)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for timeout
         max_wait = timeout + 3
@@ -591,7 +591,7 @@ def test_cleanup_removes_empty_directory():
         assert os.path.exists(script_path)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -630,7 +630,7 @@ def test_large_output_capture():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id, max_wait=15)
@@ -674,7 +674,7 @@ def test_concurrent_executions():
             script_path = create_test_script(temp_dir, script_content, f"script_{i}.sh")
             
             # Execute
-            executor.execute_async(record.execution_id, script_path)
+            executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for all to complete
         max_wait = 10
@@ -727,7 +727,7 @@ def test_terminate_running_execution():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for it to start
         time.sleep(0.5)
@@ -786,7 +786,7 @@ def test_terminate_completed_execution():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for completion
         assert wait_for_completion(manager, record.execution_id)
@@ -824,7 +824,7 @@ def test_status_transitions():
         script_path = create_test_script(temp_dir, script_content)
         
         # Execute
-        executor.execute_async(record.execution_id, script_path)
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
         
         # Wait for RUNNING status
         max_wait = 2

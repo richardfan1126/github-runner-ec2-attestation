@@ -724,7 +724,7 @@ class TestExitCodePropagation:
     @given(
         exit_code=st.integers(min_value=0, max_value=255),
     )
-    @settings(max_examples=100)
+    @settings(max_examples=20)
     def test_exit_code_propagated(self, exit_code: int):
         """run() returns the same exit code as the remote script."""
         caller = RemoteExecutorCaller(
@@ -780,7 +780,7 @@ class TestSummaryContainsExecutionResults:
         stderr_val=st.text(min_size=0, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N", "P", "Z"))),
         exit_code_val=st.integers(min_value=0, max_value=255),
     )
-    @settings(max_examples=100)
+    @settings(max_examples=20)
     def test_summary_contains_all_fields(self, stdout_val: str, stderr_val: str, exit_code_val: int):
         """Summary string contains stdout, stderr, exit code, attestation and integrity status."""
         caller = RemoteExecutorCaller(

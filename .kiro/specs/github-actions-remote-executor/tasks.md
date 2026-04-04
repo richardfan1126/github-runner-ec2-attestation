@@ -1844,8 +1844,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Remove script file size validation (no longer fetching individual files)
     - _Requirements: 1.1, 1.2, 1.3, 3.1, 3.5_
 
-- [ ] 88. Update tests for repository cloning approach
-  - [ ] 88.1 Rewrite RepositoryClient tests
+- [x] 88. Update tests for repository cloning approach
+  - [x] 88.1 Rewrite RepositoryClient tests
     - Update tests/test_repository.py to test clone_repo instead of fetch_file
     - Mock `subprocess.run` for git clone and git checkout commands
     - Test authentication via token-embedded URL
@@ -1854,26 +1854,26 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test cleanup_clone removes directory
     - _Requirements: 3.1-3.9_
 
-  - [ ] 88.2 Rewrite RepositoryClient property tests
+  - [x] 88.2 Rewrite RepositoryClient property tests
     - Update property tests to test clone_repo behavior
     - **Property 9: Exact Commit Repository Clone** — verify clone checks out the exact commit
     - **Property 11: Repository Not Found Response** — verify clone failure for non-existent repo
     - **Property 14: Temporary Repository Clone Storage** — verify clone stored in temp directory
     - _Requirements: 3.1-3.9_
 
-  - [ ] 88.3 Update ScriptExecutor tests for repo directory mounting
+  - [x] 88.3 Update ScriptExecutor tests for repo directory mounting
     - Update tests to verify container is created with repo directory mounted at `/workspace`
     - Verify working_dir is set to `/workspace`
     - Verify command uses `/workspace/{script_path}`
     - Verify repo directory is cleaned up after execution
     - _Requirements: 5.1, 5.2, 5.4, 5.5_
 
-  - [ ] 88.4 Update server endpoint tests
+  - [x] 88.4 Update server endpoint tests
     - Update tests/test_server_unit.py to mock clone_repo instead of fetch_file
     - Update tests/test_integration.py for the new flow
     - _Requirements: 1.1, 3.1_
 
-- [ ] 89. Checkpoint - Ensure all repository cloning tests pass
+- [x] 89. Checkpoint - Ensure all repository cloning tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

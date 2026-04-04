@@ -43,9 +43,11 @@ class MockContainer:
         """Start executing the script via subprocess.
 
         Supports two modes:
-        1. Bind-mount: The script host path is passed via the ``volumes``
-           creation kwarg and read directly from disk.
-        2. put_archive: The script content is injected after creation via
+        1. Bind-mount with /workspace: The repo directory is mounted at
+           /workspace and the command references the script within it.
+           The script host path is resolved from the volume mount and command.
+        2. Bind-mount (legacy): A single .sh file is bind-mounted directly.
+        3. put_archive: The script content is injected after creation via
            ``put_archive`` (legacy path).
         """
         self._started = True
@@ -54,10 +56,26 @@ class MockContainer:
             # --- Try to resolve the script from bind-mounted volumes first ---
             script_path = None
             volumes = self._creation_kwargs.get("volumes", {})
+
+            # Mode 1: /workspace mount — resolve script from command + volume
             for host_path, mount_spec in volumes.items():
-                if isinstance(mount_spec, dict) and mount_spec.get("bind", "").endswith(".sh"):
-                    script_path = host_path
+                if isinstance(mount_spec, dict) and mount_spec.get("bind") == "/workspace":
+                    # Extract script relative path from command like ["sh", "/workspace/test.sh"]
+                    if self._command and len(self._command) >= 2:
+                        container_script = self._command[-1]
+                        if container_script.startswith("/workspace/"):
+                            rel_path = container_script[len("/workspace/"):]
+                            candidate = os.path.join(host_path, rel_path)
+                            if os.path.exists(candidate):
+                                script_path = candidate
                     break
+
+            # Mode 2 (legacy): direct .sh bind-mount
+            if script_path is None:
+                for host_path, mount_spec in volumes.items():
+                    if isinstance(mount_spec, dict) and mount_spec.get("bind", "").endswith(".sh"):
+                        script_path = host_path
+                        break
 
             if script_path and os.path.exists(script_path):
                 with open(script_path, "rb") as f:

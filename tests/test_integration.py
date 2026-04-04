@@ -42,7 +42,7 @@ def test_config(temp_dir):
         max_concurrent_executions=10,
         execution_timeout_seconds=5,
         max_script_size_bytes=1024 * 1024,
-        rate_limit_per_ip=10,
+        rate_limit_per_ip=100,
         rate_limit_window_seconds=60,
         temp_storage_path=temp_dir,
         output_retention_hours=1,
@@ -188,8 +188,14 @@ class TestEndToEndIntegration:
             response = client.get(f"/execution/{execution_id}/output")
             assert response.status_code == 200
     
-    def test_rate_limiting(self, client, mock_github_and_attestation):
+    def test_rate_limiting(self, test_config, mock_github_and_attestation, temp_dir):
         """Test rate limiting enforcement"""
+        # Use a low rate limit for this specific test
+        test_config.rate_limit_per_ip = 5
+        app = create_app(test_config, docker_client=create_mock_docker_client())
+        app.state.request_validator.validate_oidc_token = Mock(return_value=VALID_OIDC_RESULT)
+        rate_client = TestClient(app)
+
         request_data = {
             "repository_url": "https://github.com/test/repo",
             "commit_hash": "a1a2a3a4a5a6a1a2a3a4a5a6a1a2a3a4a5a6a1a2",
@@ -199,7 +205,7 @@ class TestEndToEndIntegration:
         
         rate_limited = False
         for _ in range(15):
-            response = client.post("/execute", json=request_data)
+            response = rate_client.post("/execute", json=request_data)
             if response.status_code == 429:
                 rate_limited = True
                 break
