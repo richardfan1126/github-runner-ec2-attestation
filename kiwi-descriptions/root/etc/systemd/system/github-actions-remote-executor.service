@@ -15,7 +15,6 @@ SyslogIdentifier=github-actions-remote-executor
 
 # Security settings
 NoNewPrivileges=false
-PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
