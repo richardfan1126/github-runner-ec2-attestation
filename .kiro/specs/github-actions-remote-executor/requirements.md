@@ -18,6 +18,8 @@ This specification covers three major aspects:
 
 5. **Debug Requirements (Requirement 32)**: Optional debug features for the deployed instance - enabling SSH access using standard EC2 key pair provisioning for troubleshooting, controlled via opt-in flags in the deployment script and Terraform variables.
 
+6. **Image Provisioning Requirements (Requirements 33-35)**: Packages and services that must be included in the KIWI image for runtime operation - Docker daemon for container execution, container image pulling at startup, and git for repository cloning.
+
 Note: By default, the KIWI image excludes SSH-related packages (openssh-server, cloud-init, ec2-instance-connect) to remove operator access. The debug feature must be enabled at KIWI image build time to include these packages, and then at deployment time to open port 22 and attach a key pair.
 
 The build process does NOT use the Remote Executor itself (since you can't use something that doesn't exist yet during initial builds). Instead, it uses standard GitHub Actions runners to build the KIWI image, and a temporary EC2 instance to convert it to an AMI.
@@ -68,6 +70,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Coldsnap**: AWS tool for uploading raw disk images to EBS snapshots
 - **Build_Instance**: Temporary EC2 instance used to convert KIWI image to AMI
 - **Docker_Daemon**: The Docker Engine service (dockerd) that must be installed and enabled in the KIWI image to support creation and management of Execution_Containers at runtime
+- **Git_Package**: The git version control system binary that must be installed in the KIWI image to support repository cloning operations by the Repository_Client at runtime
 
 ## Requirements
 
@@ -485,6 +488,16 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 4. IF the Container_Image pull fails, THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating the image name and failure reason
 5. IF the Container_Image is already present in the local Docker image store, THE GHA_Server SHALL skip pulling and use the existing image
 6. THE GHA_Server SHALL log the Container_Image pull operation including image name, pull duration, and image size
+
+### Requirement 35: Git Package Provisioning in KIWI Image
+
+**User Story:** As a DevOps engineer, I want the KIWI image to include the git package, so that the Repository_Client can clone GitHub repositories at runtime using git commands
+
+#### Acceptance Criteria
+
+1. THE appliance.kiwi package definition SHALL include the git package in the image packages list
+2. WHEN the KIWI image boots, THE git binary SHALL be available in the system PATH for the Repository_Client to invoke via subprocess
+3. IF the git package is not present in appliance.kiwi, THEN THE Repository_Client SHALL fail to clone repositories because the git binary is unavailable
 
 ## Deployment Requirements
 

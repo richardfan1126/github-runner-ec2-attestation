@@ -1717,6 +1717,29 @@ The GHA_Server pulls the Container_Image using the Docker daemon at startup:
 - The build scripts (`build-kiwi-image.sh` and `config.sh`) do NOT handle container image pulling — this is entirely a server startup responsibility
 - Since the Container_Image is pulled at runtime (not baked in), the KIWI image does not need to be rebuilt to change the container image — only the environment configuration needs updating
 
+### Git Package Provisioning in KIWI Image
+
+The KIWI image must include the `git` package so that the Repository_Client can clone GitHub repositories at runtime. The Repository_Client (`src/repository.py`) uses `subprocess.run(["git", "clone", ...])`, `subprocess.run(["git", "fetch", ...])`, and `subprocess.run(["git", "checkout", ...])` to clone repositories at specified commits. Without the `git` binary available in the system PATH, all repository cloning operations fail and the entire execution flow is broken.
+
+**Package Inclusion (appliance.kiwi):**
+
+The `appliance.kiwi` package definition must include the `git` package in the `<packages type="image">` section:
+
+```xml
+<packages type="image">
+    <!-- existing packages -->
+    <package name="git"/>
+</packages>
+```
+
+This ensures the `git` binary is installed in the KIWI image. Without this package, the Repository_Client cannot clone repositories and every execution request will fail at the repository cloning step.
+
+**Design Rationale:**
+
+- The git package is included at the KIWI image level (not installed at runtime) because the read-only root filesystem (`overlayroot="true"`, `overlayroot_readonly_filesystem="erofs"`) prevents package installation after boot
+- This follows the same pattern as the `docker` package inclusion (Requirement 33)
+- No service enablement is needed for git (unlike Docker) since git is a command-line tool invoked on demand, not a daemon
+
 ## Infrastructure Provisioning Architecture
 
 The AMI build process provisions temporary AWS infrastructure using Terraform. This infrastructure is created for each build and destroyed after completion.
@@ -3624,6 +3647,12 @@ class AttestationBundle:
 
 **Validates: Requirements 34.5**
 
+### Property 121: Git Package Inclusion in KIWI Image
+
+*For any* KIWI image build, the `appliance.kiwi` package definition should include the `git` package in the image packages list, ensuring the git binary is available at runtime for the Repository_Client to clone repositories.
+
+**Validates: Requirements 35.1**
+
 ## Build Error Handling
 
 ### Build Error Categories
@@ -3700,6 +3729,11 @@ class AttestationBundle:
     - Container_Image verification failure after pull (image not in local Docker store)
     - Docker daemon not accessible when attempting pull
 
+13. **Git Package Provisioning Errors**
+    - Git package missing from appliance.kiwi
+    - Git binary not available in system PATH at runtime
+    - Repository_Client clone operations failing due to missing git binary
+
 ### Build Error Handling Strategies
 
 **KIWI Build Errors**
@@ -3768,6 +3802,11 @@ class AttestationBundle:
 - All failure modes prevent the KIWI image from being finalized — no image is produced without the Container_Image available
 - Error messages include the Container_Image name for debugging
 
+**Git Package Provisioning Errors**
+- Verify `git` package is listed in `appliance.kiwi` before building
+- At runtime, if the git binary is not available, the Repository_Client's `subprocess.run(["git", "clone", ...])` calls will fail with a FileNotFoundError or non-zero exit code
+- The Repository_Client maps these failures to GitHubAPIError with appropriate error messages
+
 ### Build Logging Strategy
 
 **Log Levels**
@@ -3802,6 +3841,7 @@ The build system requires both unit testing and property-based testing:
 - SSH command execution
 - Snapshot ID extraction
 - Docker package presence in appliance.kiwi XML
+- Git package presence in appliance.kiwi XML
 - Container image pull at server startup
 
 **Property-Based Tests** focus on:
@@ -3824,12 +3864,16 @@ The build system requires both unit testing and property-based testing:
 ### Build Test Coverage Areas
 
 **KIWI Build Testing**
-- Unit tests: Missing PCR file, invalid JSON format, missing .raw file, docker package presence in appliance.kiwi
+- Unit tests: Missing PCR file, invalid JSON format, missing .raw file, docker package presence in appliance.kiwi, git package presence in appliance.kiwi
 - Property tests: PCR measurement format validation, build reproducibility
 
 **Docker Daemon Provisioning Testing**
 - Unit tests: Verify `docker` package listed in appliance.kiwi XML, verify `systemctl enable docker` in config.sh, verify Docker daemon starts on boot (integration)
 - Property tests: Docker package inclusion (Property 116), Docker service enablement (Property 117)
+
+**Git Package Provisioning Testing**
+- Unit tests: Verify `git` package listed in appliance.kiwi XML
+- Property tests: Git package inclusion (Property 121)
 
 **Container Image Pull at Server Startup Testing**
 - Unit tests: Successful pull flow, pull failure (image not found, network error), skip pull when image already present, pull logging (image name, duration, size), startup failure on pull error

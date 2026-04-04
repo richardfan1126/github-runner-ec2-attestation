@@ -1876,11 +1876,22 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 89. Checkpoint - Ensure all repository cloning tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 90. Add git package to KIWI image
+  - [ ] 90.1 Add git package to appliance.kiwi
+    - Add `<package name="git"/>` to the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
+    - Place it alongside existing packages (e.g., after `docker`)
+    - _Requirements: 35.1, 35.2_
+
+  - [ ] 90.2 Write property test for Git Package Inclusion
+    - **Property 121: Git Package Inclusion in KIWI Image**
+    - Parse `kiwi-descriptions/appliance.kiwi` XML and verify the `git` package is listed in the `<packages type="image">` section
+    - **Validates: Requirements 35.1**
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 120 correctness properties from the design document
+- Property tests validate the 121 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
@@ -1908,8 +1919,9 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - OIDC tokens are validated for signature (JWKS), issuer, audience, repository, and expiration claims
 - Protected endpoints (/execute, /execution/{id}/output) require Bearer OIDC tokens; /health remains unauthenticated
 - Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
+- Git package provisioning (task 90) adds the git package to the KIWI image so the Repository_Client can clone repositories at runtime using git commands
 - Container image pre-pull (tasks 76-79) originally baked the configured Container_Image into the KIWI image during build; tasks 80-84 reverse this by removing the build-time pre-pull code and implementing server-startup pull instead — the GHA_Server now pulls the Container_Image from the registry at startup before accepting requests
-- All 120 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 121 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
