@@ -134,10 +134,13 @@ The system consists of the following major components:
 - Validates file size limits
 
 **Repository Client**
-- Authenticates to GitHub using provided tokens
-- Fetches file content from specific commits
-- Handles GitHub API errors
-- Caches authentication state
+- Clones the entire repository at the specified commit into a temporary directory under `temp_storage_path` using `git clone --depth 1`
+- Authenticates using the GitHub token embedded in the clone URL (`https://{token}@github.com/owner/repo.git`)
+- Checks out the exact commit after cloning
+- Validates the script file exists within the cloned repository
+- Returns the path to the cloned repository directory and the relative script path
+- Handles clone failures (authentication errors, repository not found, network errors)
+- Cleans up cloned repository directories after execution
 
 **Attestation Generator**
 - Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
@@ -166,7 +169,9 @@ The system consists of the following major components:
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
 - Assigns a unique container name derived from the Execution_ID to each container
 - Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), network disabled, no privilege escalation, non-root user
-- Bind-mounts the script file read-only into the container at creation time (avoids `put_archive` issues with read-only root filesystems)
+- Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
+- Sets the container working directory to `/workspace` so the script can reference sibling files
+- Executes the script via `command=["sh", "/workspace/{script_path}"]` where `script_path` is the relative path within the repo
 - Captures stdout and stderr streams from the container
 - Monitors execution progress and enforces timeout
 - Removes the container and its resources after completion, failure, or timeout
@@ -188,9 +193,9 @@ The system consists of the following major components:
 - Implements retention policy
 
 **Temporary Storage**
-- Manages temporary file storage for fetched scripts
+- Manages temporary storage for cloned repository directories
 - Provides isolated directories per execution
-- Handles cleanup after execution
+- Handles cleanup of cloned repos after execution
 
 ### Request Flow
 
@@ -200,7 +205,7 @@ The system consists of the following major components:
 2. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
 3. Request Handler validates request structure
 4. Request Validator validates all request body fields
-5. Repository Client authenticates and fetches script file from GitHub
+5. Repository Client authenticates and clones the repository at the specified commit into a temporary directory
 6. Attestation Generator creates attestation document with execution metadata
 7. Execution Manager creates execution record with unique ID
 8. Response returned immediately with execution ID and attestation document
@@ -404,8 +409,16 @@ class RepositoryClient:
         """Authenticates with GitHub using token"""
         pass
     
-    def fetch_file(self, repo_url: str, commit: str, path: str) -> FileContent:
-        """Fetches file content from specific commit"""
+    def clone_repo(self, repo_url: str, commit: str, token: str) -> CloneResult:
+        """Clones repository at specific commit into temp directory"""
+        pass
+    
+    def validate_script_exists(self, clone_path: str, script_path: str) -> bool:
+        """Validates script file exists within cloned repo"""
+        pass
+    
+    def cleanup_clone(self, clone_path: str) -> None:
+        """Removes cloned repository directory"""
         pass
 ```
 
@@ -463,11 +476,12 @@ class ScriptExecutor:
         """
         pass
 
-    def execute_async(self, execution_id: str, script_path: str) -> None:
+    def execute_async(self, execution_id: str, repo_path: str, script_path: str) -> None:
         """
-        Creates a new Execution_Container from Container_Image, bind-mounts the
-        script read-only into the container, and executes it asynchronously. The
-        container is assigned a unique name derived from the execution_id.
+        Creates a new Execution_Container from Container_Image, mounts the
+        cloned repository directory read-only at /workspace, and executes the
+        script asynchronously. The container is assigned a unique name derived
+        from the execution_id.
         """
         pass
 
@@ -614,6 +628,15 @@ class OIDCTokenClaims:
     sub: str       # Subject (e.g., repo:owner/repo:ref:refs/heads/main)
 ```
 
+### CloneResult
+
+```python
+@dataclass
+class CloneResult:
+    clone_path: str      # Path to cloned repository directory
+    script_path: str     # Relative path to script within repo
+```
+
 
 ## Correctness Properties
 
@@ -697,9 +720,9 @@ class OIDCTokenClaims:
 
 **Validates: Requirements 3.6**
 
-### Property 14: Temporary File Storage
+### Property 14: Temporary Repository Clone Storage
 
-*For any* successfully fetched script file, the Repository Client should store the file in a temporary secure location accessible by the execution ID.
+*For any* successfully cloned repository, the Repository Client should clone the repository into a temporary secure directory accessible by the execution ID.
 
 **Validates: Requirements 3.7**
 
@@ -781,9 +804,9 @@ class OIDCTokenClaims:
 
 **Validates: Requirements 5.7**
 
-### Property 28: Execution Container and Temporary File Cleanup
+### Property 28: Execution Container and Cloned Repository Cleanup
 
-*For any* script execution (successful, failed, or timed out), the Execution_Container should be removed and all temporary files should be cleaned up after execution completes.
+*For any* script execution (successful, failed, or timed out), the Execution_Container should be removed and the cloned repository directory should be cleaned up after execution completes.
 
 **Validates: Requirements 5.4, 5.5, 5.10, 8.9**
 

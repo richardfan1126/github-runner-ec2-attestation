@@ -1788,6 +1788,94 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 84. Checkpoint - Ensure all server-startup container image pull tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 85. Rewrite RepositoryClient to clone repositories instead of fetching single files
+  - [ ] 85.1 Replace fetch_file with clone_repo method
+    - Replace the `fetch_file` method with a `clone_repo(repo_url, commit, token)` method
+    - Use `git clone --depth 1` with the token embedded in the URL (`https://{token}@github.com/owner/repo.git`) to clone into a temp directory under `temp_storage_path`
+    - After cloning, run `git checkout {commit}` to ensure the exact commit is checked out
+    - Return a `CloneResult` dataclass with `clone_path` (path to cloned repo directory) and `script_path` (relative path within repo)
+    - Handle clone failures: authentication errors, repository not found, network errors
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.6, 3.7, 3.8_
+
+  - [ ] 85.2 Add validate_script_exists method
+    - Add a `validate_script_exists(clone_path, script_path)` method that checks the script file exists within the cloned repo
+    - Return True if the file exists, raise GitHubAPIError with 404 if not
+    - _Requirements: 3.5_
+
+  - [ ] 85.3 Replace cleanup_temp_file with cleanup_clone method
+    - Replace `cleanup_temp_file` with `cleanup_clone(clone_path)` that removes the entire cloned repo directory using `shutil.rmtree`
+    - Handle cleanup errors gracefully (log but don't raise)
+    - _Requirements: 3.5_
+
+  - [ ] 85.4 Add CloneResult data model
+    - Add `CloneResult` dataclass to `src/models.py` with fields: `clone_path: str`, `script_path: str`
+    - _Requirements: 3.1_
+
+  - [ ] 85.5 Remove FileContent data model and _store_temp_file method
+    - Remove the `FileContent` dataclass, `_store_temp_file`, and `_check_commit_exists` methods that are no longer needed
+    - Keep `_parse_repo_url` and `_check_repository_exists` if still useful, otherwise remove
+    - _Requirements: 3.1_
+
+- [ ] 86. Update ScriptExecutor to mount cloned repo directory
+  - [ ] 86.1 Update execute_async signature to accept repo_path and script_path
+    - Change `execute_async(execution_id, script_path)` to `execute_async(execution_id, repo_path, script_path)`
+    - `repo_path` is the path to the cloned repository directory on the host
+    - `script_path` is the relative path to the script within the repo
+    - _Requirements: 5.1, 5.2_
+
+  - [ ] 86.2 Update _execute_in_container to mount repo directory
+    - Replace the single-file bind-mount with a directory mount: mount `repo_path` read-only at `/workspace` in the container
+    - Set the container working directory to `/workspace` using `working_dir="/workspace"`
+    - Update the command to `["sh", "/workspace/{script_path}"]`
+    - Keep all existing security constraints (memory, CPU, read-only rootfs, tmpfs, no network, no-new-privileges, non-root user)
+    - _Requirements: 5.1, 5.2, 5.13, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
+
+  - [ ] 86.3 Update _cleanup_temp_files to remove cloned repo directory
+    - Update `_cleanup_temp_files` to accept `repo_path` instead of `script_path`
+    - Use `shutil.rmtree(repo_path)` to remove the entire cloned repo directory
+    - _Requirements: 5.4, 5.5_
+
+- [ ] 87. Update server.py to wire new RepositoryClient and ScriptExecutor
+  - [ ] 87.1 Update POST /execute endpoint
+    - Replace `repo_client.fetch_file(...)` call with `repo_client.clone_repo(repo_url, commit, token)`
+    - Add `repo_client.validate_script_exists(clone_result.clone_path, script_path)` call
+    - Update `executor.execute_async(execution_id, clone_result.clone_path, clone_result.script_path)` call
+    - Replace `repo_client.cleanup_temp_file(file_content.temp_path)` with `repo_client.cleanup_clone(clone_result.clone_path)` in error paths
+    - Remove script file size validation (no longer fetching individual files)
+    - _Requirements: 1.1, 1.2, 1.3, 3.1, 3.5_
+
+- [ ] 88. Update tests for repository cloning approach
+  - [ ] 88.1 Rewrite RepositoryClient tests
+    - Update tests/test_repository.py to test clone_repo instead of fetch_file
+    - Mock `subprocess.run` for git clone and git checkout commands
+    - Test authentication via token-embedded URL
+    - Test clone failure scenarios (auth error, repo not found, network error)
+    - Test validate_script_exists with existing and missing files
+    - Test cleanup_clone removes directory
+    - _Requirements: 3.1-3.9_
+
+  - [ ] 88.2 Rewrite RepositoryClient property tests
+    - Update property tests to test clone_repo behavior
+    - **Property 9: Exact Commit Repository Clone** — verify clone checks out the exact commit
+    - **Property 11: Repository Not Found Response** — verify clone failure for non-existent repo
+    - **Property 14: Temporary Repository Clone Storage** — verify clone stored in temp directory
+    - _Requirements: 3.1-3.9_
+
+  - [ ] 88.3 Update ScriptExecutor tests for repo directory mounting
+    - Update tests to verify container is created with repo directory mounted at `/workspace`
+    - Verify working_dir is set to `/workspace`
+    - Verify command uses `/workspace/{script_path}`
+    - Verify repo directory is cleaned up after execution
+    - _Requirements: 5.1, 5.2, 5.4, 5.5_
+
+  - [ ] 88.4 Update server endpoint tests
+    - Update tests/test_server_unit.py to mock clone_repo instead of fetch_file
+    - Update tests/test_integration.py for the new flow
+    - _Requirements: 1.1, 3.1_
+
+- [ ] 89. Checkpoint - Ensure all repository cloning tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -1798,6 +1886,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
 - The cleanup implementation (tasks 37-38) covers testing the existing scripts/cleanup.py which is already fully implemented
 - The debug SSH implementation (tasks 39-47) adds opt-in SSH debug access across build-time (KIWI image), deploy-time (Terraform + deploy script), and GitHub Actions workflow
+- The repository cloning implementation (tasks 85-89) replaces single-file fetch with full repository cloning and directory mounting into containers
 - Python dependencies are separated into two configurations:
   - pyproject.toml: Remote executor service dependencies (fastapi, uvicorn, requests, docker, hypothesis, pytest, pytest-asyncio, httpx)
   - scripts/pyproject.toml: Build/deployment script dependencies (boto3, paramiko)
