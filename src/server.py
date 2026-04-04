@@ -424,8 +424,6 @@ def add_routes(app: FastAPI) -> None:
                 logger.error(
                     f"Attestation generation failed: {attestation_error.context}"
                 )
-                # Clean up cloned repo
-                repo_client.cleanup_clone(clone_result.clone_path)
                 
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -462,7 +460,7 @@ def add_routes(app: FastAPI) -> None:
             
             # Initiate async execution
             executor = request.app.state.script_executor
-            executor.execute_async(execution_record.execution_id, script_full_path)
+            executor.execute_async(execution_record.execution_id, clone_result.clone_path, clone_result.script_path)
             
             logger.info(f"Initiated async execution: {execution_record.execution_id}")
             

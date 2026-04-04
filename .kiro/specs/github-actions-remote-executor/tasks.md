@@ -1816,21 +1816,21 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Keep `_parse_repo_url` and `_check_repository_exists` if still useful, otherwise remove
     - _Requirements: 3.1_
 
-- [ ] 86. Update ScriptExecutor to mount cloned repo directory
-  - [ ] 86.1 Update execute_async signature to accept repo_path and script_path
+- [x] 86. Update ScriptExecutor to mount cloned repo directory
+  - [x] 86.1 Update execute_async signature to accept repo_path and script_path
     - Change `execute_async(execution_id, script_path)` to `execute_async(execution_id, repo_path, script_path)`
     - `repo_path` is the path to the cloned repository directory on the host
     - `script_path` is the relative path to the script within the repo
     - _Requirements: 5.1, 5.2_
 
-  - [ ] 86.2 Update _execute_in_container to mount repo directory
+  - [x] 86.2 Update _execute_in_container to mount repo directory
     - Replace the single-file bind-mount with a directory mount: mount `repo_path` read-only at `/workspace` in the container
     - Set the container working directory to `/workspace` using `working_dir="/workspace"`
     - Update the command to `["sh", "/workspace/{script_path}"]`
     - Keep all existing security constraints (memory, CPU, read-only rootfs, tmpfs, no network, no-new-privileges, non-root user)
     - _Requirements: 5.1, 5.2, 5.13, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
-  - [ ] 86.3 Update _cleanup_temp_files to remove cloned repo directory
+  - [x] 86.3 Update _cleanup_temp_files to remove cloned repo directory
     - Update `_cleanup_temp_files` to accept `repo_path` instead of `script_path`
     - Use `shutil.rmtree(repo_path)` to remove the entire cloned repo directory
     - _Requirements: 5.4, 5.5_

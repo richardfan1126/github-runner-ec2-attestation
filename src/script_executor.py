@@ -1,6 +1,7 @@
 """Script execution for GitHub Actions Remote Executor using Docker SDK"""
 import io
 import os
+import shutil
 import tarfile
 import time
 import threading
@@ -59,36 +60,38 @@ class ScriptExecutor:
         self._active_containers = {}
         self._container_lock = threading.Lock()
 
-    def execute_async(self, execution_id: str, script_path: str) -> None:
+    def execute_async(self, execution_id: str, repo_path: str, script_path: str) -> None:
         """
         Execute script asynchronously inside an ephemeral Docker container.
 
         Creates a background thread that:
         1. Creates a new container from the configured Container_Image
-        2. Copies the script into the container
+        2. Mounts the cloned repository directory read-only at /workspace
         3. Starts the container and waits for completion with timeout
         4. Captures stdout/stderr and exit code
         5. Removes the container and verifies removal
-        6. Cleans up temporary files
+        6. Cleans up the cloned repository directory
 
         Args:
             execution_id: Unique execution identifier
-            script_path: Path to script file to execute
+            repo_path: Path to the cloned repository directory on the host
+            script_path: Relative path to the script within the repo
         """
         thread = threading.Thread(
             target=self._execute_in_container,
-            args=(execution_id, script_path),
+            args=(execution_id, repo_path, script_path),
             daemon=True,
         )
         thread.start()
 
-    def _execute_in_container(self, execution_id: str, script_path: str) -> None:
+    def _execute_in_container(self, execution_id: str, repo_path: str, script_path: str) -> None:
         """
         Internal method to execute script inside a Docker container (runs in background thread).
 
         Args:
             execution_id: Unique execution identifier
-            script_path: Path to script file to execute
+            repo_path: Path to the cloned repository directory on the host
+            script_path: Relative path to the script within the repo
         """
         set_log_context(execution_id=execution_id)
 
@@ -112,22 +115,23 @@ class ScriptExecutor:
             logger.info(f"Starting execution {execution_id}: {script_path}")
 
             # Create container with security constraints
-            # The script is bind-mounted read-only into the container so we
-            # don't need put_archive (which fails on read-only rootfs).
+            # The cloned repo directory is bind-mounted read-only into the
+            # container at /workspace so the script can reference sibling files.
             # A tmpfs at /tmp/execution gives the script a writable area.
             nano_cpus = int(self._cpu_limit * 1e9)
-            host_script_path = os.path.abspath(script_path)
+            host_repo_path = os.path.abspath(repo_path)
             container = self._docker_client.containers.create(
                 image=self._container_image,
                 name=container_name,
-                command=["sh", "/scripts/script.sh"],
+                command=["sh", f"/workspace/{script_path}"],
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
                 read_only=True,
                 tmpfs={"/tmp/execution": "size=64m,uid=65534"},
                 volumes={
-                    host_script_path: {"bind": "/scripts/script.sh", "mode": "ro"},
+                    host_repo_path: {"bind": "/workspace", "mode": "ro"},
                 },
+                working_dir="/workspace",
                 network_mode="none",
                 security_opt=["no-new-privileges"],
                 user="nobody",
@@ -204,7 +208,7 @@ class ScriptExecutor:
                 self._remove_container(container, execution_id)
 
             # Clean up temporary files
-            self._cleanup_temp_files(execution_id, script_path)
+            self._cleanup_temp_files(execution_id, repo_path)
 
     def _copy_script_to_container(self, container, script_path: str) -> None:
         """
@@ -421,22 +425,17 @@ class ScriptExecutor:
                 f"Container image '{image_name}' not available after pull"
             )
 
-    def _cleanup_temp_files(self, execution_id: str, script_path: str) -> None:
+    def _cleanup_temp_files(self, execution_id: str, repo_path: str) -> None:
         """
-        Clean up temporary files after execution.
+        Clean up the cloned repository directory after execution.
 
         Args:
             execution_id: Unique execution identifier
-            script_path: Path to script file to clean up
+            repo_path: Path to the cloned repository directory to clean up
         """
         try:
-            if os.path.exists(script_path):
-                os.remove(script_path)
-                logger.debug(f"Removed script file: {script_path}")
-
-            script_dir = os.path.dirname(script_path)
-            if os.path.exists(script_dir) and not os.listdir(script_dir):
-                os.rmdir(script_dir)
-                logger.debug(f"Removed empty directory: {script_dir}")
+            if os.path.exists(repo_path):
+                shutil.rmtree(repo_path)
+                logger.debug(f"Removed cloned repo directory: {repo_path}")
         except Exception as e:
             logger.warning(f"Failed to cleanup temp files for {execution_id}: {e}")
