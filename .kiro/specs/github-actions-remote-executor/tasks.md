@@ -1835,8 +1835,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Use `shutil.rmtree(repo_path)` to remove the entire cloned repo directory
     - _Requirements: 5.4, 5.5_
 
-- [ ] 87. Update server.py to wire new RepositoryClient and ScriptExecutor
-  - [ ] 87.1 Update POST /execute endpoint
+- [x] 87. Update server.py to wire new RepositoryClient and ScriptExecutor
+  - [x] 87.1 Update POST /execute endpoint
     - Replace `repo_client.fetch_file(...)` call with `repo_client.clone_repo(repo_url, commit, token)`
     - Add `repo_client.validate_script_exists(clone_result.clone_path, script_path)` call
     - Update `executor.execute_async(execution_id, clone_result.clone_path, clone_result.script_path)` call

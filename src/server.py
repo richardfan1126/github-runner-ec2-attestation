@@ -387,28 +387,8 @@ def add_routes(app: FastAPI) -> None:
             
             phase_times['file_retrieval'] = (time.time() - fetch_start) * 1000
             
-            # Validate script file size
+            # Get config for later use
             config = request.app.state.config
-            script_full_path = os.path.join(clone_result.clone_path, clone_result.script_path)
-            script_size = os.path.getsize(script_full_path)
-            if script_size > config.max_script_size_bytes:
-                logger.warning(
-                    f"Script file too large: {script_size} bytes "
-                    f"(max: {config.max_script_size_bytes})"
-                )
-                repo_client.cleanup_clone(clone_result.clone_path)
-                
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=create_error_response(
-                        "file_too_large",
-                        f"Script file exceeds maximum size of {config.max_script_size_bytes} bytes",
-                        {
-                            "file_size": script_size,
-                            "max_size": config.max_script_size_bytes
-                        }
-                    )
-                )
             
             # Generate attestation
             attestation_start = time.time()
@@ -424,6 +404,7 @@ def add_routes(app: FastAPI) -> None:
                 logger.error(
                     f"Attestation generation failed: {attestation_error.context}"
                 )
+                repo_client.cleanup_clone(clone_result.clone_path)
                 
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

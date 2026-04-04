@@ -317,48 +317,10 @@ class TestExecuteEndpoint:
                     
                     assert response.status_code == 404
     
-    def test_file_too_large_413(self):
-        """Test 413 error for oversized script file"""
-        app = create_app(get_test_config())
-        client = TestClient(app)
-        
-        max_size = app.state.config.max_script_size_bytes
-        oversized = max_size + 1000
-        
-        request_data = {
-            "repository_url": "https://github.com/test/repo",
-            "commit_hash": "a" * 40,
-            "script_path": "large.sh",
-            "github_token": "ghp_token"
-        }
-        
-        with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
-             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
-            mock_validate.return_value = Mock(valid=True, errors=[])
-            
-            with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
-                mock_auth.return_value = Mock(success=True, error_message=None)
-                
-                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
-                    mock_clone.return_value = CloneResult(
-                        clone_path="/tmp/clone_large",
-                        script_path=""
-                    )
-                    
-                    with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
-                        with patch('os.path.getsize', return_value=oversized):
-                            with patch.object(app.state.repository_client, 'cleanup_clone') as mock_cleanup:
-                                response = client.post("/execute", json=request_data, headers=OIDC_BEARER_HEADER)
-                                
-                                assert response.status_code == 413
-                                data = response.json()
-                                assert data["detail"]["error"] == "file_too_large"
-                                assert data["detail"]["details"]["file_size"] == oversized
-                                assert data["detail"]["details"]["max_size"] == max_size
-                                
-                                # Verify clone was cleaned up
-                                mock_cleanup.assert_called_once_with("/tmp/clone_large")
-    
+    # NOTE: test_file_too_large_413 removed - script file size validation
+    # has been removed from the /execute endpoint since we now clone the
+    # full repository rather than fetching individual files.
+
     def test_attestation_failure_500(self):
         """Test 500 error for attestation generation failure"""
         app = create_app(get_test_config())

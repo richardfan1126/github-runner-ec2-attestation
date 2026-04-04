@@ -395,92 +395,15 @@ def test_invalid_execution_id_response(execution_id):
 
 
 # Feature: github-actions-remote-executor, Property 47: Script Size Validation
-@settings(max_examples=10, deadline=None)
-@given(execution_request, st.integers(min_value=1, max_value=10000000))
-def test_script_size_validation(req_data, file_size):
-    """
-    **Validates: Requirements 8.2**
-    
-    For any execution request, the server should validate the script file 
-    size before execution.
-    """
-    # Needs fresh app per example due to rate limiter state
-    app = create_app(get_test_config())
-    client = TestClient(app)
-    
-    with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
-         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
-        mock_validate.return_value = Mock(valid=True, errors=[])
-        
-        with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
-            mock_auth.return_value = Mock(success=True, error_message=None)
-            
-            with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
-                mock_clone.return_value = CloneResult(
-                    clone_path="/tmp/clone_size",
-                    script_path=""
-                )
-                
-                with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
-                    with patch('os.path.getsize', return_value=file_size):
-                        with patch.object(app.state.repository_client, 'cleanup_clone'):
-                            response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
-                            
-                            # Should validate size and reject if too large
-                            max_size = app.state.config.max_script_size_bytes
-                            if file_size > max_size:
-                                assert response.status_code == 413, \
-                                    f"Expected 413 for oversized file, got {response.status_code}"
-                            else:
-                                # Size is OK, should proceed (may fail for other reasons in test)
-                                assert response.status_code in [200, 500], \
-                                    f"Unexpected status for valid size: {response.status_code}"
+# NOTE: Script file size validation has been removed from the /execute endpoint
+# since we now clone the full repository rather than fetching individual files.
+# The server no longer rejects requests based on script file size.
 
 
 # Feature: github-actions-remote-executor, Property 48: Oversized Script Rejection
-@settings(max_examples=10, deadline=None)
-@given(execution_request)
-def test_oversized_script_rejection(req_data):
-    """
-    **Validates: Requirements 8.3**
-    
-    For any script file that exceeds the maximum allowed size, the server 
-    should return HTTP 413 with a file too large error.
-    """
-    # Needs fresh app per example due to rate limiter state
-    app = create_app(get_test_config())
-    client = TestClient(app)
-    
-    max_size = app.state.config.max_script_size_bytes
-    
-    with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
-         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
-        mock_validate.return_value = Mock(valid=True, errors=[])
-        
-        with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
-            mock_auth.return_value = Mock(success=True, error_message=None)
-            
-            with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
-                mock_clone.return_value = CloneResult(
-                    clone_path="/tmp/clone_oversized",
-                    script_path=""
-                )
-                
-                with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
-                    with patch('os.path.getsize', return_value=max_size + 1):
-                        with patch.object(app.state.repository_client, 'cleanup_clone') as mock_cleanup:
-                            response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
-                            
-                            assert response.status_code == 413, \
-                                f"Expected 413 for oversized file, got {response.status_code}"
-                            
-                            data = response.json()
-                            assert "error" in data.get("detail", {}), "Response missing error field"
-                            assert data["detail"]["error"] == "file_too_large", \
-                                "Error should be 'file_too_large'"
-                            
-                            # Verify clone was cleaned up
-                            mock_cleanup.assert_called_once()
+# NOTE: Script file size validation has been removed from the /execute endpoint
+# since we now clone the full repository rather than fetching individual files.
+# The server no longer rejects requests based on script file size.
 
 
 # Feature: github-actions-remote-executor, Property 49: Rate Limiting per IP
