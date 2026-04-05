@@ -1876,13 +1876,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 89. Checkpoint - Ensure all repository cloning tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 90. Add git package to KIWI image
-  - [ ] 90.1 Add git package to appliance.kiwi
+- [x] 90. Add git package to KIWI image
+  - [x] 90.1 Add git package to appliance.kiwi
     - Add `<package name="git"/>` to the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
     - Place it alongside existing packages (e.g., after `docker`)
     - _Requirements: 35.1, 35.2_
 
-  - [ ] 90.2 Write property test for Git Package Inclusion
+  - [x] 90.2 Write property test for Git Package Inclusion
     - **Property 121: Git Package Inclusion in KIWI Image**
     - Parse `kiwi-descriptions/appliance.kiwi` XML and verify the `git` package is listed in the `<packages type="image">` section
     - **Validates: Requirements 35.1**

@@ -398,3 +398,40 @@ def test_docker_service_enablement():
     assert "systemctl enable docker" in content, (
         "config.sh must enable the docker service via systemctl"
     )
+
+
+def test_git_package_inclusion_in_kiwi_image():
+    """
+    Property 121: Git Package Inclusion in KIWI Image
+
+    The git package must be listed in the <packages type="image"> section
+    of kiwi-descriptions/appliance.kiwi so the Repository_Client can clone
+    repositories at runtime using git commands.
+
+    **Validates: Requirements 35.1**
+    """
+    import xml.etree.ElementTree as ET
+
+    appliance_path = Path("kiwi-descriptions/appliance.kiwi")
+    assert appliance_path.exists(), "appliance.kiwi must exist"
+
+    tree = ET.parse(appliance_path)
+    root = tree.getroot()
+
+    # Find the <packages type="image"> section
+    image_packages = None
+    for packages_elem in root.findall("packages"):
+        if packages_elem.get("type") == "image":
+            image_packages = packages_elem
+            break
+
+    assert image_packages is not None, "Must have a <packages type='image'> section"
+
+    # Collect all package names
+    package_names = [
+        pkg.get("name") for pkg in image_packages.findall("package")
+    ]
+
+    assert "git" in package_names, (
+        "git package must be listed in <packages type='image'> section"
+    )

@@ -64,6 +64,7 @@
         <package name="python3.11"/>
         <package name="python3.11-pip"/>
         <package name="docker"/>
+        <package name="git"/>
         <!-- Don't install these packages -->
         <ignore name="ec2-hibinit-agent"/>
         <ignore name="grubby"/>
