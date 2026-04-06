@@ -11,6 +11,7 @@ import docker
 from src.config import load_config, ConfigurationError
 from src.logging_config import setup_logging
 from src.attestation import AttestationGenerator
+from src.encryption import EncryptionManager
 from src.script_executor import ScriptExecutor
 from src.server import create_app
 
@@ -124,9 +125,13 @@ def main() -> int:
             logger.info(f"Creating temp storage directory: {config.temp_storage_path}")
             os.makedirs(config.temp_storage_path, mode=0o700, exist_ok=True)
         
+        # Initialize encryption manager
+        logger.info("Initializing encryption manager...")
+        encryption_manager = EncryptionManager()
+        
         # Initialize all components via create_app
         logger.info("Initializing application components...")
-        app = create_app(config, docker_client=docker_client)
+        app = create_app(config, docker_client=docker_client, encryption_manager=encryption_manager)
         logger.info("All components initialized successfully")
         
         # Register signal handlers for graceful shutdown

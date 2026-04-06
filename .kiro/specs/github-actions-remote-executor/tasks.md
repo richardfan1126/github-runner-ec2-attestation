@@ -1924,14 +1924,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test thread-safety of context operations
     - _Requirements: 36.1, 36.2, 40.3, 40.4, 40.5, 41.1, 41.6, 41.7_
 
-- [ ] 92. Integrate EncryptionManager into server startup
-  - [ ] 92.1 Update src/main.py to generate Server_Keypair at startup
+- [x] 92. Integrate EncryptionManager into server startup
+  - [x] 92.1 Update src/main.py to generate Server_Keypair at startup
     - Instantiate EncryptionManager before creating the FastAPI app
     - Log Server_Keypair generation at INFO level (no private key material)
     - Pass EncryptionManager instance to create_app
     - _Requirements: 36.1, 36.4, 36.5_
 
-  - [ ] 92.2 Update create_app in src/server.py to accept and store EncryptionManager
+  - [x] 92.2 Update create_app in src/server.py to accept and store EncryptionManager
     - Add encryption_manager parameter to create_app
     - Store as app.state.encryption_manager
     - _Requirements: 36.1_

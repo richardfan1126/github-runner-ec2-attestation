@@ -95,13 +95,14 @@ class RateLimiter:
             return True, remaining
 
 
-def create_app(config: ServerConfig, docker_client=None) -> FastAPI:
+def create_app(config: ServerConfig, docker_client=None, encryption_manager=None) -> FastAPI:
     """
     Create and configure FastAPI application
     
     Args:
         config: Server configuration
         docker_client: Optional pre-initialized Docker client. If None, creates one via docker.from_env().
+        encryption_manager: Optional pre-initialized EncryptionManager instance.
     
     Returns:
         Configured FastAPI application
@@ -155,6 +156,7 @@ def create_app(config: ServerConfig, docker_client=None) -> FastAPI:
     app.state.script_executor = script_executor
     app.state.request_validator = request_validator
     app.state.rate_limiter = rate_limiter
+    app.state.encryption_manager = encryption_manager
     
     # Request logging middleware (exclude tokens)
     @app.middleware("http")
