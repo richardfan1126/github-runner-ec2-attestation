@@ -54,6 +54,7 @@ class AttestationGenerator:
         commit_hash: str,
         script_path: str,
         nonce: Optional[str] = None,
+        public_key: Optional[bytes] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
         """
         Generate an attestation document using NitroTPM attestation.
@@ -61,7 +62,7 @@ class AttestationGenerator:
         This method:
         1. Creates user_data containing execution metadata (repository URL, commit hash, script path, timestamp)
         2. Writes user_data and optional nonce to temporary files
-        3. Invokes /usr/bin/nitro-tpm-attest with optional --user-data and --nonce flags
+        3. Invokes /usr/bin/nitro-tpm-attest with optional --user-data, --nonce, and --public-key flags
         4. Captures binary CBOR-encoded attestation document from stdout
         5. Implements 30-second timeout for attestation generation
         6. Returns attestation document as bytes or detailed error information
@@ -72,6 +73,8 @@ class AttestationGenerator:
             commit_hash: Git commit SHA
             script_path: Path to script file in repository
             nonce: Optional nonce for inclusion in attestation
+            public_key: Optional public key bytes to include in attestation document.
+                        Only provided when generating for the /attest endpoint.
         
         Returns:
             Tuple of (AttestationDocument, None) on success or (None, AttestationError) on failure
@@ -80,6 +83,8 @@ class AttestationGenerator:
         user_data_path = None
         nonce_fd = None
         nonce_path = None
+        public_key_fd = None
+        public_key_path = None
         
         try:
             # Log attestation generation start
@@ -115,6 +120,16 @@ class AttestationGenerator:
                 os.close(nonce_fd)
                 nonce_fd = None  # Mark as closed
                 cmd.extend(["--nonce", nonce_path])
+            
+            # Write public_key to temporary file if provided
+            if public_key is not None:
+                public_key_fd, public_key_path = tempfile.mkstemp(
+                    prefix="attestation_public_key_", suffix=".bin"
+                )
+                os.write(public_key_fd, public_key)
+                os.close(public_key_fd)
+                public_key_fd = None  # Mark as closed
+                cmd.extend(["--public-key", public_key_path])
             
             # Invoke nitro-tpm-attest with timeout
             try:
@@ -205,6 +220,18 @@ class AttestationGenerator:
             if nonce_path is not None:
                 try:
                     os.unlink(nonce_path)
+                except OSError:
+                    pass
+            
+            if public_key_fd is not None:
+                try:
+                    os.close(public_key_fd)
+                except OSError:
+                    pass
+            
+            if public_key_path is not None:
+                try:
+                    os.unlink(public_key_path)
                 except OSError:
                     pass
 

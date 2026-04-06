@@ -195,8 +195,8 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
         """Apply rate limiting per source IP"""
-        # Skip rate limiting for health check
-        if request.url.path == "/health":
+        # Skip rate limiting for health check and attest endpoint
+        if request.url.path in ("/health", "/attest"):
             return await call_next(request)
         
         ip_address = request.client.host
@@ -618,6 +618,65 @@ def add_routes(app: FastAPI) -> None:
                 detail=create_error_response(
                     "internal_server_error",
                     "An unexpected error occurred"
+                )
+            )
+
+    @app.get("/attest")
+    async def attest(request: Request, nonce: str = None):
+        """
+        Return an attestation document containing the Server_Public_Key.
+        No authentication required.
+
+        Query parameters:
+        - nonce (optional): Client-provided nonce for attestation freshness
+
+        Returns:
+        {
+            "attestation_document": "base64-encoded-cbor"
+        }
+        """
+        try:
+            import base64
+
+            attestation_gen = request.app.state.attestation_generator
+
+            encryption_manager = request.app.state.encryption_manager
+            public_key = encryption_manager.server_public_key if encryption_manager is not None else None
+
+            attestation_doc, attestation_error = attestation_gen.generate_attestation(
+                "",  # repository_url - not applicable for /attest
+                "",  # commit_hash - not applicable for /attest
+                "",  # script_path - not applicable for /attest
+                nonce=nonce,
+                public_key=public_key,
+            )
+
+            if attestation_error:
+                logger.error(
+                    f"Attestation generation failed on /attest: {attestation_error.context}"
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content=create_error_response(
+                        "attestation_failed",
+                        "Failed to generate attestation document"
+                    )
+                )
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "attestation_document": base64.b64encode(attestation_doc.signature).decode("utf-8")
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Unexpected error in /attest endpoint: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=create_error_response(
+                    "attestation_failed",
+                    "Failed to generate attestation document"
                 )
             )
 

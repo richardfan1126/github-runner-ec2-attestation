@@ -1936,8 +1936,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Store as app.state.encryption_manager
     - _Requirements: 36.1_
 
-- [ ] 93. Implement /attest endpoint
-  - [ ] 93.1 Add GET /attest route to src/server.py
+- [x] 93. Implement /attest endpoint
+  - [x] 93.1 Add GET /attest route to src/server.py
     - Accept optional `nonce` query parameter
     - No authentication required
     - Call AttestationGenerator.generate_attestation with Server_Public_Key in `public_key` parameter and optional nonce
@@ -1945,23 +1945,23 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Return HTTP 500 if attestation generation fails
     - _Requirements: 37.1, 37.2, 37.3, 37.4, 37.5, 37.6, 37.7, 37.8_
 
-  - [ ] 93.2 Update AttestationGenerator.generate_attestation to accept optional public_key parameter
+  - [x] 93.2 Update AttestationGenerator.generate_attestation to accept optional public_key parameter
     - When `public_key` bytes are provided, write them to a temp file and pass `--public-key` flag to nitro-tpm-attest
     - Clean up temp file in finally block
     - Only /attest callers pass public_key; /execute and /output callers do not
     - _Requirements: 39.1, 39.2_
 
-  - [ ] 93.3 Write property test for Attest Endpoint No Authentication
+  - [x] 93.3 Write property test for Attest Endpoint No Authentication
     - **Property 123: Attest Endpoint No Authentication**
     - Verify /attest returns 200 with attestation document without any auth credentials
     - **Validates: Requirements 37.2, 2.21**
 
-  - [ ] 93.4 Write property test for Attest Attestation Contains Server Public Key
+  - [x] 93.4 Write property test for Attest Attestation Contains Server Public Key
     - **Property 124: Attest Attestation Contains Server Public Key**
     - Verify /attest attestation document includes Server_Public_Key in public_key field
     - **Validates: Requirements 37.4, 39.1**
 
-  - [ ] 93.5 Write property test for Non-Attest Attestation Excludes Server Public Key
+  - [x] 93.5 Write property test for Non-Attest Attestation Excludes Server Public Key
     - **Property 125: Non-Attest Attestation Excludes Server Public Key**
     - Verify attestation documents generated for /execute and /execution/{id}/output do NOT include Server_Public_Key
     - **Validates: Requirements 37.9, 39.2**
