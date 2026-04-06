@@ -17,6 +17,13 @@ from src.models import ExecutionStatus, ExecutionRecord, OutputData, OIDCValidat
 from datetime import datetime, timezone
 
 
+from tests.encryption_test_helpers import (
+    EncryptionTestContext,
+    make_encrypted_output_request,
+    decrypt_output_response,
+)
+
+
 VALID_OIDC_RESULT = OIDCValidationResult(
     valid=True,
     status_code=200,
@@ -116,10 +123,12 @@ def test_property_45_output_attestation_base64_encoding(
 
     **Validates: Requirements 6.8**
     """
-    app = create_app(get_test_config())
+    ctx = EncryptionTestContext()
+    app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
     client = TestClient(app)
 
     execution_id = "test-exec-b64"
+    ctx.encryption_manager.store_encryption_context(execution_id, ctx.shared_key)
 
     record = ExecutionRecord(
         execution_id=execution_id,
@@ -144,7 +153,7 @@ def test_property_45_output_attestation_base64_encoding(
     )
 
     with patch.object(
-        app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
+        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
     ):
         with patch.object(
             app.state.execution_manager, "get_execution", return_value=record
@@ -157,10 +166,13 @@ def test_property_45_output_attestation_base64_encoding(
                     "generate_output_attestation",
                     return_value=(attestation_bytes, None),
                 ):
-                    response = client.get(f"/execution/{execution_id}/output")
+                    req_body = make_encrypted_output_request(
+                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{execution_id}/output", json=req_body)
 
     assert response.status_code == 200
-    data = response.json()
+    data = decrypt_output_response(response.json(), ctx.shared_key)
     assert "output_attestation_document" in data
     doc_value = data["output_attestation_document"]
     assert doc_value is not None
@@ -188,10 +200,12 @@ def test_property_46_output_attestation_failure_graceful_degradation(
 
     **Validates: Requirements 6.11**
     """
-    app = create_app(get_test_config())
+    ctx = EncryptionTestContext()
+    app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
     client = TestClient(app)
 
     execution_id = "test-exec-fail"
+    ctx.encryption_manager.store_encryption_context(execution_id, ctx.shared_key)
 
     record = ExecutionRecord(
         execution_id=execution_id,
@@ -216,7 +230,7 @@ def test_property_46_output_attestation_failure_graceful_degradation(
     )
 
     with patch.object(
-        app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
+        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
     ):
         with patch.object(
             app.state.execution_manager, "get_execution", return_value=record
@@ -229,10 +243,13 @@ def test_property_46_output_attestation_failure_graceful_degradation(
                     "generate_output_attestation",
                     return_value=(None, error_msg),
                 ):
-                    response = client.get(f"/execution/{execution_id}/output")
+                    req_body = make_encrypted_output_request(
+                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{execution_id}/output", json=req_body)
 
     assert response.status_code == 200
-    data = response.json()
+    data = decrypt_output_response(response.json(), ctx.shared_key)
 
     # Script output must still be present
     assert data["stdout"] == stdout

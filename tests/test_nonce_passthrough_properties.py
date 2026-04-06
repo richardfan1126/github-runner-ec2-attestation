@@ -25,6 +25,15 @@ from src.models import (
 from src.attestation import AttestationGenerator
 
 
+from tests.encryption_test_helpers import (
+    EncryptionTestContext,
+    make_encrypted_execute_request,
+    decrypt_execute_response,
+    make_encrypted_output_request,
+    decrypt_output_response,
+)
+
+
 VALID_OIDC_RESULT = OIDCValidationResult(
     valid=True,
     status_code=200,
@@ -120,7 +129,8 @@ def test_nonce_passthrough_execute_endpoint(nonce):
     For random nonce values on /execute, verify the nonce from the request
     body is passed to generate_attestation.
     """
-    app = create_app(get_test_config())
+    ctx = EncryptionTestContext()
+    app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
     client = TestClient(app)
 
     commit = "a" * 40
@@ -129,12 +139,13 @@ def test_nonce_passthrough_execute_endpoint(nonce):
         "commit_hash": commit,
         "script_path": "run.sh",
         "github_token": "ghp_testtoken1234567890",
+        "oidc_token": "valid.oidc.token",
     }
     if nonce is not None:
         req_data["nonce"] = nonce
 
     with patch.object(
-        app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
+        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
     ), patch.object(
         app.state.request_validator, "validate_execution_request",
         return_value=Mock(valid=True, errors=[]),
@@ -153,7 +164,8 @@ def test_nonce_passthrough_execute_endpoint(nonce):
     ):
         mock_attest.return_value = (_make_attestation_doc(), None)
 
-        response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
+        body = make_encrypted_execute_request(req_data, ctx)
+        response = client.post("/execute", json=body)
         assert response.status_code == 200, (
             f"Expected 200 but got {response.status_code}: {response.text}"
         )
@@ -184,10 +196,12 @@ def test_nonce_passthrough_output_endpoint(nonce):
     is passed to generate_output_attestation when generating the
     Output_Attestation_Document.
     """
-    app = create_app(get_test_config())
+    ctx = EncryptionTestContext()
+    app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
     client = TestClient(app)
 
     exec_id = "test-exec-id-001"
+    ctx.encryption_manager.store_encryption_context(exec_id, ctx.shared_key)
 
     # Create a completed execution record
     exec_record = ExecutionRecord(
@@ -213,7 +227,7 @@ def test_nonce_passthrough_output_endpoint(nonce):
     )
 
     with patch.object(
-        app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
+        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
     ), patch.object(
         app.state.execution_manager, "get_execution", return_value=exec_record
     ), patch.object(
@@ -223,14 +237,14 @@ def test_nonce_passthrough_output_endpoint(nonce):
     ) as mock_output_attest:
         mock_output_attest.return_value = (b"output_attestation_bytes", None)
 
-        params = {"offset": 0}
+        payload = {"oidc_token": "valid.oidc.token", "offset": 0}
         if nonce is not None:
-            params["nonce"] = nonce
+            payload["nonce"] = nonce
 
-        response = client.get(
+        req_body = make_encrypted_output_request(payload, ctx.shared_key)
+        response = client.post(
             f"/execution/{exec_id}/output",
-            params=params,
-            headers=OIDC_BEARER_HEADER,
+            json=req_body,
         )
         assert response.status_code == 200, (
             f"Expected 200 but got {response.status_code}: {response.text}"

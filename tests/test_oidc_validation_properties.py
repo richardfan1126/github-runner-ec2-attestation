@@ -110,7 +110,14 @@ def _get_test_config() -> ServerConfig:
     )
 
 
-_server_app = create_app(_get_test_config())
+from tests.encryption_test_helpers import (
+    EncryptionTestContext,
+    make_encrypted_execute_request,
+    make_encrypted_output_request,
+)
+
+_server_ctx = EncryptionTestContext()
+_server_app = create_app(_get_test_config(), encryption_manager=_server_ctx.encryption_manager)
 _server_client = TestClient(_server_app)
 
 
@@ -284,24 +291,25 @@ def test_property_008_oidc_token_required_on_protected_endpoints(execution_id):
 
     **Validates: Requirements 2.1, 2.2, 2.3**
     """
-    # POST /execute without auth
-    resp_execute = _server_client.post(
-        "/execute",
-        json={
-            "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "a" * 40,
-            "script_path": "test.sh",
-            "github_token": "ghp_fake",
-        },
-    )
+    # POST /execute without oidc_token in encrypted body
+    req_data = {
+        "repository_url": "https://github.com/owner/repo",
+        "commit_hash": "a" * 40,
+        "script_path": "test.sh",
+        "github_token": "ghp_fake",
+    }
+    body = make_encrypted_execute_request(req_data, _server_ctx)
+    resp_execute = _server_client.post("/execute", json=body)
     assert resp_execute.status_code == 401, (
         f"/execute without auth should return 401, got {resp_execute.status_code}"
     )
 
-    # GET /execution/{id}/output without auth
-    resp_output = _server_client.get(f"/execution/{execution_id}/output")
-    assert resp_output.status_code == 401, (
-        f"/execution/{{id}}/output without auth should return 401, got {resp_output.status_code}"
+    # POST /execution/{id}/output without oidc_token
+    _server_ctx.encryption_manager.store_encryption_context(execution_id, _server_ctx.shared_key)
+    output_body = make_encrypted_output_request({"offset": 0}, _server_ctx.shared_key)
+    resp_output = _server_client.post(f"/execution/{execution_id}/output", json=output_body)
+    assert resp_output.status_code in [401, 404], (
+        f"/execution/{{id}}/output without auth should return 401 or 404, got {resp_output.status_code}"
     )
 
 

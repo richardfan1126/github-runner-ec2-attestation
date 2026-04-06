@@ -172,8 +172,10 @@ def test_non_attest_attestation_excludes_server_public_key(
     the document should NOT include the Server_Public_Key in the
     `public_key` field.
     """
-    encryption_manager = EncryptionManager()
-    app = create_app(get_test_config(), encryption_manager=encryption_manager)
+    from tests.encryption_test_helpers import EncryptionTestContext, make_encrypted_execute_request
+
+    ctx = EncryptionTestContext()
+    app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
     client = TestClient(app)
 
     req_data = {
@@ -181,10 +183,11 @@ def test_non_attest_attestation_excludes_server_public_key(
         "commit_hash": commit_hash,
         "script_path": script_path,
         "github_token": "ghp_testtoken1234567890",
+        "oidc_token": "valid.oidc.token",
     }
 
     with patch.object(
-        app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
+        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
     ), patch.object(
         app.state.request_validator, "validate_execution_request"
     ) as mock_validate, patch.object(
@@ -216,9 +219,8 @@ def test_non_attest_attestation_excludes_server_public_key(
             None,
         )
 
-        response = client.post(
-            "/execute", json=req_data, headers=OIDC_BEARER_HEADER
-        )
+        body = make_encrypted_execute_request(req_data, ctx)
+        response = client.post("/execute", json=body)
 
         assert response.status_code == 200, (
             f"Expected 200 but got {response.status_code}: {response.text}"

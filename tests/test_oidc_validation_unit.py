@@ -279,82 +279,88 @@ class TestOIDCProtectedEndpoints:
     """Unit tests for OIDC enforcement on server endpoints"""
 
     def _create_client(self):
-        app = create_app(_get_test_config())
-        return TestClient(app), app
+        from tests.encryption_test_helpers import EncryptionTestContext
+        ctx = EncryptionTestContext()
+        app = create_app(_get_test_config(), encryption_manager=ctx.encryption_manager)
+        return TestClient(app), app, ctx
 
     # ---- POST /execute ----
 
     def test_execute_without_auth_header_returns_401(self):
-        """POST /execute with no Authorization header → 401"""
-        client, _ = self._create_client()
-        response = client.post(
-            "/execute",
-            json={
-                "repository_url": "https://github.com/owner/repo",
-                "commit_hash": "a" * 40,
-                "script_path": "test.sh",
-                "github_token": "ghp_fake",
-            },
-        )
+        """POST /execute with no oidc_token in encrypted body → 401"""
+        from tests.encryption_test_helpers import make_encrypted_execute_request
+        client, app, ctx = self._create_client()
+
+        # Send encrypted request WITHOUT oidc_token field
+        request_data = {
+            "repository_url": "https://github.com/owner/repo",
+            "commit_hash": "a" * 40,
+            "script_path": "test.sh",
+            "github_token": "ghp_fake",
+        }
+        body = make_encrypted_execute_request(request_data, ctx)
+        response = client.post("/execute", json=body)
         assert response.status_code == 401
 
     def test_execute_with_invalid_token_returns_401(self):
         """POST /execute with an invalid/bad-signature token → 401"""
-        client, app = self._create_client()
+        from tests.encryption_test_helpers import make_encrypted_execute_request
+        client, app, ctx = self._create_client()
 
         with patch.object(
             app.state.request_validator,
-            "validate_oidc_token",
+            "validate_oidc_token_from_body",
             return_value=INVALID_TOKEN_OIDC_RESULT,
         ):
-            response = client.post(
-                "/execute",
-                json={
-                    "repository_url": "https://github.com/owner/repo",
-                    "commit_hash": "a" * 40,
-                    "script_path": "test.sh",
-                    "github_token": "ghp_fake",
-                },
-                headers={"Authorization": "Bearer bad.token.here"},
-            )
+            request_data = {
+                "repository_url": "https://github.com/owner/repo",
+                "commit_hash": "a" * 40,
+                "script_path": "test.sh",
+                "github_token": "ghp_fake",
+                "oidc_token": "bad.token.here",
+            }
+            body = make_encrypted_execute_request(request_data, ctx)
+            response = client.post("/execute", json=body)
 
         assert response.status_code == 401
 
     def test_execute_with_unauthorized_repo_returns_403(self):
         """POST /execute with token from unauthorized repo → 403"""
-        client, app = self._create_client()
+        from tests.encryption_test_helpers import make_encrypted_execute_request
+        client, app, ctx = self._create_client()
 
         with patch.object(
             app.state.request_validator,
-            "validate_oidc_token",
+            "validate_oidc_token_from_body",
             return_value=FORBIDDEN_OIDC_RESULT,
         ):
-            response = client.post(
-                "/execute",
-                json={
-                    "repository_url": "https://github.com/owner/repo",
-                    "commit_hash": "a" * 40,
-                    "script_path": "test.sh",
-                    "github_token": "ghp_fake",
-                },
-                headers={"Authorization": "Bearer valid.but.forbidden"},
-            )
+            request_data = {
+                "repository_url": "https://github.com/owner/repo",
+                "commit_hash": "a" * 40,
+                "script_path": "test.sh",
+                "github_token": "ghp_fake",
+                "oidc_token": "valid.but.forbidden",
+            }
+            body = make_encrypted_execute_request(request_data, ctx)
+            response = client.post("/execute", json=body)
 
         assert response.status_code == 403
 
     def test_execute_with_valid_token_proceeds(self):
         """POST /execute with valid OIDC token proceeds to execution flow"""
-        client, app = self._create_client()
+        from tests.encryption_test_helpers import make_encrypted_execute_request, decrypt_execute_response
+        client, app, ctx = self._create_client()
 
         request_data = {
             "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test",
+            "oidc_token": "valid.oidc.token",
         }
 
         with patch.object(
-            app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
+            app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
         ), patch.object(
             app.state.request_validator,
             "validate_execution_request",
@@ -388,31 +394,37 @@ class TestOIDCProtectedEndpoints:
                 None,
             ),
         ), patch.object(app.state.script_executor, "execute_async"):
-            response = client.post(
-                "/execute",
-                json=request_data,
-                headers={"Authorization": "Bearer valid.oidc.token"},
-            )
+            body = make_encrypted_execute_request(request_data, ctx)
+            response = client.post("/execute", json=body)
 
         assert response.status_code == 200
-        data = response.json()
+        data = decrypt_execute_response(response.json(), ctx.shared_key)
         assert "execution_id" in data
         assert data["status"] == "queued"
 
-    # ---- GET /execution/{id}/output ----
+    # ---- POST /execution/{id}/output ----
 
     def test_output_without_auth_header_returns_401(self):
-        """GET /execution/{id}/output with no Authorization header → 401"""
-        client, _ = self._create_client()
-        response = client.get("/execution/some-id/output")
+        """POST /execution/{id}/output with no oidc_token → 401"""
+        from tests.encryption_test_helpers import make_encrypted_output_request
+        client, app, ctx = self._create_client()
+        execution_id = "some-id"
+        ctx.encryption_manager.store_encryption_context(execution_id, ctx.shared_key)
+
+        # Send encrypted request WITHOUT oidc_token
+        req_body = make_encrypted_output_request({"offset": 0}, ctx.shared_key)
+        response = client.post(f"/execution/{execution_id}/output", json=req_body)
         assert response.status_code == 401
 
     def test_output_with_valid_token_returns_output(self):
-        """GET /execution/{id}/output with valid token returns execution output"""
-        client, app = self._create_client()
+        """POST /execution/{id}/output with valid token returns execution output"""
+        from tests.encryption_test_helpers import make_encrypted_output_request, decrypt_output_response
+        client, app, ctx = self._create_client()
+        execution_id = "test-exec-id"
+        ctx.encryption_manager.store_encryption_context(execution_id, ctx.shared_key)
 
         exec_record = ExecutionRecord(
-            execution_id="test-exec-id",
+            execution_id=execution_id,
             repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
@@ -433,20 +445,20 @@ class TestOIDCProtectedEndpoints:
         )
 
         with patch.object(
-            app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT
+            app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
         ), patch.object(
             app.state.execution_manager, "get_execution", return_value=exec_record
         ), patch.object(
             app.state.output_collector, "get_output", return_value=output_data
         ):
-            response = client.get(
-                "/execution/test-exec-id/output",
-                headers={"Authorization": "Bearer valid.oidc.token"},
+            req_body = make_encrypted_output_request(
+                {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
             )
+            response = client.post(f"/execution/{execution_id}/output", json=req_body)
 
         assert response.status_code == 200
-        data = response.json()
-        assert data["execution_id"] == "test-exec-id"
+        data = decrypt_output_response(response.json(), ctx.shared_key)
+        assert data["execution_id"] == execution_id
         assert data["stdout"] == "hello"
         assert data["status"] == "running"
 
@@ -454,7 +466,7 @@ class TestOIDCProtectedEndpoints:
 
     def test_health_without_auth_returns_200(self):
         """GET /health without any Authorization header → 200"""
-        client, app = self._create_client()
+        client, app, _ctx = self._create_client()
 
         with patch.object(
             app.state.attestation_generator, "verify_tpm_available", return_value=False

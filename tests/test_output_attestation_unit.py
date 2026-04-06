@@ -18,6 +18,13 @@ from src.models import ExecutionRecord, ExecutionStatus, OutputData, OIDCValidat
 from src.server import create_app
 
 
+from tests.encryption_test_helpers import (
+    EncryptionTestContext,
+    make_encrypted_output_request,
+    decrypt_output_response,
+)
+
+
 VALID_OIDC_RESULT = OIDCValidationResult(
     valid=True,
     status_code=200,
@@ -131,7 +138,7 @@ class TestGenerateOutputAttestation:
 
 
 class TestOutputEndpointWithAttestation:
-    """Tests for GET /execution/{id}/output with output attestation"""
+    """Tests for POST /execution/{id}/output with output attestation"""
 
     def _make_record(self, execution_id, status, exit_code=None):
         return ExecutionRecord(
@@ -147,11 +154,17 @@ class TestOutputEndpointWithAttestation:
             timeout_seconds=300,
         )
 
+    def _setup(self):
+        ctx = EncryptionTestContext()
+        app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
+        client = TestClient(app)
+        return ctx, app, client
+
     def test_complete_execution_includes_output_attestation(self):
         """Test completed execution returns output_attestation_document"""
-        app = create_app(get_test_config())
-        client = TestClient(app)
+        ctx, app, client = self._setup()
         eid = "test-complete-attest"
+        ctx.encryption_manager.store_encryption_context(eid, ctx.shared_key)
 
         record = self._make_record(eid, ExecutionStatus.COMPLETED, exit_code=0)
         output = OutputData(
@@ -160,7 +173,7 @@ class TestOutputEndpointWithAttestation:
         )
         attestation_bytes = b"output_attestation_cbor_data"
 
-        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, "get_execution", return_value=record):
                 with patch.object(app.state.output_collector, "get_output", return_value=output):
                     with patch.object(
@@ -168,19 +181,22 @@ class TestOutputEndpointWithAttestation:
                         "generate_output_attestation",
                         return_value=(attestation_bytes, None),
                     ):
-                        response = client.get(f"/execution/{eid}/output")
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
-        data = response.json()
+        data = decrypt_output_response(response.json(), ctx.shared_key)
         assert "output_attestation_document" in data
         decoded = base64.b64decode(data["output_attestation_document"])
         assert decoded == attestation_bytes
 
     def test_complete_execution_attestation_failure_returns_error(self):
         """Test completed execution with attestation failure returns null + error"""
-        app = create_app(get_test_config())
-        client = TestClient(app)
+        ctx, app, client = self._setup()
         eid = "test-attest-fail"
+        ctx.encryption_manager.store_encryption_context(eid, ctx.shared_key)
 
         record = self._make_record(eid, ExecutionStatus.COMPLETED, exit_code=0)
         output = OutputData(
@@ -188,7 +204,7 @@ class TestOutputEndpointWithAttestation:
             stderr_offset=0, complete=True, exit_code=0,
         )
 
-        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, "get_execution", return_value=record):
                 with patch.object(app.state.output_collector, "get_output", return_value=output):
                     with patch.object(
@@ -196,10 +212,13 @@ class TestOutputEndpointWithAttestation:
                         "generate_output_attestation",
                         return_value=(None, "TPM device unavailable"),
                     ):
-                        response = client.get(f"/execution/{eid}/output")
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
-        data = response.json()
+        data = decrypt_output_response(response.json(), ctx.shared_key)
         assert data["output_attestation_document"] is None
         assert data["attestation_error"] == "TPM device unavailable"
         # Script output still present
@@ -208,9 +227,9 @@ class TestOutputEndpointWithAttestation:
 
     def test_running_execution_omits_output_attestation(self):
         """Test running execution does not include output_attestation_document"""
-        app = create_app(get_test_config())
-        client = TestClient(app)
+        ctx, app, client = self._setup()
         eid = "test-running"
+        ctx.encryption_manager.store_encryption_context(eid, ctx.shared_key)
 
         record = self._make_record(eid, ExecutionStatus.RUNNING)
         output = OutputData(
@@ -218,32 +237,38 @@ class TestOutputEndpointWithAttestation:
             stderr_offset=0, complete=False, exit_code=None,
         )
 
-        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, "get_execution", return_value=record):
                 with patch.object(app.state.output_collector, "get_output", return_value=output):
-                    response = client.get(f"/execution/{eid}/output")
+                    req_body = make_encrypted_output_request(
+                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
-        data = response.json()
+        data = decrypt_output_response(response.json(), ctx.shared_key)
         assert "output_attestation_document" not in data
         assert "attestation_error" not in data
 
     def test_queued_execution_omits_output_attestation(self):
         """Test queued execution does not include output_attestation_document"""
-        app = create_app(get_test_config())
-        client = TestClient(app)
+        ctx, app, client = self._setup()
         eid = "test-queued"
+        ctx.encryption_manager.store_encryption_context(eid, ctx.shared_key)
 
         record = self._make_record(eid, ExecutionStatus.QUEUED)
 
-        with patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT):
+        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, "get_execution", return_value=record):
                 with patch.object(
                     app.state.output_collector, "get_output",
                     side_effect=ValueError("No output buffer"),
                 ):
-                    response = client.get(f"/execution/{eid}/output")
+                    req_body = make_encrypted_output_request(
+                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
-        data = response.json()
+        data = decrypt_output_response(response.json(), ctx.shared_key)
         assert "output_attestation_document" not in data
