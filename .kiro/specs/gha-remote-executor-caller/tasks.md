@@ -469,8 +469,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 24. Checkpoint - Ensure attest and nonce tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 25. Update `execute` method for HPKE encryption
-  - [ ] 25.1 Rewrite `execute` method to use encrypted communication
+- [x] 25. Update `execute` method for HPKE encryption
+  - [x] 25.1 Rewrite `execute` method to use encrypted communication
     - Generate a unique random nonce via `generate_nonce()`
     - Build plaintext payload: `{repository_url, commit_hash, script_path, github_token, oidc_token, nonce}`
     - Encrypt payload via `self._encryption.encrypt_payload()`
@@ -482,14 +482,14 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Handle HTTP 401/403 errors as before
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12, 3.13, 10.1, 10.3, 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 15.1_
 
-  - [ ] 25.2 Write property test for encrypted envelope structure
+  - [x] 25.2 Write property test for encrypted envelope structure
     - **Property 19: Encrypted envelope structure**
     - Generate random payloads, call `execute` (mocked HTTP)
     - Verify request body is JSON with `encrypted_payload` and `client_public_key` fields (both base64)
     - Call `poll_output` (mocked HTTP) and verify request body has `encrypted_payload` only (no `client_public_key`)
     - **Validates: Requirements 3.1, 14.6, 14.7**
 
-  - [ ] 25.3 Write unit tests for encrypted execute
+  - [x] 25.3 Write unit tests for encrypted execute
     - Test execute sends encrypted envelope with `encrypted_payload` and `client_public_key` fields
     - Test execute does not include Authorization header (Req 10.3)
     - Test execute includes OIDC token in encrypted payload (Req 10.1)

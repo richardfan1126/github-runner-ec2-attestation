@@ -365,23 +365,44 @@ class RemoteExecutorCaller:
         script_path: str,
         github_token: str,
     ) -> dict:
-        """POST /execute - submit execution request.
+        """POST /execute - submit encrypted execution request.
 
-        Returns parsed JSON response with execution_id and attestation_document.
-        Raises CallerError on HTTP errors or connection failures.
+        Encrypts the payload via HPKE (AES-256-GCM) using the shared key
+        derived during attest(). Sends an encrypted envelope with
+        encrypted_payload and client_public_key. No Authorization header.
+
+        Returns decrypted response dict with execution_id and attestation_document.
+        Raises CallerError on HTTP errors, encryption/decryption failures,
+        or attestation validation failures.
         """
+        if not hasattr(self, "_encryption") or self._encryption is None:
+            raise CallerError(
+                message="Cannot execute: HPKE key exchange not completed (call attest() first)",
+                phase="execute",
+            )
+
+        nonce = self.generate_nonce()
         url = f"{self.server_url}/execute"
-        payload = {
+        plaintext_payload = {
             "repository_url": repository_url,
             "commit_hash": commit_hash,
             "script_path": script_path,
             "github_token": github_token,
+            "oidc_token": self._oidc_token or "",
+            "nonce": nonce,
         }
-        headers = {}
-        if self._oidc_token:
-            headers["Authorization"] = f"Bearer {self._oidc_token}"
+        encrypted_payload = self._encryption.encrypt_payload(plaintext_payload)
+        client_public_key_b64 = base64.b64encode(
+            self._encryption.client_public_key_bytes
+        ).decode("ascii")
+
+        envelope = {
+            "encrypted_payload": encrypted_payload,
+            "client_public_key": client_public_key_b64,
+        }
+
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+            response = requests.post(url, json=envelope, timeout=self.timeout)
         except requests.ConnectionError as exc:
             raise CallerError(
                 message=f"Failed to connect to server execute endpoint: {exc}",
@@ -417,7 +438,17 @@ class RemoteExecutorCaller:
                 },
             )
 
-        return response.json()
+        # Decrypt the encrypted response
+        data = response.json()
+        encrypted_response_b64 = data.get("encrypted_response", "")
+        decrypted = self._encryption.decrypt_response(encrypted_response_b64)
+
+        # Validate attestation with nonce verification
+        attestation_b64 = decrypted.get("attestation_document", "")
+        if attestation_b64:
+            self.validate_attestation(attestation_b64, expected_nonce=nonce)
+
+        return decrypted
 
     def _decode_cose_sign1(self, raw_bytes: bytes, phase: str) -> list:
         """Decode raw bytes into a COSE_Sign1 4-element array.

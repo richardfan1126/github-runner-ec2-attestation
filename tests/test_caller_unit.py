@@ -4,7 +4,7 @@ import base64
 import datetime
 import sys
 import os
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import cbor2
 import pytest
@@ -861,3 +861,167 @@ class TestAttestMethod:
 
                 call_kwargs = mock_get.call_args
                 assert call_kwargs.kwargs.get("params") == {"nonce": fixed_nonce}
+
+
+class TestEncryptedExecute:
+    """Unit tests for encrypted execute method (HPKE encryption).
+    Validates: Requirements 3.1, 3.11, 3.13, 10.1, 10.3, 14.6"""
+
+    def _setup_caller_with_encryption(self):
+        """Create a caller with encryption initialized (simulating attest())."""
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        caller = _make_caller()
+        caller._oidc_token = "test-oidc-token"
+        caller._encryption = ClientEncryption()
+        server_key = X25519PrivateKey.generate()
+        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        caller._encryption.derive_shared_key(server_pub_bytes)
+
+        # Create a server-side encryption helper with the same shared key for building responses
+        server_enc = ClientEncryption.__new__(ClientEncryption)
+        server_enc._shared_key = caller._encryption._shared_key
+        server_enc._private_key = server_key
+        return caller, server_enc
+
+    def _make_encrypted_response(self, server_enc, payload_dict):
+        """Build a mock HTTP response with an encrypted response body."""
+        encrypted_resp = server_enc.encrypt_payload(payload_dict)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"encrypted_response": encrypted_resp}
+        return mock_resp
+
+    def test_execute_sends_encrypted_envelope_with_both_fields(self):
+        """Execute sends JSON with encrypted_payload and client_public_key fields.
+        Validates: Requirement 3.1, 14.6"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "execution_id": "exec-1",
+            "attestation_document": "",
+            "status": "queued",
+        })
+
+        with patch("call_remote_executor.requests.post", return_value=mock_resp) as mock_post:
+            caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+
+        sent_json = mock_post.call_args[1]["json"]
+        assert "encrypted_payload" in sent_json
+        assert "client_public_key" in sent_json
+        # No plaintext fields
+        assert "repository_url" not in sent_json
+        assert "github_token" not in sent_json
+
+    def test_execute_does_not_include_authorization_header(self):
+        """Execute does not include Authorization header (OIDC token is in encrypted payload).
+        Validates: Requirement 10.3"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "execution_id": "exec-1",
+            "attestation_document": "",
+            "status": "queued",
+        })
+
+        with patch("call_remote_executor.requests.post", return_value=mock_resp) as mock_post:
+            caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+
+        call_kwargs = mock_post.call_args[1]
+        # No headers kwarg at all, or no Authorization in headers
+        assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get("headers", {})
+
+    def test_execute_includes_oidc_token_in_encrypted_payload(self):
+        """Execute includes OIDC token in the encrypted payload.
+        Validates: Requirement 10.1"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        caller._oidc_token = "my-special-oidc-jwt"
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "execution_id": "exec-1",
+            "attestation_document": "",
+            "status": "queued",
+        })
+
+        captured_payloads = []
+        original_encrypt = caller._encryption.encrypt_payload
+
+        def capturing_encrypt(payload_dict):
+            captured_payloads.append(dict(payload_dict))
+            return original_encrypt(payload_dict)
+
+        with patch.object(caller._encryption, "encrypt_payload", side_effect=capturing_encrypt):
+            with patch("call_remote_executor.requests.post", return_value=mock_resp):
+                caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+
+        assert len(captured_payloads) == 1
+        assert captured_payloads[0]["oidc_token"] == "my-special-oidc-jwt"
+
+    def test_execute_includes_nonce_in_encrypted_payload(self):
+        """Execute includes a nonce in the encrypted payload.
+        Validates: Requirement 3.11"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "execution_id": "exec-1",
+            "attestation_document": "",
+            "status": "queued",
+        })
+
+        captured_payloads = []
+        original_encrypt = caller._encryption.encrypt_payload
+
+        def capturing_encrypt(payload_dict):
+            captured_payloads.append(dict(payload_dict))
+            return original_encrypt(payload_dict)
+
+        with patch.object(caller._encryption, "encrypt_payload", side_effect=capturing_encrypt):
+            with patch("call_remote_executor.requests.post", return_value=mock_resp):
+                caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+
+        assert len(captured_payloads) == 1
+        assert "nonce" in captured_payloads[0]
+        assert len(captured_payloads[0]["nonce"]) == 64  # 32 bytes hex-encoded
+
+    def test_execute_verifies_nonce_in_returned_attestation(self):
+        """Execute verifies the nonce in the returned attestation document.
+        Validates: Requirement 3.13"""
+        caller, server_enc = self._setup_caller_with_encryption()
+
+        fixed_nonce = "a1b2c3d4" * 8  # 64-char hex string
+
+        # Build a COSE Sign1 attestation with the nonce
+        payload_dict = {
+            "module_id": "test",
+            "digest": "SHA384",
+            "timestamp": 1700000000000,
+            "pcrs": {},
+            "certificate": b"\x00",
+            "cabundle": [],
+            "nonce": fixed_nonce.encode("utf-8"),
+        }
+        payload_bytes = cbor2.dumps(payload_dict)
+        protected_header = cbor2.dumps({1: -35})
+        cose_array = [protected_header, {}, payload_bytes, b"\x00" * 96]
+        attestation_b64 = base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "execution_id": "exec-1",
+            "attestation_document": attestation_b64,
+            "status": "queued",
+        })
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.post", return_value=mock_resp):
+                with patch.object(caller, "validate_attestation") as mock_validate:
+                    caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+
+        # validate_attestation should have been called with the attestation and the nonce
+        mock_validate.assert_called_once_with(attestation_b64, expected_nonce=fixed_nonce)
+
+    def test_execute_without_encryption_raises_caller_error(self):
+        """Execute without prior attest() raises CallerError."""
+        caller = _make_caller()
+        caller._oidc_token = "test-token"
+        # No _encryption set
+        with pytest.raises(CallerError) as exc_info:
+            caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
+        assert exc_info.value.phase == "execute"
+        assert "hpke" in exc_info.value.message.lower() or "attest" in exc_info.value.message.lower()

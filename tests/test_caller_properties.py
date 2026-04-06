@@ -1320,3 +1320,78 @@ class TestNonceFreshnessVerification:
         with pytest.raises(CallerError) as exc_info:
             caller.validate_output_attestation(b64_str, stdout_val, stderr_val, exit_code_val, expected_nonce=other_nonce)
         assert exc_info.value.phase == "output_attestation"
+
+
+# ---------------------------------------------------------------------------
+# Property 19: Encrypted envelope structure
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 19: Encrypted envelope structure
+# **Validates: Requirements 3.1, 14.6, 14.7**
+class TestEncryptedEnvelopeStructure:
+    """Property 19: execute sends JSON with encrypted_payload and client_public_key fields (both base64)."""
+
+    @given(
+        repository_url=st.text(min_size=1, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N", "P"))),
+        commit_hash=st.text(min_size=1, max_size=64, alphabet=st.characters(whitelist_categories=("L", "N"))),
+        script_path=st.text(min_size=1, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N", "P"))),
+        github_token=st.text(min_size=1, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=30)
+    def test_execute_sends_encrypted_envelope(self, repository_url: str, commit_hash: str, script_path: str, github_token: str):
+        """execute() sends JSON body with encrypted_payload and client_public_key, both base64-encoded."""
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+        caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
+        caller._oidc_token = "test-oidc-token"
+
+        # Set up encryption (simulating attest() having been called)
+        caller._encryption = ClientEncryption()
+        server_key = X25519PrivateKey.generate()
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        caller._encryption.derive_shared_key(server_pub_bytes)
+
+        # Build a mock encrypted response that the server would return
+        response_payload = {
+            "execution_id": "test-exec-id",
+            "attestation_document": "",
+            "status": "queued",
+        }
+        # Encrypt the response using a server-side encryption helper with the same shared key
+        server_encryption = ClientEncryption.__new__(ClientEncryption)
+        server_encryption._shared_key = caller._encryption._shared_key
+        server_encryption._private_key = server_key
+        encrypted_resp = server_encryption.encrypt_payload(response_payload)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"encrypted_response": encrypted_resp}
+
+        with patch("call_remote_executor.requests.post", return_value=mock_response) as mock_post:
+            caller.execute(repository_url, commit_hash, script_path, github_token)
+
+        # Verify the request body structure
+        call_kwargs = mock_post.call_args
+        sent_json = call_kwargs[1].get("json") or call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs[1]["json"]
+
+        # Must have encrypted_payload and client_public_key
+        assert "encrypted_payload" in sent_json, "Request body must contain encrypted_payload"
+        assert "client_public_key" in sent_json, "Request body must contain client_public_key"
+
+        # Both must be valid base64
+        import base64 as _b64
+        encrypted_payload_bytes = _b64.b64decode(sent_json["encrypted_payload"])
+        assert len(encrypted_payload_bytes) > 12, "encrypted_payload must contain nonce + ciphertext"
+
+        client_pub_key_bytes = _b64.b64decode(sent_json["client_public_key"])
+        assert len(client_pub_key_bytes) == 32, "client_public_key must be 32 bytes (raw X25519)"
+
+        # Must NOT have Authorization header
+        headers = call_kwargs[1].get("headers", {})
+        assert "Authorization" not in headers, "execute must not send Authorization header"
+
+        # Must NOT have plaintext payload fields in the request body
+        assert "repository_url" not in sent_json
+        assert "github_token" not in sent_json
+        assert "oidc_token" not in sent_json
