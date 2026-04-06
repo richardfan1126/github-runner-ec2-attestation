@@ -534,32 +534,32 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test no unencrypted payloads sent to /execute or /output (Req 16.3)
     - _Requirements: 16.1, 16.3, 16.6_
 
-- [ ] 29. Update existing property tests for HPKE and nonce compatibility
-  - [ ] 29.1 Update Property 14 test for OIDC token in encrypted payload
+- [x] 29. Update existing property tests for HPKE and nonce compatibility
+  - [x] 29.1 Update Property 14 test for OIDC token in encrypted payload
     - Change from verifying Authorization header to verifying OIDC token in encrypted payload's `oidc_token` field
     - Verify NO HTTP request to any endpoint includes an Authorization header
     - Mock `ClientEncryption` to inspect encrypted payloads
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
 
-  - [ ] 29.2 Update Property 6 (polling termination) for encrypted POST
+  - [x] 29.2 Update Property 6 (polling termination) for encrypted POST
     - Change mock from GET responses to POST responses with encrypted payloads
     - Mock `ClientEncryption` encrypt/decrypt for poll requests
     - Verify exactly N+1 POST requests made
     - _Requirements: 5.6, 5.7_
 
-  - [ ] 29.3 Update Property 7 (polling retry) for encrypted POST
+  - [x] 29.3 Update Property 7 (polling retry) for encrypted POST
     - Change mock from GET to POST with encrypted payloads
     - _Requirements: 5.10_
 
-  - [ ] 29.4 Update Property 5 (execute HTTP error propagation) for encrypted POST
+  - [x] 29.4 Update Property 5 (execute HTTP error propagation) for encrypted POST
     - Update mock to handle encrypted envelope format
     - _Requirements: 3.8_
 
-  - [ ] 29.5 Update Property 8 (exit code propagation) for full encrypted flow
+  - [x] 29.5 Update Property 8 (exit code propagation) for full encrypted flow
     - Mock the full flow including attest, HPKE key exchange, encrypted execute/poll
     - _Requirements: 7.6_
 
-  - [ ] 29.6 Update Property 1 (attestation decode round-trip) for nonce field
+  - [x] 29.6 Update Property 1 (attestation decode round-trip) for nonce field
     - Include `nonce` and `public_key` fields in generated attestation payloads
     - Test with `expected_nonce` parameter
     - _Requirements: 4A.1, 4A.2, 4A.3, 11.5_

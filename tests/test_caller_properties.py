@@ -180,7 +180,8 @@ def _make_test_payload(extra_fields: dict | None = None) -> dict:
 
 # Strategy for generating valid attestation document dicts
 def attestation_doc_strategy():
-    """Generate a valid attestation document dict with all expected fields."""
+    """Generate a valid attestation document dict with all expected fields,
+    including optional nonce and public_key fields for HPKE/nonce compatibility."""
     return st.fixed_dictionaries(
         {
             "module_id": st.text(min_size=1, max_size=50),
@@ -194,6 +195,8 @@ def attestation_doc_strategy():
             ),
             "certificate": st.binary(min_size=1, max_size=200),
             "cabundle": st.lists(st.binary(min_size=1, max_size=200), min_size=1, max_size=3),
+            "nonce": st.binary(min_size=1, max_size=64),
+            "public_key": st.binary(min_size=32, max_size=32),
         }
     )
 
@@ -203,7 +206,7 @@ def attestation_doc_strategy():
 # ---------------------------------------------------------------------------
 
 # Feature: gha-remote-executor-caller, Property 1: Attestation decode round-trip
-# **Validates: Requirements 4A.1, 4A.2, 4A.3, 6A.1, 6A.2, 6A.3**
+# **Validates: Requirements 4A.1, 4A.2, 4A.3, 6A.1, 6A.2, 6A.3, 11.5**
 class TestAttestationDecodeRoundTrip:
     """Property 1: Attestation decode round-trip."""
 
@@ -212,7 +215,8 @@ class TestAttestationDecodeRoundTrip:
     def test_round_trip(self, doc: dict):
         """For any valid attestation document, wrapping in COSE Sign1, CBOR-encoding,
         base64-encoding, then passing through validate_attestation should produce a
-        dict equivalent to the original for the fields the validator inspects."""
+        dict equivalent to the original for the fields the validator inspects.
+        Includes nonce and public_key fields for HPKE/nonce compatibility."""
         caller = _make_caller()
 
         b64_str = _wrap_cose_sign1(doc)
@@ -223,6 +227,29 @@ class TestAttestationDecodeRoundTrip:
             assert result[field] == doc[field], (
                 f"Field {field} mismatch: {result[field]!r} != {doc[field]!r}"
             )
+        # Verify nonce and public_key fields survive the round-trip
+        assert result["nonce"] == doc["nonce"]
+        assert result["public_key"] == doc["public_key"]
+
+    @given(doc=attestation_doc_strategy())
+    @settings(max_examples=20)
+    def test_round_trip_with_expected_nonce(self, doc: dict):
+        """When expected_nonce is provided and matches the nonce in the payload,
+        validate_attestation should succeed and return the decoded payload."""
+        caller = _make_caller()
+
+        # Use a hex nonce string (matching generate_nonce format) for reliable UTF-8 round-trip
+        nonce_str = doc["nonce"].hex()
+        doc_with_hex_nonce = dict(doc)
+        doc_with_hex_nonce["nonce"] = nonce_str.encode("utf-8")
+
+        b64_str = _wrap_cose_sign1(doc_with_hex_nonce)
+
+        result = caller.validate_attestation(b64_str, expected_nonce=nonce_str)
+
+        for field in EXPECTED_ATTESTATION_FIELDS:
+            assert result[field] == doc_with_hex_nonce[field]
+        assert result["public_key"] == doc["public_key"]
 
 
 # ---------------------------------------------------------------------------
