@@ -28,8 +28,6 @@ VALID_OIDC_RESULT = OIDCValidationResult(
     claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
 )
 
-OIDC_BEARER_HEADER = {"Authorization": "Bearer valid.oidc.token"}
-
 
 def get_test_config():
     """Create test configuration"""

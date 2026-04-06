@@ -2,6 +2,11 @@
 
 Feature: github-actions-remote-executor
 Tests Properties 104, 105, 106, 107, 108, 8, 10 from the design document
+
+OIDC tokens are now transmitted inside HPKE-encrypted request bodies
+(the ``oidc_token`` field) rather than via the Authorization header.
+Validator-level tests therefore call ``validate_oidc_token_from_body``
+which accepts the raw JWT string directly.
 """
 import base64
 import time
@@ -162,7 +167,7 @@ def test_property_104_oidc_issuer_claim_validation(bad_issuer):
     validator = _make_validator()
 
     with patch.object(validator, "_fetch_jwks", return_value=_JWKS):
-        result = validator.validate_oidc_token(f"Bearer {token}")
+        result = validator.validate_oidc_token_from_body(token)
 
     assert not result.valid, f"Token with iss={bad_issuer!r} should be rejected"
     assert result.status_code == 401, (
@@ -187,7 +192,7 @@ def test_property_105_oidc_audience_claim_validation(bad_audience):
     validator = _make_validator()
 
     with patch.object(validator, "_fetch_jwks", return_value=_JWKS):
-        result = validator.validate_oidc_token(f"Bearer {token}")
+        result = validator.validate_oidc_token_from_body(token)
 
     assert not result.valid, f"Token with aud={bad_audience!r} should be rejected"
     assert result.status_code == 401, (
@@ -213,7 +218,7 @@ def test_property_106_oidc_repository_authorization(bad_repo):
     validator = _make_validator()
 
     with patch.object(validator, "_fetch_jwks", return_value=_JWKS):
-        result = validator.validate_oidc_token(f"Bearer {token}")
+        result = validator.validate_oidc_token_from_body(token)
 
     assert not result.valid, f"Token with repository={bad_repo!r} should be rejected"
     assert result.status_code == 403, (
@@ -238,7 +243,7 @@ def test_property_107_oidc_token_expiration_validation(expired_exp):
     validator = _make_validator()
 
     with patch.object(validator, "_fetch_jwks", return_value=_JWKS):
-        result = validator.validate_oidc_token(f"Bearer {token}")
+        result = validator.validate_oidc_token_from_body(token)
 
     assert not result.valid, f"Expired token (exp={expired_exp}) should be rejected"
     assert result.status_code == 401, (
@@ -254,8 +259,8 @@ def test_property_107_oidc_token_expiration_validation(expired_exp):
 @given(st.just(True))  # dummy strategy to satisfy @given; each run hits /health
 def test_property_108_health_endpoint_no_authentication(_dummy):
     """
-    Requests to /health without any Authorization header SHALL receive
-    HTTP 200 without requiring authentication.
+    Requests to /health SHALL receive HTTP 200 without requiring
+    authentication (no OIDC token needed).
 
     **Validates: Requirements 2.20**
     """
@@ -287,7 +292,7 @@ def test_property_108_health_endpoint_no_authentication(_dummy):
 def test_property_008_oidc_token_required_on_protected_endpoints(execution_id):
     """
     Requests to /execute and /execution/{id}/output WITHOUT an
-    Authorization header SHALL be rejected with HTTP 401.
+    oidc_token in the encrypted request body SHALL be rejected with HTTP 401.
 
     **Validates: Requirements 2.1, 2.2, 2.3**
     """
@@ -301,15 +306,15 @@ def test_property_008_oidc_token_required_on_protected_endpoints(execution_id):
     body = make_encrypted_execute_request(req_data, _server_ctx)
     resp_execute = _server_client.post("/execute", json=body)
     assert resp_execute.status_code == 401, (
-        f"/execute without auth should return 401, got {resp_execute.status_code}"
+        f"/execute without oidc_token should return 401, got {resp_execute.status_code}"
     )
 
-    # POST /execution/{id}/output without oidc_token
+    # POST /execution/{id}/output without oidc_token in encrypted body
     _server_ctx.encryption_manager.store_encryption_context(execution_id, _server_ctx.shared_key)
     output_body = make_encrypted_output_request({"offset": 0}, _server_ctx.shared_key)
     resp_output = _server_client.post(f"/execution/{execution_id}/output", json=output_body)
     assert resp_output.status_code in [401, 404], (
-        f"/execution/{{id}}/output without auth should return 401 or 404, got {resp_output.status_code}"
+        f"/execution/{{id}}/output without oidc_token should return 401 or 404, got {resp_output.status_code}"
     )
 
 
@@ -335,7 +340,7 @@ def test_property_010_oidc_token_signature_verification(_dummy):
     # The validator's JWKS still contains the ORIGINAL public key
     validator = _make_validator()
     with patch.object(validator, "_fetch_jwks", return_value=_JWKS):
-        result = validator.validate_oidc_token(f"Bearer {token}")
+        result = validator.validate_oidc_token_from_body(token)
 
     assert not result.valid, "Token signed with wrong key should be rejected"
     assert result.status_code == 401, (

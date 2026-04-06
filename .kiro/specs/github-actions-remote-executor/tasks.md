@@ -2082,13 +2082,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify /attest, /health, /metrics responses are plain unencrypted JSON
     - **Validates: Requirements 43.1, 43.2, 43.3, 43.4**
 
-- [ ] 102. Update existing tests for OIDC header-to-body change
-  - [ ] 102.1 Update tests/test_oidc_property.py
+- [x] 102. Update existing tests for OIDC header-to-body change
+  - [x] 102.1 Update tests/test_oidc_property.py
     - Update property tests that send OIDC tokens via Authorization header to instead send them in encrypted request body `oidc_token` field
     - Ensure existing OIDC validation properties still pass with the new token extraction path
     - _Requirements: 2.1, 2.2, 40.6, 40.9_
 
-  - [ ] 102.2 Update tests/test_server_unit.py and tests/test_integration.py
+  - [x] 102.2 Update tests/test_server_unit.py and tests/test_integration.py
     - Update /execute tests to send encrypted payloads with `oidc_token` in body
     - Update /execution/{id}/output tests to use POST with encrypted payloads
     - Update all assertions for encrypted response format
