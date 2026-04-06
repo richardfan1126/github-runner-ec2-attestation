@@ -2094,20 +2094,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Update all assertions for encrypted response format
     - _Requirements: 2.1, 2.2, 40.6, 42.1, 42.4_
 
-- [ ] 103. Write integration tests for HPKE encrypted communication
-  - [ ] 103.1 Write end-to-end encrypted execution flow test
+- [x] 103. Write integration tests for HPKE encrypted communication
+  - [x] 103.1 Write end-to-end encrypted execution flow test
     - Test complete flow: GET /attest → extract Server_Public_Key → HPKE key exchange → encrypted POST /execute → encrypted POST /execution/{id}/output → decrypt responses
     - Verify attestation documents, execution results, and output integrity through encryption
     - _Requirements: 36.1, 37.1, 40.1, 41.1, 42.1, 42.4_
 
-  - [ ] 103.2 Write integration tests for error scenarios
+  - [x] 103.2 Write integration tests for error scenarios
     - Test decryption failure on /execute (wrong key)
     - Test missing Encryption_Context on /execution/{id}/output
     - Test expired OIDC token in encrypted body
     - Test unauthorized repository in encrypted body
     - _Requirements: 40.5, 42.6, 42.7_
 
-- [ ] 104. Final checkpoint - Ensure all HPKE encryption tests pass
+- [x] 104. Final checkpoint - Ensure all HPKE encryption tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
