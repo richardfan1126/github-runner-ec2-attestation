@@ -276,6 +276,13 @@ class TestHealthCheckAndExecuteEdgeCases:
         Validates: Requirement 3.6"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
+        caller._encryption = ClientEncryption()
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        server_key = X25519PrivateKey.generate()
+        caller._encryption.derive_shared_key(
+            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        )
         with patch("call_remote_executor.requests.post", side_effect=requests.ConnectionError("Connection refused")):
             with pytest.raises(CallerError) as exc_info:
                 caller.execute(
@@ -285,6 +292,7 @@ class TestHealthCheckAndExecuteEdgeCases:
                     github_token="ghp_fake_token",
                 )
             assert exc_info.value.phase == "execute"
+            assert "connect" in exc_info.value.message.lower()
 
 
 

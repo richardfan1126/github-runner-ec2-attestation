@@ -564,8 +564,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test with `expected_nonce` parameter
     - _Requirements: 4A.1, 4A.2, 4A.3, 11.5_
 
-- [ ] 30. Update existing unit tests for HPKE and nonce compatibility
-  - [ ] 30.1 Update `tests/test_caller_unit.py` for encrypted communication
+- [x] 30. Update existing unit tests for HPKE and nonce compatibility
+  - [x] 30.1 Update `tests/test_caller_unit.py` for encrypted communication
     - Update execute tests to use encrypted envelope format and mock `ClientEncryption`
     - Update poll_output tests to use POST with encrypted payloads
     - Set `_encryption` attribute on caller instances where execute/poll_output tests need it
@@ -573,19 +573,19 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Add assertions that no Authorization header is sent on any request
     - _Requirements: 10.3, 14.6, 14.7_
 
-  - [ ] 30.2 Update `tests/test_caller_properties.py` for encrypted communication
+  - [x] 30.2 Update `tests/test_caller_properties.py` for encrypted communication
     - Update all property tests that construct `RemoteExecutorCaller` to initialize `_encryption`
     - Update execute and poll_output property tests to mock encrypted request/response
     - _Requirements: 14.6, 14.7_
 
-- [ ] 31. Update GitHub Actions workflow for encrypted flow
-  - [ ] 31.1 Verify workflow YAML is compatible with encrypted flow
+- [x] 31. Update GitHub Actions workflow for encrypted flow
+  - [x] 31.1 Verify workflow YAML is compatible with encrypted flow
     - Ensure the caller script invocation does not pass `--github-token` via Authorization header
     - Verify `--audience` is still passed for OIDC token (now used in encrypted payload)
     - No workflow YAML changes should be needed since encryption is handled inside the Python script
     - _Requirements: 16.1, 10.3_
 
-- [ ] 32. Final checkpoint - Ensure all HPKE and nonce tests pass
+- [x] 32. Final checkpoint - Ensure all HPKE and nonce tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
