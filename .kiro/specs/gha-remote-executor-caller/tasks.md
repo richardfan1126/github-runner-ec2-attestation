@@ -367,8 +367,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 19. Final checkpoint - Ensure all OIDC tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 20. Implement ClientEncryption class
-  - [ ] 20.1 Create `ClientEncryption` class in `call_remote_executor.py`
+- [x] 20. Implement ClientEncryption class
+  - [x] 20.1 Create `ClientEncryption` class in `call_remote_executor.py`
     - Add imports for `X25519PrivateKey`, `X25519PublicKey`, `HKDF`, `SHA256`, `AESGCM`, `Encoding`, `PublicFormat` from `cryptography`
     - Implement `__init__` to generate a fresh X25519 keypair via `X25519PrivateKey.generate()`
     - Implement `client_public_key_bytes` property returning raw 32-byte public key via `public_bytes(Encoding.Raw, PublicFormat.Raw)`
@@ -377,28 +377,28 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Implement `decrypt_response(encrypted_response_b64)` base64-decoding, splitting 12-byte nonce + ciphertext, decrypting with AES-256-GCM, deserializing JSON; raise `CallerError(phase="encryption")` on decryption failure or invalid JSON
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 13.1, 13.2, 13.3, 13.4, 13.5, 14.1, 14.2, 14.3, 14.5, 15.3, 15.4, 15.5, 15.6, 15.7_
 
-  - [ ] 20.2 Write property test for AES-256-GCM encryption round-trip
+  - [x] 20.2 Write property test for AES-256-GCM encryption round-trip
     - **Property 16: AES-256-GCM encryption round-trip**
     - Generate random JSON-serializable dicts and random 32-byte AES keys
     - Encrypt via `encrypt_payload`, decrypt via `decrypt_response` with same shared key
     - Verify result equals original dict
     - **Validates: Requirements 3.2, 14.1, 15.3, 15.4, 15.5**
 
-  - [ ] 20.3 Write property test for HPKE key derivation symmetry
+  - [x] 20.3 Write property test for HPKE key derivation symmetry
     - **Property 17: HPKE key derivation symmetry**
     - Generate random X25519 keypairs for client and server
     - Derive shared key on both sides using ECDH + HKDF-SHA256 with same parameters
     - Verify both sides produce identical 32-byte keys
     - **Validates: Requirements 13.1, 13.2**
 
-  - [ ] 20.4 Write property test for AES-256-GCM decryption rejects tampered ciphertext
+  - [x] 20.4 Write property test for AES-256-GCM decryption rejects tampered ciphertext
     - **Property 20: AES-256-GCM decryption rejects tampered ciphertext**
     - Generate random dicts, encrypt via `encrypt_payload`
     - Modify a random byte in the base64-decoded wire format
     - Verify `decrypt_response` raises `CallerError`
     - **Validates: Requirements 15.6**
 
-  - [ ] 20.5 Write unit tests for ClientEncryption edge cases
+  - [x] 20.5 Write unit tests for ClientEncryption edge cases
     - Test invalid server public key (not 32 bytes) raises `CallerError` with phase "encryption" (Req 13.5)
     - Test `encrypt_payload` before `derive_shared_key` raises `CallerError` (Req 14.1)
     - Test decryption failure on tampered response raises `CallerError` with phase "encryption" (Req 15.6)

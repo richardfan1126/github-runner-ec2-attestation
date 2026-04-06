@@ -26,6 +26,11 @@ from OpenSSL import crypto as ossl_crypto
 from Crypto.Util.number import long_to_bytes
 from cryptography.x509 import load_der_x509_certificate
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,96 @@ class CallerError(Exception):
         self.phase = phase
         self.details = details or {}
         super().__init__(self.message)
+
+
+class ClientEncryption:
+    """HPKE encryption helper for the caller side.
+
+    Generates a client X25519 keypair, derives a shared AES-256-GCM key
+    from the server's public key via ECDH + HKDF-SHA256, and provides
+    encrypt/decrypt methods for request/response payloads.
+    """
+
+    def __init__(self):
+        """Generate a fresh X25519 keypair for this session."""
+        self._private_key = X25519PrivateKey.generate()
+        self._shared_key: bytes | None = None
+
+    @property
+    def client_public_key_bytes(self) -> bytes:
+        """Return the raw 32-byte client public key for transmission."""
+        return self._private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+    def derive_shared_key(self, server_public_key_bytes: bytes) -> None:
+        """Derive the shared key from ECDH + HKDF-SHA256.
+
+        Raises CallerError if server_public_key_bytes is not a valid 32-byte X25519 key.
+        """
+        try:
+            server_public_key = X25519PublicKey.from_public_bytes(server_public_key_bytes)
+        except Exception as exc:
+            raise CallerError(
+                message=f"Invalid server public key: {exc}",
+                phase="encryption",
+                details={"error": str(exc)},
+            )
+        shared_secret = self._private_key.exchange(server_public_key)
+        self._shared_key = HKDF(
+            algorithm=SHA256(),
+            length=32,
+            salt=None,
+            info=b"hpke-shared-key",
+        ).derive(shared_secret)
+
+    def encrypt_payload(self, payload_dict: dict) -> str:
+        """Serialize payload_dict to JSON, encrypt with AES-256-GCM.
+
+        Returns base64-encoded string of (12-byte nonce || ciphertext).
+        Raises CallerError if shared key has not been derived yet.
+        """
+        if self._shared_key is None:
+            raise CallerError(
+                message="Cannot encrypt: shared key has not been derived yet",
+                phase="encryption",
+            )
+        plaintext = json.dumps(payload_dict).encode("utf-8")
+        nonce = os.urandom(12)
+        ciphertext = AESGCM(self._shared_key).encrypt(nonce, plaintext, None)
+        wire_bytes = nonce + ciphertext
+        return base64.b64encode(wire_bytes).decode("ascii")
+
+    def decrypt_response(self, encrypted_response_b64: str) -> dict:
+        """Base64-decode, split nonce + ciphertext, decrypt with AES-256-GCM.
+
+        Returns the deserialized JSON dict.
+        Raises CallerError on decryption failure or invalid JSON.
+        """
+        if self._shared_key is None:
+            raise CallerError(
+                message="Cannot decrypt: shared key has not been derived yet",
+                phase="encryption",
+            )
+        try:
+            wire_bytes = base64.b64decode(encrypted_response_b64)
+            nonce = wire_bytes[:12]
+            ciphertext = wire_bytes[12:]
+            plaintext = AESGCM(self._shared_key).decrypt(nonce, ciphertext, None)
+        except CallerError:
+            raise
+        except Exception as exc:
+            raise CallerError(
+                message=f"Decryption failed: {exc}",
+                phase="encryption",
+                details={"error": str(exc)},
+            )
+        try:
+            return json.loads(plaintext.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise CallerError(
+                message=f"Decrypted response is not valid JSON: {exc}",
+                phase="encryption",
+                details={"error": str(exc)},
+            )
 
 
 class RemoteExecutorCaller:

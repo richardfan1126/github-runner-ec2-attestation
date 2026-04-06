@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".github", "scr
 from call_remote_executor import (
     EXPECTED_ATTESTATION_FIELDS,
     CallerError,
+    ClientEncryption,
     RemoteExecutorCaller,
 )
 
@@ -1082,3 +1083,110 @@ class TestOIDCAuthenticationErrorHandling:
                     caller.request_oidc_token()
 
         assert exc_info.value.phase == "oidc"
+
+
+# ---------------------------------------------------------------------------
+# Property 16: AES-256-GCM encryption round-trip
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 16: AES-256-GCM encryption round-trip
+# **Validates: Requirements 3.2, 14.1, 15.3, 15.4, 15.5**
+class TestAESGCMEncryptionRoundTrip:
+    """Property 16: For any JSON-serializable dict, encrypting via encrypt_payload
+    and decrypting via decrypt_response with the same shared key should produce
+    the original dict."""
+
+    @given(
+        payload=st.fixed_dictionaries({
+            "key": st.text(min_size=1, max_size=50),
+            "value": st.text(min_size=0, max_size=100),
+            "number": st.integers(min_value=-1000, max_value=1000),
+        }),
+    )
+    @settings(max_examples=50)
+    def test_encrypt_decrypt_round_trip(self, payload: dict):
+        """Encrypt then decrypt should return the original dict."""
+        client = ClientEncryption()
+        server = ClientEncryption()
+
+        # Derive shared keys from each other's public keys
+        client.derive_shared_key(server.client_public_key_bytes)
+        server.derive_shared_key(client.client_public_key_bytes)
+
+        # Encrypt with client, decrypt with server (same shared key)
+        encrypted = client.encrypt_payload(payload)
+        decrypted = server.decrypt_response(encrypted)
+
+        assert decrypted == payload
+
+
+# ---------------------------------------------------------------------------
+# Property 17: HPKE key derivation symmetry
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 17: HPKE key derivation symmetry
+# **Validates: Requirements 13.1, 13.2**
+class TestHPKEKeyDerivationSymmetry:
+    """Property 17: For any two X25519 keypairs, deriving the shared key on both
+    sides using ECDH + HKDF-SHA256 with the same parameters should produce
+    identical 32-byte keys."""
+
+    @given(data=st.data())
+    @settings(max_examples=50)
+    def test_shared_key_symmetry(self, data):
+        """Both sides derive the same shared key."""
+        client = ClientEncryption()
+        server = ClientEncryption()
+
+        client.derive_shared_key(server.client_public_key_bytes)
+        server.derive_shared_key(client.client_public_key_bytes)
+
+        assert client._shared_key is not None
+        assert server._shared_key is not None
+        assert len(client._shared_key) == 32
+        assert len(server._shared_key) == 32
+        assert client._shared_key == server._shared_key
+
+
+# ---------------------------------------------------------------------------
+# Property 20: AES-256-GCM decryption rejects tampered ciphertext
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 20: AES-256-GCM decryption rejects tampered ciphertext
+# **Validates: Requirements 15.6**
+class TestAESGCMDecryptionRejectsTamperedCiphertext:
+    """Property 20: For any encrypted payload, modifying a random byte in the
+    base64-decoded wire format should cause decrypt_response to raise CallerError."""
+
+    @given(
+        payload=st.fixed_dictionaries({
+            "key": st.text(min_size=1, max_size=50),
+            "value": st.text(min_size=0, max_size=100),
+        }),
+        tamper_offset=st.integers(min_value=0, max_value=1000),
+        tamper_byte=st.integers(min_value=1, max_value=255),
+    )
+    @settings(max_examples=50)
+    def test_tampered_ciphertext_rejected(self, payload: dict, tamper_offset: int, tamper_byte: int):
+        """Tampering with the wire bytes should cause decryption to fail."""
+        client = ClientEncryption()
+        server = ClientEncryption()
+
+        client.derive_shared_key(server.client_public_key_bytes)
+        server.derive_shared_key(client.client_public_key_bytes)
+
+        encrypted_b64 = client.encrypt_payload(payload)
+        wire_bytes = bytearray(base64.b64decode(encrypted_b64))
+
+        # Tamper a byte at a valid offset
+        idx = tamper_offset % len(wire_bytes)
+        original = wire_bytes[idx]
+        wire_bytes[idx] = (original + tamper_byte) % 256
+        # Ensure we actually changed the byte
+        assume(wire_bytes[idx] != original)
+
+        tampered_b64 = base64.b64encode(bytes(wire_bytes)).decode("ascii")
+
+        with pytest.raises(CallerError) as exc_info:
+            server.decrypt_response(tampered_b64)
+        assert exc_info.value.phase == "encryption"

@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".github", "scr
 
 from call_remote_executor import (
     CallerError,
+    ClientEncryption,
     RemoteExecutorCaller,
 )
 
@@ -563,3 +564,64 @@ class TestWorkflowValidation:
         assert "audience" in inputs, (
             "Workflow must define an 'audience' input under workflow_dispatch"
         )
+
+
+class TestClientEncryptionEdgeCases:
+    """Unit tests for ClientEncryption edge cases."""
+
+    def test_invalid_server_public_key_raises_caller_error(self):
+        """Invalid server public key (not 32 bytes) raises CallerError with phase 'encryption'.
+        Validates: Requirement 13.5"""
+        enc = ClientEncryption()
+        with pytest.raises(CallerError) as exc_info:
+            enc.derive_shared_key(b"\x00" * 16)  # 16 bytes, not 32
+        assert exc_info.value.phase == "encryption"
+
+    def test_encrypt_before_derive_raises_caller_error(self):
+        """encrypt_payload before derive_shared_key raises CallerError.
+        Validates: Requirement 14.1"""
+        enc = ClientEncryption()
+        with pytest.raises(CallerError) as exc_info:
+            enc.encrypt_payload({"test": "data"})
+        assert exc_info.value.phase == "encryption"
+
+    def test_tampered_response_raises_caller_error(self):
+        """Decryption failure on tampered response raises CallerError with phase 'encryption'.
+        Validates: Requirement 15.6"""
+        client = ClientEncryption()
+        server = ClientEncryption()
+        client.derive_shared_key(server.client_public_key_bytes)
+        server.derive_shared_key(client.client_public_key_bytes)
+
+        encrypted = client.encrypt_payload({"hello": "world"})
+        # Tamper with the encrypted data
+        import base64 as b64mod
+        wire = bytearray(b64mod.b64decode(encrypted))
+        wire[-1] = (wire[-1] + 1) % 256
+        tampered = b64mod.b64encode(bytes(wire)).decode("ascii")
+
+        with pytest.raises(CallerError) as exc_info:
+            server.decrypt_response(tampered)
+        assert exc_info.value.phase == "encryption"
+
+    def test_invalid_json_response_raises_caller_error(self):
+        """Decrypted response that is not valid JSON raises CallerError.
+        Validates: Requirement 15.7"""
+        import base64 as b64mod
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
+
+        client = ClientEncryption()
+        server = ClientEncryption()
+        client.derive_shared_key(server.client_public_key_bytes)
+        server.derive_shared_key(client.client_public_key_bytes)
+
+        # Manually encrypt non-JSON plaintext using the shared key
+        nonce = os.urandom(12)
+        plaintext = b"this is not json {{{{"
+        ciphertext = _AESGCM(server._shared_key).encrypt(nonce, plaintext, None)
+        wire = nonce + ciphertext
+        encoded = b64mod.b64encode(wire).decode("ascii")
+
+        with pytest.raises(CallerError) as exc_info:
+            server.decrypt_response(encoded)
+        assert exc_info.value.phase == "encryption"
