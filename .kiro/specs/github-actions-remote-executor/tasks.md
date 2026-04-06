@@ -2031,8 +2031,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Keep existing validate_oidc_token for any non-encrypted endpoints if needed
     - _Requirements: 2.1, 2.2, 40.9_
 
-- [ ] 98. Change /execution/{id}/output from GET to POST with encrypted request/response
-  - [ ] 98.1 Change route from GET to POST in src/server.py
+- [x] 98. Change /execution/{id}/output from GET to POST with encrypted request/response
+  - [x] 98.1 Change route from GET to POST in src/server.py
     - Change `@app.get("/execution/{execution_id}/output")` to `@app.post("/execution/{execution_id}/output")`
     - Accept encrypted request body instead of query parameters
     - Look up Encryption_Context for execution_id; return HTTP 400 if not found
@@ -2041,17 +2041,17 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Validate OIDC token from decrypted body
     - _Requirements: 42.2, 42.3, 42.6, 42.7_
 
-  - [ ] 98.2 Encrypt /execution/{id}/output response payload
+  - [x] 98.2 Encrypt /execution/{id}/output response payload
     - Encrypt the response dict (execution_id, status, stdout, stderr, offsets, complete, exit_code, attestation docs) using Shared_Key
     - Return base64-encoded encrypted response
     - _Requirements: 41.4, 41.5, 42.4, 42.5_
 
-  - [ ] 98.3 Write property test for Output Request-Response Encryption Round-Trip
+  - [x] 98.3 Write property test for Output Request-Response Encryption Round-Trip
     - **Property 133: Output Request-Response Encryption Round-Trip**
     - Client encrypts output request with Shared_Key, server decrypts, processes, encrypts response, client decrypts — verify original content
     - **Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**
 
-  - [ ] 98.4 Write property test for Missing Encryption Context Returns HTTP 400
+  - [x] 98.4 Write property test for Missing Encryption Context Returns HTTP 400
     - **Property 134: Missing Encryption Context Returns HTTP 400**
     - Request /execution/{id}/output with an execution_id that has no Encryption_Context, verify HTTP 400
     - **Validates: Requirements 42.6**

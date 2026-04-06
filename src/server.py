@@ -540,31 +540,94 @@ def add_routes(app: FastAPI) -> None:
             )
 
     
-    @app.get("/execution/{execution_id}/output")
-    async def get_execution_output(execution_id: str, request: Request, offset: int = 0, nonce: str = None):
+    @app.post("/execution/{execution_id}/output")
+    async def get_execution_output(execution_id: str, request: Request):
         """
-        Get execution status and output
-        
-        Query parameters:
-        - offset: Byte offset to start retrieving output from (default: 0)
-        
-        Returns:
+        Get execution status and output (encrypted request/response).
+
+        Request body (encrypted with Shared_Key):
         {
-            "execution_id": "uuid",
-            "status": "running|completed|failed|timed_out",
-            "stdout": "output text...",
-            "stderr": "error text...",
-            "stdout_offset": 1024,
-            "stderr_offset": 256,
-            "complete": false,
-            "exit_code": null
+            "encrypted_payload": "base64-encoded-ciphertext"
+        }
+
+        Decrypted request payload:
+        {
+            "oidc_token": "eyJhbGciOiJSUzI1NiIs...",
+            "nonce": "optional-client-nonce",
+            "offset": 0
+        }
+
+        Response (encrypted with Shared_Key):
+        {
+            "encrypted_response": "base64-encoded-ciphertext"
         }
         """
+        import base64
+
         try:
-            # OIDC authentication
+            # Look up Encryption_Context for execution_id
+            encryption_manager = request.app.state.encryption_manager
+            if encryption_manager is None:
+                logger.error("Encryption manager not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=create_error_response(
+                        "encryption_not_configured",
+                        "Server encryption is not configured"
+                    )
+                )
+
+            shared_key = encryption_manager.get_shared_key(execution_id)
+            if shared_key is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "no_encryption_context",
+                        "No encryption context available for this execution ID"
+                    )
+                )
+
+            # Parse outer JSON envelope
+            try:
+                outer_body = await request.json()
+            except Exception as e:
+                logger.warning(f"Malformed request body on output endpoint: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "malformed_request",
+                        "Request body must be valid JSON"
+                    )
+                )
+
+            encrypted_payload_b64 = outer_body.get("encrypted_payload")
+            if not encrypted_payload_b64:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "malformed_request",
+                        "Request must include encrypted_payload"
+                    )
+                )
+
+            # Decrypt the request payload using Shared_Key
+            try:
+                encrypted_payload = base64.b64decode(encrypted_payload_b64)
+                body = encryption_manager.decrypt_with_shared_key(encrypted_payload, shared_key)
+            except (ValueError, Exception) as e:
+                logger.warning(f"Decryption failed on output endpoint: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "decryption_failed",
+                        "Failed to decrypt request payload"
+                    )
+                )
+
+            # OIDC authentication from decrypted body
             validator = request.app.state.request_validator
-            authorization_header = request.headers.get("authorization")
-            oidc_result = validator.validate_oidc_token(authorization_header)
+            oidc_token = body.get("oidc_token")
+            oidc_result = validator.validate_oidc_token_from_body(oidc_token)
 
             if not oidc_result.valid:
                 repo_claim = (oidc_result.claims or {}).get("repository", "unknown")
@@ -580,13 +643,17 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Extract optional offset and nonce from decrypted body
+            offset = body.get("offset", 0)
+            nonce = body.get("nonce")
+
             # Validate offset
-            if offset < 0:
+            if not isinstance(offset, int) or offset < 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=create_error_response(
                         "invalid_offset",
-                        "Offset must be non-negative",
+                        "Offset must be a non-negative integer",
                         {"offset": offset}
                     )
                 )
@@ -631,7 +698,6 @@ def add_routes(app: FastAPI) -> None:
                 
                 # Generate output attestation when execution is complete
                 if output_data.complete:
-                    import base64
                     # Concatenate stdout, stderr, and exit_code into canonical Script_Output
                     script_output = (
                         f"stdout:{output_data.stdout}\n"
@@ -664,9 +730,16 @@ def add_routes(app: FastAPI) -> None:
                     "exit_code": None
                 }
             
+            # Encrypt response with shared key
+            encrypted_response = encryption_manager.encrypt_response(
+                response_data, shared_key
+            )
+
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content=response_data
+                content={
+                    "encrypted_response": base64.b64encode(encrypted_response).decode("utf-8")
+                }
             )
             
         except HTTPException:
