@@ -124,7 +124,7 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
             docker_client = None
     
     # Initialize components
-    execution_manager = ExecutionManager(config.output_retention_hours)
+    execution_manager = ExecutionManager(config.output_retention_hours, encryption_manager=encryption_manager)
     output_collector = OutputCollector()
     repository_client = RepositoryClient(config.temp_storage_path)
     attestation_generator = AttestationGenerator(config.tpm_attest_path)

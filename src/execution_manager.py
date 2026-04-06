@@ -7,6 +7,10 @@ from typing import Any, Dict, Optional
 
 from src.models import ExecutionRecord, ExecutionStatus
 
+if __name__ != "__main__":
+    from typing import TYPE_CHECKING
+    if TYPE_CHECKING:
+        from src.encryption import EncryptionManager as _EncryptionManager
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +18,18 @@ logger = logging.getLogger(__name__)
 class ExecutionManager:
     """Manages execution lifecycle and state tracking"""
     
-    def __init__(self, output_retention_hours: int):
+    def __init__(self, output_retention_hours: int, encryption_manager: Optional["_EncryptionManager"] = None):
         """
         Initialize execution manager
 
         Args:
             output_retention_hours: Hours to retain execution records after completion
+            encryption_manager: Optional EncryptionManager for cleaning up encryption contexts
         """
         self._executions: Dict[str, ExecutionRecord] = {}
         self._lock = Lock()
         self._output_retention_hours = output_retention_hours
+        self._encryption_manager = encryption_manager
 
         # Metrics tracking
         self._total_executions = 0
@@ -148,16 +154,16 @@ class ExecutionManager:
         
         Removes execution records that completed more than output_retention_hours ago.
         Only removes executions in terminal states (completed, failed, timed_out).
+        Also removes associated Encryption_Contexts if an encryption_manager is set.
         
         Returns:
             Number of executions removed
         """
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=self._output_retention_hours)
         removed_count = 0
+        expired_ids = []
         
         with self._lock:
-            expired_ids = []
-            
             for execution_id, record in self._executions.items():
                 # Only cleanup terminal states
                 if record.status in (
@@ -173,6 +179,12 @@ class ExecutionManager:
             for execution_id in expired_ids:
                 del self._executions[execution_id]
                 removed_count += 1
+        
+        # Clean up encryption contexts outside the lock to avoid potential deadlocks
+        # (EncryptionManager.remove_encryption_context uses its own internal lock)
+        if self._encryption_manager is not None:
+            for execution_id in expired_ids:
+                self._encryption_manager.remove_encryption_context(execution_id)
         
         if removed_count > 0:
             logger.info(f"Cleaned up {removed_count} expired execution(s)")

@@ -2059,13 +2059,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 99. Checkpoint - Ensure encrypted endpoint tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 100. Implement Encryption_Context lifecycle management
-  - [ ] 100.1 Integrate Encryption_Context cleanup with execution record cleanup
+- [x] 100. Implement Encryption_Context lifecycle management
+  - [x] 100.1 Integrate Encryption_Context cleanup with execution record cleanup
     - When ExecutionManager.cleanup_expired removes an execution record, also call EncryptionManager.remove_encryption_context for that execution_id
     - Ensure cleanup is thread-safe
     - _Requirements: 41.6, 41.7_
 
-  - [ ] 100.2 Write property test for Encryption Context Lifecycle
+  - [x] 100.2 Write property test for Encryption Context Lifecycle
     - **Property 131: Encryption Context Lifecycle**
     - Verify Shared_Key is stored after /execute, persists during execution, and is removed when execution record is cleaned up
     - **Validates: Requirements 41.1, 41.2, 41.6**
