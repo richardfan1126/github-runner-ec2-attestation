@@ -520,15 +520,15 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 27. Checkpoint - Ensure encrypted execute and poll_output tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 28. Update `run` method and orchestration flow
-  - [ ] 28.1 Update `run` method to include attest step and pass nonces
+- [x] 28. Update `run` method and orchestration flow
+  - [x] 28.1 Update `run` method to include attest step and pass nonces
     - Insert `attest()` call between `request_oidc_token()` and `execute()`
     - Flow becomes: health_check → request_oidc_token → attest → execute (encrypted) → validate_attestation (with nonce) → poll_output (encrypted) → validate_output_attestation (with nonce)
     - Pass the last poll nonce to `validate_output_attestation` for nonce verification
     - Remove standalone `validate_attestation` call after execute (now done inside `execute`)
     - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6_
 
-  - [ ] 28.2 Write unit tests for updated run flow
+  - [x] 28.2 Write unit tests for updated run flow
     - Test run calls methods in correct order: health_check → request_oidc_token → attest → execute → poll_output → validate_output_attestation
     - Test attest failure prevents execute from being called (Req 16.6)
     - Test no unencrypted payloads sent to /execute or /output (Req 16.3)

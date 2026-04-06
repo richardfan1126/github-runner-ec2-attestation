@@ -776,10 +776,10 @@ class TestExitCodePropagation:
         }
 
         with patch("call_remote_executor.requests.get", return_value=health_response):
-            with patch.object(caller, "execute", return_value=exec_result):
-                with patch.object(caller, "validate_attestation", return_value={}):
-                    with patch.object(caller, "poll_output", return_value=poll_result):
-                        with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+            with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                with patch.object(caller, "attest", return_value=b"\x01" * 32):
+                    with patch.object(caller, "execute", return_value=exec_result):
+                        with patch.object(caller, "poll_output", return_value=poll_result):
                             result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
 
         assert result == exit_code
@@ -828,10 +828,10 @@ class TestSummaryContainsExecutionResults:
         }
 
         with patch("call_remote_executor.requests.get", return_value=health_response):
-            with patch.object(caller, "execute", return_value=exec_result):
-                with patch.object(caller, "validate_attestation", return_value={}):
-                    with patch.object(caller, "poll_output", return_value=poll_result):
-                        with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+            with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                with patch.object(caller, "attest", return_value=b"\x01" * 32):
+                    with patch.object(caller, "execute", return_value=exec_result):
+                        with patch.object(caller, "poll_output", return_value=poll_result):
                             caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
 
         summary = caller.summary

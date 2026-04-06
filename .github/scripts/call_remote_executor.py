@@ -932,8 +932,9 @@ class RemoteExecutorCaller:
     ) -> int:
         """Orchestrate full flow.
 
-        health_check -> execute -> validate_attestation -> poll_output
-        -> validate_output_attestation -> report results.
+        health_check -> request_oidc_token -> attest -> execute (encrypted)
+        -> poll_output (encrypted) -> validate_output_attestation (with nonce)
+        -> report results.
         Returns remote script exit code.
         """
         # Health check
@@ -946,20 +947,19 @@ class RemoteExecutorCaller:
         self.request_oidc_token()
         logger.info("OIDC token acquired")
 
-        # Execute
-        logger.info("Submitting execution request...")
+        # Attest: get server public key and establish HPKE shared key
+        logger.info("Attesting server identity and establishing encrypted channel...")
+        self.attest()
+        logger.info("Server attestation validated, HPKE key exchange complete")
+
+        # Execute (encrypted) — attestation validation with nonce is done inside execute()
+        logger.info("Submitting encrypted execution request...")
         exec_response = self.execute(repository_url, commit_hash, script_path, github_token)
         execution_id = exec_response["execution_id"]
-        attestation_b64 = exec_response["attestation_document"]
+        attestation_status = "pass"
         logger.info("Execution submitted: %s", execution_id)
 
-        # Validate server identity attestation
-        logger.info("Validating server attestation...")
-        self.validate_attestation(attestation_b64)
-        attestation_status = "pass"
-        logger.info("Attestation validation: %s", attestation_status)
-
-        # Poll for output
+        # Poll for output (encrypted)
         logger.info("Polling for execution output...")
         output = self.poll_output(execution_id)
         stdout = output["stdout"]
@@ -971,10 +971,14 @@ class RemoteExecutorCaller:
         logger.info("stderr: %s", stderr)
         logger.info("exit_code: %s", exit_code)
 
-        # Validate output attestation
+        # Validate output attestation with last poll nonce
         if output_attestation_b64:
             logger.info("Validating output attestation...")
-            self.validate_output_attestation(output_attestation_b64, stdout, stderr, exit_code)
+            last_nonce = getattr(self, "_last_poll_nonce", None)
+            self.validate_output_attestation(
+                output_attestation_b64, stdout, stderr, exit_code,
+                expected_nonce=last_nonce,
+            )
             output_integrity_status = "pass"
         else:
             logger.warning("No output attestation document received, skipping output integrity verification")

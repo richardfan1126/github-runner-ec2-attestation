@@ -1268,3 +1268,213 @@ class TestEncryptedPollOutput:
             caller.poll_output("exec-1")
         assert exc_info.value.phase == "polling"
         assert "hpke" in exc_info.value.message.lower() or "attest" in exc_info.value.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests for updated run orchestration flow (Task 28.2)
+# ---------------------------------------------------------------------------
+
+
+class TestRunOrchestrationFlow:
+    """Unit tests for the updated run method orchestration flow.
+    Validates: Requirements 16.1, 16.3, 16.6"""
+
+    def test_run_calls_methods_in_correct_order(self):
+        """run() calls health_check → request_oidc_token → attest → execute
+        → poll_output → validate_output_attestation in that order.
+        Validates: Requirement 16.1"""
+        caller = _make_caller()
+        call_order = []
+
+        health_resp = MagicMock()
+        health_resp.status_code = 200
+        health_resp.json.return_value = {"status": "healthy"}
+
+        exec_result = {
+            "execution_id": "test-id",
+            "attestation_document": "dGVzdA==",
+            "status": "queued",
+        }
+        poll_result = {
+            "stdout": "hello",
+            "stderr": "",
+            "exit_code": 0,
+            "output_attestation_document": "b3V0cHV0",
+        }
+
+        def mock_health_check():
+            call_order.append("health_check")
+            return {"status": "healthy"}
+
+        def mock_request_oidc_token():
+            call_order.append("request_oidc_token")
+            return "mock-token"
+
+        def mock_attest():
+            call_order.append("attest")
+            return b"\x01" * 32
+
+        def mock_execute(*args, **kwargs):
+            call_order.append("execute")
+            return exec_result
+
+        def mock_poll_output(execution_id):
+            call_order.append("poll_output")
+            caller._last_poll_nonce = "poll-nonce-123"
+            return poll_result
+
+        def mock_validate_output_attestation(*args, **kwargs):
+            call_order.append("validate_output_attestation")
+            return True
+
+        with patch.object(caller, "health_check", side_effect=mock_health_check):
+            with patch.object(caller, "request_oidc_token", side_effect=mock_request_oidc_token):
+                with patch.object(caller, "attest", side_effect=mock_attest):
+                    with patch.object(caller, "execute", side_effect=mock_execute):
+                        with patch.object(caller, "poll_output", side_effect=mock_poll_output):
+                            with patch.object(caller, "validate_output_attestation", side_effect=mock_validate_output_attestation):
+                                result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        assert result == 0
+        assert call_order == [
+            "health_check",
+            "request_oidc_token",
+            "attest",
+            "execute",
+            "poll_output",
+            "validate_output_attestation",
+        ]
+
+    def test_run_passes_last_poll_nonce_to_validate_output_attestation(self):
+        """run() passes _last_poll_nonce as expected_nonce to validate_output_attestation.
+        Validates: Requirement 16.1"""
+        caller = _make_caller()
+
+        exec_result = {
+            "execution_id": "test-id",
+            "attestation_document": "dGVzdA==",
+            "status": "queued",
+        }
+        poll_result = {
+            "stdout": "out",
+            "stderr": "err",
+            "exit_code": 0,
+            "output_attestation_document": "b3V0cHV0",
+        }
+
+        captured_kwargs = {}
+
+        def mock_poll_output(execution_id):
+            caller._last_poll_nonce = "the-last-nonce"
+            return poll_result
+
+        def mock_validate_output_attestation(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return True
+
+        with patch.object(caller, "health_check", return_value={"status": "healthy"}):
+            with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                with patch.object(caller, "attest", return_value=b"\x01" * 32):
+                    with patch.object(caller, "execute", return_value=exec_result):
+                        with patch.object(caller, "poll_output", side_effect=mock_poll_output):
+                            with patch.object(caller, "validate_output_attestation", side_effect=mock_validate_output_attestation):
+                                caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        assert captured_kwargs.get("expected_nonce") == "the-last-nonce"
+
+    def test_attest_failure_prevents_execute(self):
+        """If attest() fails, execute() is never called.
+        Validates: Requirement 16.6"""
+        caller = _make_caller()
+        execute_called = False
+
+        def mock_execute(*args, **kwargs):
+            nonlocal execute_called
+            execute_called = True
+            return {}
+
+        with patch.object(caller, "health_check", return_value={"status": "healthy"}):
+            with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                with patch.object(caller, "attest", side_effect=CallerError(
+                    message="Attestation failed", phase="attest"
+                )):
+                    with patch.object(caller, "execute", side_effect=mock_execute):
+                        with pytest.raises(CallerError) as exc_info:
+                            caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        assert exc_info.value.phase == "attest"
+        assert not execute_called
+
+    def test_run_does_not_call_standalone_validate_attestation(self):
+        """run() does not call validate_attestation directly — it's done inside execute().
+        Validates: Requirement 16.1"""
+        caller = _make_caller()
+
+        exec_result = {
+            "execution_id": "test-id",
+            "attestation_document": "dGVzdA==",
+            "status": "queued",
+        }
+        poll_result = {
+            "stdout": "out",
+            "stderr": "",
+            "exit_code": 0,
+            "output_attestation_document": None,
+        }
+
+        with patch.object(caller, "health_check", return_value={"status": "healthy"}):
+            with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                with patch.object(caller, "attest", return_value=b"\x01" * 32):
+                    with patch.object(caller, "execute", return_value=exec_result):
+                        with patch.object(caller, "poll_output", return_value=poll_result):
+                            with patch.object(caller, "validate_attestation") as mock_va:
+                                caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        mock_va.assert_not_called()
+
+    def test_run_no_unencrypted_payloads_to_execute_or_output(self):
+        """run() never sends unencrypted payloads to /execute or /output.
+        The execute() and poll_output() methods require _encryption to be set
+        (via attest()), so calling them without it would raise CallerError.
+        Validates: Requirement 16.3"""
+        caller = _make_caller()
+
+        # Verify that execute raises if _encryption is not set
+        caller._oidc_token = "test-token"
+        with pytest.raises(CallerError) as exc_info:
+            caller.execute("https://github.com/o/r", "abc", "script.sh", "tok")
+        assert "hpke" in exc_info.value.message.lower() or "attest" in exc_info.value.message.lower()
+
+        # Verify that poll_output raises if _encryption is not set
+        with pytest.raises(CallerError) as exc_info:
+            caller.poll_output("exec-1")
+        assert "hpke" in exc_info.value.message.lower() or "attest" in exc_info.value.message.lower()
+
+    def test_run_skips_output_attestation_when_null(self):
+        """run() skips validate_output_attestation when output_attestation_document is None.
+        Validates: Requirement 16.1"""
+        caller = _make_caller()
+
+        exec_result = {
+            "execution_id": "test-id",
+            "attestation_document": "dGVzdA==",
+            "status": "queued",
+        }
+        poll_result = {
+            "stdout": "out",
+            "stderr": "",
+            "exit_code": 0,
+            "output_attestation_document": None,
+        }
+
+        with patch.object(caller, "health_check", return_value={"status": "healthy"}):
+            with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                with patch.object(caller, "attest", return_value=b"\x01" * 32):
+                    with patch.object(caller, "execute", return_value=exec_result):
+                        with patch.object(caller, "poll_output", return_value=poll_result):
+                            with patch.object(caller, "validate_output_attestation") as mock_voa:
+                                result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        assert result == 0
+        mock_voa.assert_not_called()
+        assert "skipped" in caller.summary
