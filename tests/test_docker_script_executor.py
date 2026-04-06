@@ -628,7 +628,7 @@ class TestRepoDirectoryMounting:
             assert wait_for_completion(manager, record.execution_id)
 
             call = mock_client.containers._creation_calls[0]
-            assert call["command"] == ["sh", "/workspace/build.sh"]
+            assert call["command"] == ["bash", "/workspace/build.sh"]
 
     def test_repo_directory_cleaned_up_after_execution(self):
         """Verify repo directory is cleaned up after execution completes."""

@@ -2,6 +2,7 @@
 import io
 import os
 import shutil
+import subprocess
 import tarfile
 import time
 import threading
@@ -120,10 +121,20 @@ class ScriptExecutor:
             # A tmpfs at /tmp/execution gives the script a writable area.
             nano_cpus = int(self._cpu_limit * 1e9)
             host_repo_path = os.path.abspath(repo_path)
+
+            # Ensure cloned files are world-readable so the container's
+            # "nobody" user can access them through the bind mount.
+            # git clone inherits the server process umask which may be
+            # restrictive (e.g. 0077), leaving files owner-only.
+            subprocess.run(
+                ["chmod", "-R", "a+rX", host_repo_path],
+                timeout=30,
+                check=True,
+            )
             container = self._docker_client.containers.create(
                 image=self._container_image,
                 name=container_name,
-                command=["sh", f"/workspace/{script_path}"],
+                command=["bash", f"/workspace/{script_path}"],
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
                 read_only=True,

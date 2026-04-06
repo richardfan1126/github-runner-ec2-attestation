@@ -171,7 +171,8 @@ The system consists of the following major components:
 - Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), network disabled, no privilege escalation, non-root user
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
-- Executes the script via `command=["sh", "/workspace/{script_path}"]` where `script_path` is the relative path within the repo
+- Ensures the cloned repository directory is world-readable (`chmod -R a+rX`) before mounting, so the container's non-root user can access files regardless of the server process umask
+- Executes the script via `command=["bash", "/workspace/{script_path}"]` where `script_path` is the relative path within the repo
 - Captures stdout and stderr streams from the container
 - Monitors execution progress and enforces timeout
 - Removes the container and its resources after completion, failure, or timeout
