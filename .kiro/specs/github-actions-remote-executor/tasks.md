@@ -1887,11 +1887,234 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Parse `kiwi-descriptions/appliance.kiwi` XML and verify the `git` package is listed in the `<packages type="image">` section
     - **Validates: Requirements 35.1**
 
+- [ ] 91. Implement EncryptionManager class
+  - [ ] 91.1 Create src/encryption.py with EncryptionManager class
+    - Generate Server_Keypair (X25519) at initialization using the `cryptography` library; hold in memory only, never persist to disk
+    - Implement `server_public_key` property returning serialized Server_Public_Key bytes
+    - Implement `decrypt_request(encrypted_payload, client_public_key)` that derives Shared_Key via HPKE from Client_Public_Key and Server_Keypair, decrypts the payload, and returns `(decrypted_dict, shared_key_bytes)`
+    - Implement `encrypt_response(payload_dict, shared_key)` that encrypts a response payload using the given Shared_Key
+    - Implement `decrypt_with_shared_key(encrypted_payload, shared_key)` for decrypting /execution/{id}/output requests using a stored Shared_Key
+    - Implement `store_encryption_context(execution_id, shared_key)` to store Shared_Key keyed by execution_id in a thread-safe dict
+    - Implement `get_shared_key(execution_id)` to retrieve Shared_Key or None
+    - Implement `remove_encryption_context(execution_id)` to remove context on execution cleanup
+    - Raise ValueError on decryption failure
+    - Log keypair generation at INFO level without logging private key material
+    - _Requirements: 36.1, 36.2, 36.3, 36.4, 36.5, 40.3, 40.4, 40.5, 41.1, 41.2, 41.6, 41.7_
+
+  - [ ] 91.2 Write property test for Server Keypair Consistency
+    - **Property 122: Server Keypair Consistency**
+    - Create a single EncryptionManager instance and verify that `server_public_key` returns the same bytes across multiple accesses
+    - **Validates: Requirements 36.3, 37.4**
+
+  - [ ] 91.3 Write property test for Server Public Key Serialization Round-Trip
+    - **Property 127: Server Public Key Serialization Round-Trip**
+    - Serialize the Server_Public_Key, deserialize it, and verify it can be used for HPKE key exchange producing the same Shared_Key
+    - **Validates: Requirements 39.3, 39.4**
+
+  - [ ] 91.4 Write property test for HPKE Encrypt-Decrypt Round-Trip
+    - **Property 128: HPKE Encrypt-Decrypt Round-Trip for Execute**
+    - For random valid payloads, client-side encrypt with Server_Public_Key, server-side decrypt with Server_Keypair, verify original payload is recovered
+    - **Validates: Requirements 40.1, 40.3, 40.4, 40.8**
+
+  - [ ] 91.5 Write unit tests for EncryptionManager
+    - Test keypair generation at startup
+    - Test encrypt/decrypt round-trip with known payloads
+    - Test decryption failure with wrong key or corrupted ciphertext raises ValueError
+    - Test Encryption_Context store/get/remove lifecycle
+    - Test thread-safety of context operations
+    - _Requirements: 36.1, 36.2, 40.3, 40.4, 40.5, 41.1, 41.6, 41.7_
+
+- [ ] 92. Integrate EncryptionManager into server startup
+  - [ ] 92.1 Update src/main.py to generate Server_Keypair at startup
+    - Instantiate EncryptionManager before creating the FastAPI app
+    - Log Server_Keypair generation at INFO level (no private key material)
+    - Pass EncryptionManager instance to create_app
+    - _Requirements: 36.1, 36.4, 36.5_
+
+  - [ ] 92.2 Update create_app in src/server.py to accept and store EncryptionManager
+    - Add encryption_manager parameter to create_app
+    - Store as app.state.encryption_manager
+    - _Requirements: 36.1_
+
+- [ ] 93. Implement /attest endpoint
+  - [ ] 93.1 Add GET /attest route to src/server.py
+    - Accept optional `nonce` query parameter
+    - No authentication required
+    - Call AttestationGenerator.generate_attestation with Server_Public_Key in `public_key` parameter and optional nonce
+    - Return `{"attestation_document": "base64-encoded-cbor"}` unencrypted
+    - Return HTTP 500 if attestation generation fails
+    - _Requirements: 37.1, 37.2, 37.3, 37.4, 37.5, 37.6, 37.7, 37.8_
+
+  - [ ] 93.2 Update AttestationGenerator.generate_attestation to accept optional public_key parameter
+    - When `public_key` bytes are provided, write them to a temp file and pass `--public-key` flag to nitro-tpm-attest
+    - Clean up temp file in finally block
+    - Only /attest callers pass public_key; /execute and /output callers do not
+    - _Requirements: 39.1, 39.2_
+
+  - [ ] 93.3 Write property test for Attest Endpoint No Authentication
+    - **Property 123: Attest Endpoint No Authentication**
+    - Verify /attest returns 200 with attestation document without any auth credentials
+    - **Validates: Requirements 37.2, 2.21**
+
+  - [ ] 93.4 Write property test for Attest Attestation Contains Server Public Key
+    - **Property 124: Attest Attestation Contains Server Public Key**
+    - Verify /attest attestation document includes Server_Public_Key in public_key field
+    - **Validates: Requirements 37.4, 39.1**
+
+  - [ ] 93.5 Write property test for Non-Attest Attestation Excludes Server Public Key
+    - **Property 125: Non-Attest Attestation Excludes Server Public Key**
+    - Verify attestation documents generated for /execute and /execution/{id}/output do NOT include Server_Public_Key
+    - **Validates: Requirements 37.9, 39.2**
+
+- [ ] 94. Checkpoint - Ensure attest endpoint and encryption manager tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 95. Add nonce support across all attestation-producing endpoints
+  - [ ] 95.1 Update /execute endpoint to pass nonce from decrypted body to attestation generator
+    - Extract optional `nonce` field from decrypted request body
+    - Pass nonce to AttestationGenerator.generate_attestation
+    - _Requirements: 38.2, 38.4_
+
+  - [ ] 95.2 Update /execution/{id}/output endpoint to pass nonce to attestation generator
+    - Extract optional `nonce` from decrypted request body
+    - Pass nonce to generate_output_attestation when generating Output_Attestation_Document
+    - Update generate_output_attestation to accept optional nonce parameter
+    - _Requirements: 38.3, 38.4_
+
+  - [ ] 95.3 Write property test for Nonce Passthrough in Attestation
+    - **Property 126: Nonce Passthrough in Attestation**
+    - For random nonce values on /attest, /execute, and /execution/{id}/output, verify the nonce is passed to nitro-tpm-attest and included in the attestation document
+    - **Validates: Requirements 37.5, 38.2, 38.3, 38.4, 38.6**
+
+- [ ] 96. Update /execute endpoint for encrypted payloads
+  - [ ] 96.1 Modify POST /execute to accept encrypted request envelope
+    - Parse outer JSON body: `{"encrypted_payload": "base64", "client_public_key": "base64"}`
+    - Call EncryptionManager.decrypt_request to derive Shared_Key and decrypt payload
+    - Return HTTP 400 on decryption failure
+    - Extract OIDC token from decrypted body `oidc_token` field instead of Authorization header
+    - Extract all execution request fields from decrypted body
+    - _Requirements: 40.1, 40.2, 40.3, 40.4, 40.5, 40.6, 40.7, 40.9_
+
+  - [ ] 96.2 Store Encryption_Context after successful /execute decryption
+    - After creating execution record, call EncryptionManager.store_encryption_context(execution_id, shared_key)
+    - _Requirements: 41.1, 41.2, 41.7_
+
+  - [ ] 96.3 Encrypt /execute response payload
+    - Encrypt the response dict (execution_id, attestation_document, status) using EncryptionManager.encrypt_response with the Shared_Key
+    - Return base64-encoded encrypted response
+    - _Requirements: 41.3, 42.1_
+
+  - [ ] 96.4 Write property test for Decryption Failure Returns HTTP 400
+    - **Property 129: Decryption Failure Returns HTTP 400**
+    - Send random bytes, wrong key, or corrupted ciphertext to /execute and verify HTTP 400 response
+    - **Validates: Requirements 40.5, 42.7**
+
+  - [ ] 96.5 Write property test for OIDC Token Extracted from Decrypted Body
+    - **Property 130: OIDC Token Extracted from Decrypted Body**
+    - Verify the server extracts and validates OIDC token from decrypted body `oidc_token` field, not from Authorization header
+    - **Validates: Requirements 40.6, 40.9, 2.1, 2.2**
+
+  - [ ] 96.6 Write property test for Execute Response Encryption Round-Trip
+    - **Property 132: Execute Response Encryption Round-Trip**
+    - Encrypt /execute response with Shared_Key, client decrypts with same key, verify original content recovered
+    - **Validates: Requirements 41.3, 42.1, 42.8**
+
+- [ ] 97. Update RequestValidator for OIDC token from body
+  - [ ] 97.1 Add validate_oidc_token_from_body method to RequestValidator
+    - Accept raw OIDC token string (not Authorization header) from decrypted body `oidc_token` field
+    - Reuse existing JWT verification logic (JWKS fetch, signature check, claims validation)
+    - Return OIDCValidationResult with appropriate status codes
+    - _Requirements: 2.1, 2.2, 2.3, 40.6, 40.9_
+
+  - [ ] 97.2 Update /execute and /output endpoints to use new validation method
+    - Replace `validate_oidc_token(authorization_header)` calls with `validate_oidc_token_from_body(oidc_token_string)` on encrypted endpoints
+    - Keep existing validate_oidc_token for any non-encrypted endpoints if needed
+    - _Requirements: 2.1, 2.2, 40.9_
+
+- [ ] 98. Change /execution/{id}/output from GET to POST with encrypted request/response
+  - [ ] 98.1 Change route from GET to POST in src/server.py
+    - Change `@app.get("/execution/{execution_id}/output")` to `@app.post("/execution/{execution_id}/output")`
+    - Accept encrypted request body instead of query parameters
+    - Look up Encryption_Context for execution_id; return HTTP 400 if not found
+    - Decrypt request body using Shared_Key from Encryption_Context
+    - Extract `oidc_token`, optional `nonce`, and optional `offset` from decrypted body
+    - Validate OIDC token from decrypted body
+    - _Requirements: 42.2, 42.3, 42.6, 42.7_
+
+  - [ ] 98.2 Encrypt /execution/{id}/output response payload
+    - Encrypt the response dict (execution_id, status, stdout, stderr, offsets, complete, exit_code, attestation docs) using Shared_Key
+    - Return base64-encoded encrypted response
+    - _Requirements: 41.4, 41.5, 42.4, 42.5_
+
+  - [ ] 98.3 Write property test for Output Request-Response Encryption Round-Trip
+    - **Property 133: Output Request-Response Encryption Round-Trip**
+    - Client encrypts output request with Shared_Key, server decrypts, processes, encrypts response, client decrypts — verify original content
+    - **Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**
+
+  - [ ] 98.4 Write property test for Missing Encryption Context Returns HTTP 400
+    - **Property 134: Missing Encryption Context Returns HTTP 400**
+    - Request /execution/{id}/output with an execution_id that has no Encryption_Context, verify HTTP 400
+    - **Validates: Requirements 42.6**
+
+- [ ] 99. Checkpoint - Ensure encrypted endpoint tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 100. Implement Encryption_Context lifecycle management
+  - [ ] 100.1 Integrate Encryption_Context cleanup with execution record cleanup
+    - When ExecutionManager.cleanup_expired removes an execution record, also call EncryptionManager.remove_encryption_context for that execution_id
+    - Ensure cleanup is thread-safe
+    - _Requirements: 41.6, 41.7_
+
+  - [ ] 100.2 Write property test for Encryption Context Lifecycle
+    - **Property 131: Encryption Context Lifecycle**
+    - Verify Shared_Key is stored after /execute, persists during execution, and is removed when execution record is cleaned up
+    - **Validates: Requirements 41.1, 41.2, 41.6**
+
+- [ ] 101. Verify encryption exemption for non-context endpoints
+  - [ ] 101.1 Ensure /attest, /health, /metrics return plain unencrypted JSON
+    - Verify no encryption middleware is applied to these endpoints
+    - /attest returns plain JSON with base64-encoded attestation document
+    - /health and /metrics return plain JSON as before
+    - _Requirements: 43.1, 43.2, 43.3, 43.4_
+
+  - [ ] 101.2 Write property test for Encryption Exemption
+    - **Property 135: Encryption Exemption for Non-Context Endpoints**
+    - Verify /attest, /health, /metrics responses are plain unencrypted JSON
+    - **Validates: Requirements 43.1, 43.2, 43.3, 43.4**
+
+- [ ] 102. Update existing tests for OIDC header-to-body change
+  - [ ] 102.1 Update tests/test_oidc_property.py
+    - Update property tests that send OIDC tokens via Authorization header to instead send them in encrypted request body `oidc_token` field
+    - Ensure existing OIDC validation properties still pass with the new token extraction path
+    - _Requirements: 2.1, 2.2, 40.6, 40.9_
+
+  - [ ] 102.2 Update tests/test_server_unit.py and tests/test_integration.py
+    - Update /execute tests to send encrypted payloads with `oidc_token` in body
+    - Update /execution/{id}/output tests to use POST with encrypted payloads
+    - Update all assertions for encrypted response format
+    - _Requirements: 2.1, 2.2, 40.6, 42.1, 42.4_
+
+- [ ] 103. Write integration tests for HPKE encrypted communication
+  - [ ] 103.1 Write end-to-end encrypted execution flow test
+    - Test complete flow: GET /attest → extract Server_Public_Key → HPKE key exchange → encrypted POST /execute → encrypted POST /execution/{id}/output → decrypt responses
+    - Verify attestation documents, execution results, and output integrity through encryption
+    - _Requirements: 36.1, 37.1, 40.1, 41.1, 42.1, 42.4_
+
+  - [ ] 103.2 Write integration tests for error scenarios
+    - Test decryption failure on /execute (wrong key)
+    - Test missing Encryption_Context on /execution/{id}/output
+    - Test expired OIDC token in encrypted body
+    - Test unauthorized repository in encrypted body
+    - _Requirements: 40.5, 42.6, 42.7_
+
+- [ ] 104. Final checkpoint - Ensure all HPKE encryption tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 121 correctness properties from the design document
+- Property tests validate the 135 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
@@ -1921,7 +2144,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
 - Git package provisioning (task 90) adds the git package to the KIWI image so the Repository_Client can clone repositories at runtime using git commands
 - Container image pre-pull (tasks 76-79) originally baked the configured Container_Image into the KIWI image during build; tasks 80-84 reverse this by removing the build-time pre-pull code and implementing server-startup pull instead — the GHA_Server now pulls the Container_Image from the registry at startup before accepting requests
-- All 121 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 135 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
@@ -1943,3 +2166,11 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Cleanup script supports --keep-ami flag to skip AMI deregistration and snapshot deletion while still destroying Terraform infrastructure (tasks 38a-38b)
 - Cleanup script uses subprocess to invoke Terraform and boto3 for AWS API calls (deregister AMI, describe resources)
 - Cleanup verification checks for EC2 instances, AMIs, and EBS snapshots using project-specific tags and resource IDs
+- HPKE encrypted communication (tasks 91-104) adds end-to-end encryption for /execute and /execution/{id}/output using Hybrid Public Key Encryption (RFC 9180)
+- The `cryptography` library (already included via PyJWT[crypto]) provides HPKE and X25519 key generation support
+- Server_Keypair is generated once at startup and held in memory; never persisted to disk
+- /attest is the only endpoint that includes Server_Public_Key in attestation documents; /execute and /output attestations exclude it
+- OIDC tokens move from Authorization header to encrypted request body `oidc_token` field on /execute and /execution/{id}/output
+- /execution/{id}/output changes from GET to POST to support encrypted request bodies
+- Encryption_Context (Shared_Key per execution_id) is stored in memory and cleaned up with execution records
+- /attest, /health, and /metrics remain unencrypted plain JSON endpoints

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The GitHub Actions Remote Executor is an HTTP server that runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts inside ephemeral Docker containers asynchronously while allowing clients to poll for output and status. Each script execution runs in a newly created Docker container that is destroyed after completion, ensuring complete isolation between executions.
+The GitHub Actions Remote Executor is an HTTP server that runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts inside ephemeral Docker containers asynchronously while allowing clients to poll for output and status. Each script execution runs in a newly created Docker container that is destroyed after completion, ensuring complete isolation between executions. All request and response payloads on protected endpoints are encrypted using HPKE (Hybrid Public Key Encryption), with the server's public key attested via the NitroTPM to establish trust.
 
 This design document covers five major aspects of the system:
 
@@ -23,6 +23,7 @@ This design document covers five major aspects of the system:
 3. **Ephemeral Docker Container Isolation**: Each script execution runs inside a newly created Docker container from a configured Container_Image; containers are never reused and are destroyed after completion, failure, or timeout
 4. **Attestable Environment**: NitroTPM-based attestation on the Attestable EC2 instance provides cryptographic proof of the execution environment
 5. **Stateless Request Handling**: Each request is independent, with execution state stored separately
+6. **HPKE Encrypted Communication**: All request and response payloads on /execute and /execution/{id}/output are encrypted using HPKE. The server generates a keypair at startup (held in memory only), attests the public key via /attest, and derives per-execution shared keys for symmetric encryption of all subsequent communication. OIDC tokens are transmitted inside the encrypted payload rather than in HTTP headers.
 
 ### Architecture Goals
 
@@ -53,25 +54,30 @@ The system consists of the following major components:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     GitHub Actions Workflow                  │
-└────────────┬────────────────────────────────┬────────────────┘
-             │ POST /execute                  │ GET /execution/{id}/output
-             │                                │
-┌────────────▼────────────────────────────────▼────────────────┐
+└────┬──────────────────┬─────────────────────┬────────────────┘
+     │ GET /attest      │ POST /execute       │ POST /execution/{id}/output
+     │                  │ (encrypted)         │ (encrypted req & resp)
+     │                  │                     │
+┌────▼──────────────────▼─────────────────────▼────────────────┐
 │                        HTTP Server                            │
-│  ┌──────────────────┐  ┌──────────────────┐                 │
-│  │ Request Handler  │  │ Output Handler   │                 │
-│  └────────┬─────────┘  └────────┬─────────┘                 │
-└───────────┼─────────────────────┼───────────────────────────┘
-            │                     │
-┌───────────▼─────────────────────▼───────────────────────────┐
+│  ┌────────────────┐ ┌──────────────────┐ ┌────────────────┐ │
+│  │ Attest Handler │ │ Request Handler  │ │ Output Handler │ │
+│  └───────┬────────┘ └────────┬─────────┘ └───────┬────────┘ │
+└──────────┼───────────────────┼───────────────────┼──────────┘
+           │                   │                   │
+┌──────────▼───────────────────▼───────────────────▼──────────┐
 │                    Core Services Layer                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   Request    │  │  Repository  │  │ Attestation  │      │
-│  │  Validator   │  │    Client    │  │  Generator   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        │
+│  │  Encryption  │ │   Request    │ │  Repository  │        │
+│  │   Manager    │ │  Validator   │ │    Client    │        │
+│  └──────────────┘ └──────────────┘ └──────────────┘        │
+│  ┌──────────────┐                                           │
+│  │ Attestation  │                                           │
+│  │  Generator   │                                           │
+│  └──────────────┘                                           │
 └───────────────────────────────────────────────────────────────┘
-            │                     │                     │
-┌───────────▼─────────────────────▼─────────────────────▼─────┐
+           │                   │                   │
+┌──────────▼───────────────────▼───────────────────▼──────────┐
 │                   Execution Management Layer                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │  Execution   │  │    Script    │  │    Output    │      │
@@ -86,13 +92,13 @@ The system consists of the following major components:
 │              │  └────────┘  └────────┘    │                 │
 │              └────────────────────────────┘                 │
 └───────────────────────────────────────────────────────────────┘
-            │                     │                     │
-┌───────────▼─────────────────────▼─────────────────────▼─────┐
+           │                   │                   │
+┌──────────▼───────────────────▼───────────────────▼──────────┐
 │                    Storage Layer                              │
-│  ┌──────────────┐  ┌──────────────┐                         │
-│  │  Execution   │  │  Temporary   │                         │
-│  │    Store     │  │   Storage    │                         │
-│  └──────────────┘  └──────────────┘                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │  Execution   │  │  Temporary   │  │  Encryption  │      │
+│  │    Store     │  │   Storage    │  │   Contexts   │      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -104,29 +110,61 @@ The system consists of the following major components:
 - Manages concurrent connections
 - Implements rate limiting per source IP
 
+**Encryption Manager**
+- Generates a Server_Keypair (suitable for HPKE key agreement) at server startup and holds it in memory for the server's entire lifetime; the keypair is never persisted to disk
+- Uses the `cryptography` library for key generation and HPKE operations
+- Provides the Server_Public_Key for inclusion in /attest attestation documents
+- Derives a Shared_Key from the Client_Public_Key (sent unencrypted by the client) and the Server_Keypair via HPKE for each /execute request
+- Decrypts incoming /execute request payloads using the derived Shared_Key
+- Stores the Shared_Key in an Encryption_Context keyed by Execution_ID; the context is held in memory only and never persisted to disk
+- Encrypts /execute response payloads using the Shared_Key from the Encryption_Context
+- Decrypts incoming /execution/{id}/output request payloads using the Shared_Key from the Encryption_Context for that execution_id
+- Encrypts /execution/{id}/output response payloads using the Shared_Key from the Encryption_Context
+- Removes the Encryption_Context when the execution record is cleaned up
+- Does NOT encrypt responses for /attest, /health, or /metrics endpoints
+- Logs Server_Keypair generation at startup at INFO level without logging private key material
+
+**Attest Handler**
+- Handles GET /attest requests (unauthenticated)
+- Accepts an optional `nonce` query parameter
+- Generates an Attestation_Document with the Server_Public_Key in the `public_key` field
+- Returns the Attestation_Document in base64 encoding, unencrypted
+- Returns HTTP 500 if attestation generation fails
+
 **Request Handler**
-- Parses and validates execution requests
+- Receives encrypted /execute request payloads
+- Delegates decryption to the Encryption Manager using the Client_Public_Key from the request
+- Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
+- Extracts the optional `nonce` from the decrypted request body for inclusion in the attestation document
+- Validates the decrypted request using the Request Validator
 - Coordinates repository file retrieval
-- Generates attestation documents
+- Generates attestation documents (without Server_Public_Key; nonce included if provided)
 - Creates execution records
+- Stores the Shared_Key in the Encryption_Context for the new Execution_ID
 - Initiates asynchronous script execution
-- Returns immediate response with execution ID and attestation
+- Encrypts the response payload using the Shared_Key before returning
 
 **Output Handler**
+- Receives encrypted /execution/{id}/output request payloads
+- Looks up the Encryption_Context for the execution_id; returns HTTP 400 if no context exists
+- Decrypts the request payload using the Shared_Key from the Encryption_Context
+- Extracts the OIDC_Token from the decrypted request body `oidc_token` field for authentication
+- Extracts the optional `nonce` from the decrypted request body
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
 - Returns completion status and exit codes
-- When execution is complete, generates an Output_Attestation_Document containing a SHA-256 digest of the Script_Output in the user_data field
+- When execution is complete, generates an Output_Attestation_Document containing a SHA-256 digest of the Script_Output in the user_data field (without Server_Public_Key; nonce included if provided)
 - Returns Output_Attestation_Document in base64 encoding alongside Script_Output and Attestation_Document
 - If Output_Attestation_Document generation fails, still returns Script_Output and Attestation_Document with an error field
+- Encrypts the response payload using the Shared_Key before returning
 
 **Request Validator**
-- Validates OIDC JWT tokens on protected endpoints (/execute, /execution/{id}/output)
+- Validates OIDC JWT tokens extracted from the decrypted request body `oidc_token` field on protected endpoints (/execute, /execution/{id}/output)
 - Fetches and caches GitHub's OIDC provider JWKS from `https://token.actions.githubusercontent.com/.well-known/jwks`
 - Verifies JWT signature against JWKS; refreshes cache on unknown key ID
 - Validates JWT claims: `iss` matches `https://token.actions.githubusercontent.com`, `aud` matches configured Expected_Audience, `repository` matches an entry in configured Allowed_Repositories, `exp` is not past current time
 - Returns 401 for missing/invalid/expired tokens and signature failures; returns 403 for valid tokens from unauthorized repositories
-- Does NOT require authentication for /health endpoint
+- Does NOT require authentication for /health or /attest endpoints
 - Validates request structure and required fields
 - Validates repository URL format
 - Validates Git commit SHA format
@@ -145,6 +183,9 @@ The system consists of the following major components:
 **Attestation Generator**
 - Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
+- When generating for the /attest endpoint: includes the Server_Public_Key in the `public_key` field of the attestation document
+- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document
+- Accepts an optional nonce parameter; when provided, passes it to nitro-tpm-attest for inclusion in the attestation document
 - Signs documents using NitroTPM cryptographic capabilities
 - Encodes attestation in standard format (CBOR)
 - Implementation approach (based on `demo_api.py::AttestationAPIHandler.generate_attestation_document()`):
@@ -200,31 +241,47 @@ The system consists of the following major components:
 
 ### Request Flow
 
+**Attestation Request Flow:**
+
+1. Client sends GET request to `/attest` with optional `nonce` query parameter
+2. No authentication required
+3. Attestation Generator creates attestation document with Server_Public_Key in the `public_key` field and optional nonce
+4. Response returned with base64-encoded attestation document (unencrypted)
+
 **Execution Request Flow:**
 
-1. Client sends POST request to `/execute` with repository URL, commit hash, script path, GitHub token, and Bearer OIDC_Token in Authorization header
-2. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
-3. Request Handler validates request structure
-4. Request Validator validates all request body fields
-5. Repository Client authenticates and clones the repository at the specified commit into a temporary directory
-6. Attestation Generator creates attestation document with execution metadata
-7. Execution Manager creates execution record with unique ID
-8. Response returned immediately with execution ID and attestation document
-9. Script Executor creates a new Docker container from the configured Container_Image and begins asynchronous execution inside it
-10. Output Collector captures stdout/stderr streams from the container
-11. Execution Manager updates status upon completion; container is removed
+1. Client sends POST request to `/execute` with encrypted payload and unencrypted Client_Public_Key
+2. Encryption Manager derives Shared_Key from Client_Public_Key and Server_Keypair via HPKE
+3. Encryption Manager decrypts the request payload using the derived Shared_Key
+4. Request Handler extracts OIDC_Token from decrypted body `oidc_token` field
+5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
+6. Request Handler validates request structure from decrypted body
+7. Request Validator validates all request body fields (repository_url, commit_hash, script_path, github_token)
+8. Repository Client authenticates and clones the repository at the specified commit into a temporary directory
+9. Attestation Generator creates attestation document with execution metadata and optional nonce (no Server_Public_Key)
+10. Execution Manager creates execution record with unique ID
+11. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
+12. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
+13. Script Executor creates a new Docker container from the configured Container_Image and begins asynchronous execution inside it
+14. Output Collector captures stdout/stderr streams from the container
+15. Execution Manager updates status upon completion; container is removed
 
 **Output Polling Flow:**
 
-1. Client sends GET request to `/execution/{id}/output` with optional offset parameter and Bearer OIDC_Token in Authorization header
-2. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
-3. Output Handler retrieves execution record by ID
-4. Output Collector returns current status, output from offset, and completion flag
-5. If complete, Output Handler computes SHA-256 digest of the Script_Output and generates an Output_Attestation_Document with the digest in user_data
-6. If complete, response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code
-7. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
-8. Client repeats polling until execution completes
-9. Client can verify output integrity by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
+1. Client sends POST request to `/execution/{id}/output` with encrypted payload containing `oidc_token` and optional `nonce`
+2. Encryption Manager looks up Encryption_Context for the execution_id; returns HTTP 400 if not found
+3. Encryption Manager decrypts the request payload using the Shared_Key from the Encryption_Context
+4. Output Handler extracts OIDC_Token from decrypted body `oidc_token` field
+5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
+6. Output Handler retrieves execution record by ID
+7. Output Collector returns current status, output from offset, and completion flag
+8. If complete, Output Handler computes SHA-256 digest of the Script_Output and generates an Output_Attestation_Document with the digest in user_data and optional nonce (no Server_Public_Key)
+9. If complete, response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code
+10. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
+11. Response payload encrypted with Shared_Key and returned
+12. Client decrypts response using the same Shared_Key derived during HPKE key exchange
+13. Client repeats polling until execution completes
+14. Client can verify output integrity by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
 
 ### Concurrency Model
 
@@ -232,29 +289,61 @@ The system consists of the following major components:
 - Each execution runs in a separate ephemeral Docker container (Execution_Container) created from the configured Container_Image
 - Containers are never reused — each execution gets a fresh container that is destroyed after completion, failure, or timeout
 - Execution state stored in thread-safe in-memory data structure
+- Encryption_Contexts (Shared_Keys keyed by Execution_ID) stored in thread-safe in-memory data structure alongside execution state
 - Output collection uses buffered writes to avoid blocking
 - Maximum concurrent Execution_Containers configurable to prevent resource exhaustion
 - Docker daemon manages container lifecycle and resource isolation
+- Server_Keypair generated once at startup and shared across all concurrent requests (read-only after initialization)
 
 ## Components and Interfaces
 
 ### HTTP API Endpoints
 
+#### GET /attest
+
+Returns an attestation document containing the Server_Public_Key. Unauthenticated.
+
+**Query Parameters:**
+- `nonce` (optional): Client-provided nonce for attestation freshness verification
+
+**Response (200 OK):**
+```json
+{
+  "attestation_document": "base64-encoded-cbor"
+}
+```
+
+The attestation document's `public_key` field contains the Server_Public_Key. The response is NOT encrypted.
+
+**Error Responses:**
+- 500 Internal Server Error: Attestation generation failure
+
 #### POST /execute
 
-Initiates script execution and returns attestation document.
+Initiates script execution. Request and response payloads are HPKE-encrypted.
 
-**Request Body:**
+**Request Body (outer, unencrypted envelope):**
+```json
+{
+  "encrypted_payload": "base64-encoded-ciphertext",
+  "client_public_key": "base64-encoded-client-public-key"
+}
+```
+
+**Decrypted Payload (inner, after HPKE decryption):**
 ```json
 {
   "repository_url": "https://github.com/owner/repo",
   "commit_hash": "abc123def456...",
   "script_path": "scripts/build.sh",
-  "github_token": "ghp_..."
+  "github_token": "ghp_...",
+  "oidc_token": "eyJhbGciOiJSUzI1NiIs...",
+  "nonce": "optional-client-nonce"
 }
 ```
 
-**Response (200 OK):**
+**Response (200 OK, encrypted with Shared_Key):**
+The response body is an encrypted payload. After decryption by the client:
 ```json
 {
   "execution_id": "uuid-v4",
@@ -263,23 +352,33 @@ Initiates script execution and returns attestation document.
 }
 ```
 
+The attestation document in the /execute response does NOT include the Server_Public_Key in the `public_key` field.
+
 **Error Responses:**
-- 400 Bad Request: Malformed request or validation failure
-- 401 Unauthorized: Missing/invalid/expired OIDC token, signature verification failure, invalid iss or aud claim
+- 400 Bad Request: Decryption failure, malformed request, or validation failure
+- 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
 - 403 Forbidden: Valid OIDC token from an unauthorized repository
 - 404 Not Found: Repository, commit, or file not found
 - 413 Payload Too Large: Script file exceeds size limit
 - 429 Too Many Requests: Rate limit exceeded
 - 500 Internal Server Error: Attestation or system failure
 
-#### GET /execution/{execution_id}/output
+#### POST /execution/{execution_id}/output
 
-Retrieves execution status and output.
+Retrieves execution status and output. Request and response payloads are encrypted with the execution-bound Shared_Key.
 
-**Query Parameters:**
-- `offset` (optional): Byte offset to start retrieving output from
+**Request Body (encrypted with Shared_Key):**
+After decryption:
+```json
+{
+  "oidc_token": "eyJhbGciOiJSUzI1NiIs...",
+  "nonce": "optional-client-nonce",
+  "offset": 0
+}
+```
 
-**Response (200 OK):**
+**Response (200 OK, encrypted with Shared_Key):**
+After decryption by the client:
 ```json
 {
   "execution_id": "uuid-v4",
@@ -293,7 +392,7 @@ Retrieves execution status and output.
 }
 ```
 
-When complete:
+When complete (after decryption):
 ```json
 {
   "execution_id": "uuid-v4",
@@ -308,7 +407,9 @@ When complete:
 }
 ```
 
-When complete but Output_Attestation_Document generation fails:
+The attestation documents in the /output response do NOT include the Server_Public_Key. Attestation documents are included as-is within the encrypted payload (not separately encrypted).
+
+When complete but Output_Attestation_Document generation fails (after decryption):
 ```json
 {
   "execution_id": "uuid-v4",
@@ -325,7 +426,8 @@ When complete but Output_Attestation_Document generation fails:
 ```
 
 **Error Responses:**
-- 401 Unauthorized: Missing/invalid/expired OIDC token, signature verification failure, invalid iss or aud claim
+- 400 Bad Request: No Encryption_Context for execution_id, decryption failure
+- 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
 - 403 Forbidden: Valid OIDC token from an unauthorized repository
 - 404 Not Found: Execution ID does not exist
 
@@ -361,6 +463,55 @@ Metrics endpoint for monitoring.
 
 ### Internal Interfaces
 
+#### EncryptionManager Interface
+
+```python
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+
+class EncryptionManager:
+    def __init__(self):
+        """Generate Server_Keypair at initialization and hold in memory."""
+        pass
+
+    @property
+    def server_public_key(self) -> bytes:
+        """Return the serialized Server_Public_Key."""
+        pass
+
+    def decrypt_request(self, encrypted_payload: bytes, client_public_key: bytes) -> tuple[dict, bytes]:
+        """
+        Derive Shared_Key via HPKE from Client_Public_Key and Server_Keypair,
+        then decrypt the request payload.
+        Returns (decrypted_payload_dict, shared_key_bytes).
+        Raises ValueError on decryption failure.
+        """
+        pass
+
+    def encrypt_response(self, payload: dict, shared_key: bytes) -> bytes:
+        """Encrypt a response payload using the given Shared_Key."""
+        pass
+
+    def decrypt_with_shared_key(self, encrypted_payload: bytes, shared_key: bytes) -> dict:
+        """
+        Decrypt a request payload using a previously stored Shared_Key.
+        Used for /execution/{id}/output requests.
+        Raises ValueError on decryption failure.
+        """
+        pass
+
+    def store_encryption_context(self, execution_id: str, shared_key: bytes) -> None:
+        """Store Shared_Key in Encryption_Context keyed by execution_id."""
+        pass
+
+    def get_shared_key(self, execution_id: str) -> bytes | None:
+        """Retrieve Shared_Key for an execution_id, or None if not found."""
+        pass
+
+    def remove_encryption_context(self, execution_id: str) -> None:
+        """Remove Encryption_Context when execution is cleaned up."""
+        pass
+```
+
 #### RequestValidator Interface
 
 ```python
@@ -369,9 +520,9 @@ class RequestValidator:
         """Initialize with OIDC configuration"""
         pass
 
-    def validate_oidc_token(self, authorization_header: str | None) -> OIDCValidationResult:
+    def validate_oidc_token(self, oidc_token: str | None) -> OIDCValidationResult:
         """
-        Validates the OIDC Bearer token from the Authorization header.
+        Validates the OIDC token extracted from the decrypted request body.
         Fetches JWKS from GitHub's OIDC provider, verifies JWT signature,
         and validates iss, aud, repository, and exp claims.
         Returns 401 for missing/invalid/expired tokens, 403 for unauthorized repos.
@@ -427,8 +578,21 @@ class RepositoryClient:
 
 ```python
 class AttestationGenerator:
-    def generate_attestation(self, metadata: ExecutionMetadata) -> AttestationDocument:
-        """Generates signed attestation document"""
+    def generate_attestation(
+        self,
+        metadata: ExecutionMetadata,
+        nonce: Optional[str] = None,
+        public_key: Optional[bytes] = None,
+    ) -> AttestationDocument:
+        """
+        Generates signed attestation document.
+        
+        Args:
+            metadata: Execution metadata to include in user_data
+            nonce: Optional client-provided nonce for freshness verification
+            public_key: Optional Server_Public_Key to include in the public_key field.
+                        Only provided when generating for the /attest endpoint.
+        """
         pass
     
     def verify_tpm_available(self) -> bool:
@@ -638,6 +802,47 @@ class CloneResult:
     script_path: str     # Relative path to script within repo
 ```
 
+### EncryptedRequest
+
+```python
+@dataclass
+class EncryptedRequest:
+    encrypted_payload: bytes  # HPKE-encrypted ciphertext
+    client_public_key: bytes  # Unencrypted Client_Public_Key for HPKE key derivation
+```
+
+### DecryptedExecuteRequest
+
+```python
+@dataclass
+class DecryptedExecuteRequest:
+    repository_url: str
+    commit_hash: str
+    script_path: str
+    github_token: str
+    oidc_token: str
+    nonce: Optional[str] = None
+```
+
+### DecryptedOutputRequest
+
+```python
+@dataclass
+class DecryptedOutputRequest:
+    oidc_token: str
+    nonce: Optional[str] = None
+    offset: int = 0
+```
+
+### EncryptionContext
+
+```python
+@dataclass
+class EncryptionContext:
+    execution_id: str
+    shared_key: bytes  # HPKE-derived symmetric key, held in memory only
+```
+
 
 ## Correctness Properties
 
@@ -687,7 +892,7 @@ class CloneResult:
 
 ### Property 8: OIDC Token Required on Protected Endpoints
 
-*For any* request to `/execute` or `/execution/{id}/output` without a valid Bearer OIDC_Token in the Authorization header, the server should reject the request with HTTP 401 Unauthorized.
+*For any* request to `/execute` or `/execution/{id}/output` without a valid `oidc_token` field in the decrypted request body, the server should reject the request with HTTP 401 Unauthorized.
 
 **Validates: Requirements 2.1, 2.2, 2.3**
 
@@ -1029,7 +1234,7 @@ class CloneResult:
 
 ### Property 108: Health Endpoint No Authentication
 
-*For any* request to the /health endpoint, the server should respond without requiring an Authorization header or OIDC token.
+*For any* request to the /health endpoint, the server should respond without requiring any authentication.
 
 **Validates: Requirements 2.20**
 
@@ -1075,20 +1280,104 @@ class CloneResult:
 
 **Validates: Requirements 9.7**
 
+### Property 122: Server Keypair Consistency
+
+*For any* two requests to the /attest endpoint during the same server lifetime, the Server_Public_Key included in the attestation documents should be identical.
+
+**Validates: Requirements 36.3, 37.4**
+
+### Property 123: Attest Endpoint No Authentication
+
+*For any* request to the /attest endpoint without any authentication credentials, the server should return a successful response containing an attestation document.
+
+**Validates: Requirements 37.2, 2.21**
+
+### Property 124: Attest Attestation Contains Server Public Key
+
+*For any* request to the /attest endpoint, the generated Attestation_Document should include the Server_Public_Key in the `public_key` field.
+
+**Validates: Requirements 37.4, 39.1**
+
+### Property 125: Non-Attest Attestation Excludes Server Public Key
+
+*For any* attestation document generated for the /execute or /execution/{id}/output endpoints, the document should NOT include the Server_Public_Key in the `public_key` field.
+
+**Validates: Requirements 37.9, 39.2**
+
+### Property 126: Nonce Passthrough in Attestation
+
+*For any* client-provided nonce value on any endpoint that generates an Attestation_Document (/attest, /execute, /execution/{id}/output), the nonce should be passed to the nitro-tpm-attest tool and included in the generated Attestation_Document.
+
+**Validates: Requirements 37.5, 38.2, 38.3, 38.4, 38.6**
+
+### Property 127: Server Public Key Serialization Round-Trip
+
+*For any* Server_Public_Key, serializing it into the attestation document's `public_key` field and then extracting and deserializing it should produce a key that is usable for HPKE key exchange and equivalent to the original.
+
+**Validates: Requirements 39.3, 39.4**
+
+### Property 128: HPKE Encrypt-Decrypt Round-Trip for Execute
+
+*For any* valid execution request payload, encrypting it with a client-derived Shared_Key (via HPKE from Client_Keypair and Server_Public_Key) and then having the server decrypt it (via HPKE from Client_Public_Key and Server_Keypair) should produce the original payload.
+
+**Validates: Requirements 40.1, 40.3, 40.4, 40.8**
+
+### Property 129: Decryption Failure Returns HTTP 400
+
+*For any* request to /execute or /execution/{id}/output with an invalid encrypted payload (random bytes, wrong key, corrupted ciphertext), the server should return HTTP 400 Bad Request with an error message indicating decryption failure.
+
+**Validates: Requirements 40.5, 42.7**
+
+### Property 130: OIDC Token Extracted from Decrypted Body
+
+*For any* encrypted /execute or /execution/{id}/output request, the server should extract and validate the OIDC_Token from the `oidc_token` field of the decrypted request body, not from the Authorization header.
+
+**Validates: Requirements 40.6, 40.9, 2.1, 2.2**
+
+### Property 131: Encryption Context Lifecycle
+
+*For any* successful /execute request, the server should store the Shared_Key in an Encryption_Context associated with the Execution_ID, and the context should persist until the execution record is cleaned up, at which point it is removed from memory.
+
+**Validates: Requirements 41.1, 41.2, 41.6**
+
+### Property 132: Execute Response Encryption Round-Trip
+
+*For any* /execute response payload, the server encrypts it with the Shared_Key and the client decrypts it with the same Shared_Key, producing the original response content (execution_id, attestation_document, status).
+
+**Validates: Requirements 41.3, 42.1, 42.8**
+
+### Property 133: Output Request-Response Encryption Round-Trip
+
+*For any* /execution/{id}/output request and response, the client encrypts the request with the Shared_Key, the server decrypts it, processes it, encrypts the response with the same Shared_Key, and the client decrypts the response — producing the original request and response content.
+
+**Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**
+
+### Property 134: Missing Encryption Context Returns HTTP 400
+
+*For any* request to /execution/{id}/output where no Encryption_Context exists for the given execution_id, the server should return HTTP 400 Bad Request with an error message indicating no encryption context is available.
+
+**Validates: Requirements 42.6**
+
+### Property 135: Encryption Exemption for Non-Context Endpoints
+
+*For any* request to /attest, /health, or /metrics, the response should be plain unencrypted JSON. Encryption is applied only to /execute and /execution/{id}/output endpoints.
+
+**Validates: Requirements 43.1, 43.2, 43.3, 43.4**
+
 ### Error Categories
 
 The system handles errors in the following categories:
 
 1. **Client Errors (4xx)**
-   - 400 Bad Request: Malformed requests, validation failures
-   - 401 Unauthorized: Missing/invalid/expired OIDC tokens, JWT signature verification failures, invalid iss or aud claims
+   - 400 Bad Request: Malformed requests, validation failures, HPKE decryption failures, missing Encryption_Context for execution_id
+   - 401 Unauthorized: Missing/invalid/expired OIDC tokens (from decrypted body), JWT signature verification failures, invalid iss or aud claims
    - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories)
    - 404 Not Found: Repository, commit, file, or execution ID not found
    - 413 Payload Too Large: Script file exceeds size limit
    - 429 Too Many Requests: Rate limit exceeded
 
 2. **Server Errors (5xx)**
-   - 500 Internal Server Error: Attestation failures, unexpected errors
+   - 500 Internal Server Error: Attestation failures, encryption system failures, unexpected errors
 
 ### Error Response Format
 
@@ -1117,7 +1406,8 @@ All error responses follow a consistent JSON structure:
 - Retry transient errors with exponential backoff
 
 **OIDC Authentication Errors**
-- Return 401 for missing Authorization header with descriptive error message
+- Extract OIDC token from decrypted request body `oidc_token` field (not Authorization header)
+- Return 401 for missing `oidc_token` field in decrypted body with descriptive error message
 - Return 401 for JWT signature verification failures (invalid signature against JWKS)
 - Return 401 for invalid `iss` claim (not `https://token.actions.githubusercontent.com`)
 - Return 401 for invalid `aud` claim (does not match Expected_Audience)
@@ -1125,6 +1415,14 @@ All error responses follow a consistent JSON structure:
 - Return 403 for valid tokens from unauthorized repositories (`repository` claim not in Allowed_Repositories)
 - Cache JWKS and refresh on unknown key ID to handle key rotation
 - Log authentication failures with claim details (excluding the token itself)
+
+**HPKE Encryption Errors**
+- Return 400 for /execute requests where HPKE decryption fails (invalid Client_Public_Key, corrupted ciphertext, wrong key)
+- Return 400 for /execution/{id}/output requests where no Encryption_Context exists for the execution_id
+- Return 400 for /execution/{id}/output requests where decryption with the stored Shared_Key fails
+- Log decryption failures with execution_id context (excluding key material)
+- Server_Keypair generation failure at startup: fail to start with descriptive error
+- Encryption_Context cleanup: remove context when execution record is cleaned up; log cleanup events
 
 **Attestation Errors**
 - Verify NitroTPM device availability at startup
@@ -1220,6 +1518,24 @@ def test_execution_id_uniqueness(requests):
     """For any set of execution requests, all generated execution IDs should be unique"""
     execution_ids = [generate_execution_id(req) for req in requests]
     assert len(execution_ids) == len(set(execution_ids))
+
+# Feature: github-actions-remote-executor, Property 128: HPKE Encrypt-Decrypt Round-Trip for Execute
+@given(st.fixed_dictionaries({
+    'repository_url': st.from_regex(r'https://github\.com/[a-z]+/[a-z]+', fullmatch=True),
+    'commit_hash': st.from_regex(r'[0-9a-f]{40}', fullmatch=True),
+    'script_path': st.text(min_size=1, max_size=100),
+    'github_token': st.text(min_size=1, max_size=100),
+    'oidc_token': st.text(min_size=1, max_size=500),
+}))
+def test_hpke_encrypt_decrypt_round_trip(payload):
+    """For any valid execution request payload, HPKE encrypt then decrypt should produce the original"""
+    encryption_manager = EncryptionManager()
+    server_pub_key = encryption_manager.server_public_key
+    # Client side: derive shared key and encrypt
+    encrypted, client_pub_key = client_encrypt(payload, server_pub_key)
+    # Server side: derive same shared key and decrypt
+    decrypted, shared_key = encryption_manager.decrypt_request(encrypted, client_pub_key)
+    assert decrypted == payload
 ```
 
 ### Test Coverage Areas
@@ -1237,11 +1553,29 @@ def test_execution_id_uniqueness(requests):
 - Property tests: Random execution metadata, attestation verification
 
 **OIDC Authentication Testing**
-- Unit tests: Mock JWKS endpoint, specific token claim combinations, expired tokens, wrong issuer/audience, unauthorized repositories
+- Unit tests: Mock JWKS endpoint, specific token claim combinations, expired tokens, wrong issuer/audience, unauthorized repositories, OIDC token extracted from decrypted body instead of Authorization header
 - Property tests: Random JWT claims with valid/invalid signatures, random repository names against Allowed_Repositories, random expiration times relative to current time
 - Test JWKS caching behavior: verify cache hit on known key ID, cache refresh on unknown key ID
 - Test 401 vs 403 distinction: invalid tokens → 401, valid token from unauthorized repo → 403
-- Test /health endpoint accessibility without authentication
+- Test /health and /attest endpoint accessibility without authentication
+
+**HPKE Encryption Testing**
+- Unit tests: Server keypair generation at startup, keypair held in memory only, HPKE key derivation, encrypt/decrypt round-trip, decryption failure handling, Encryption_Context storage and cleanup
+- Property tests:
+  - Server keypair consistency across requests (Property 122)
+  - HPKE encrypt-decrypt round-trip for /execute (Property 128)
+  - Execute response encryption round-trip (Property 132)
+  - Output request-response encryption round-trip (Property 133)
+  - Decryption failure returns HTTP 400 (Property 129)
+  - OIDC token extracted from decrypted body (Property 130)
+  - Encryption context lifecycle (Property 131)
+  - Missing encryption context returns HTTP 400 (Property 134)
+  - Server public key serialization round-trip (Property 127)
+  - Nonce passthrough in attestation (Property 126)
+  - Attest attestation contains server public key (Property 124)
+  - Non-attest attestation excludes server public key (Property 125)
+  - Encryption exemption for non-context endpoints (Property 135)
+  - Attest endpoint no authentication (Property 123)
 
 **Output Attestation Testing**
 - Unit tests: Mock NitroTPM for output attestation generation, verify graceful degradation on failure
@@ -1256,8 +1590,8 @@ def test_execution_id_uniqueness(requests):
 - Property tests: Random output sizes, offset values, concurrent access
 
 **Security Testing**
-- Unit tests: Path traversal attempts, token handling, Docker container security constraints
-- Property tests: Random input validation scenarios, container isolation verification
+- Unit tests: Path traversal attempts, token handling, Docker container security constraints, HPKE key generation, Shared_Key not persisted to disk, Server_Keypair not persisted to disk, private key material not logged
+- Property tests: Random input validation scenarios, container isolation verification, HPKE encrypt/decrypt round-trips with random payloads, decryption failure on corrupted ciphertext
 
 **Configuration Testing**
 - Unit tests: Specific missing config, invalid values
@@ -1266,12 +1600,14 @@ def test_execution_id_uniqueness(requests):
 ### Integration Testing
 
 **End-to-End Scenarios**:
-1. Complete execution flow: request → attestation → container creation → execution → output retrieval → container removal
-2. Error scenarios: authentication failure, timeout, file not found, Docker daemon unavailable
-3. Concurrent execution: multiple simultaneous requests in separate Docker containers
+1. Complete execution flow: attest → HPKE key exchange → encrypted request → attestation → container creation → execution → encrypted output retrieval → container removal
+2. Error scenarios: decryption failure, authentication failure, timeout, file not found, Docker daemon unavailable, missing encryption context
+3. Concurrent execution: multiple simultaneous encrypted requests in separate Docker containers
 4. Rate limiting: exceeding limits from single IP
-5. Cleanup: verify containers removed and temporary files cleaned up after execution
-6. Startup: verify dangling container cleanup on server start
+5. Cleanup: verify containers removed, temporary files cleaned up, and Encryption_Contexts removed after execution
+6. Startup: verify dangling container cleanup and Server_Keypair generation on server start
+7. Attest endpoint: verify unauthenticated access, Server_Public_Key in attestation, nonce support
+8. Encryption exemption: verify /attest, /health, /metrics return unencrypted responses
 
 **External Dependencies**:
 - Mock GitHub API for predictable testing
@@ -1301,12 +1637,18 @@ def test_execution_id_uniqueness(requests):
 - Token extraction attempts
 - Resource exhaustion attacks
 - Input validation bypass attempts
+- HPKE replay attacks (reusing encrypted payloads)
+- Encryption context manipulation (using wrong execution_id)
+- Unencrypted request injection on encrypted endpoints
 
 **Compliance Testing**:
-- Verify no sensitive data in logs
+- Verify no sensitive data in logs (including private key material and Shared_Keys)
 - Verify no sensitive data in error responses
 - Verify proper cleanup of temporary files
 - Verify attestation signature validity
+- Verify Server_Keypair and Encryption_Contexts are memory-only (not persisted to disk)
+- Verify OIDC tokens are only transmitted inside encrypted payloads
+- Verify /attest, /health, /metrics responses are never encrypted
 
 
 ---
