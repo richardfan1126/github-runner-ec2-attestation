@@ -628,11 +628,27 @@ def test_missing_encryption_context_returns_400(execution_id):
     # Ensure no encryption context exists for this execution_id
     _encryption_manager.remove_encryption_context(execution_id)
 
-    # Send any POST body — the server should reject before trying to decrypt
-    response = _client.post(
-        f"/execution/{execution_id}/output",
-        json={"encrypted_payload": base64.b64encode(b"dummy").decode()},
+    # Create a dummy execution record so the endpoint doesn't 404 before
+    # reaching the encryption context check.
+    record = ExecutionRecord(
+        execution_id=execution_id,
+        repository_url="https://github.com/test/repo",
+        commit_hash="a" * 40,
+        script_path="scripts/test.sh",
+        status=ExecutionStatus.RUNNING,
+        created_at=datetime.now(timezone.utc),
+        started_at=None,
+        completed_at=None,
+        exit_code=None,
+        timeout_seconds=300,
     )
+
+    with patch.object(_app.state.execution_manager, "get_execution", return_value=record):
+        # Send any POST body — the server should reject before trying to decrypt
+        response = _client.post(
+            f"/execution/{execution_id}/output",
+            json={"encrypted_payload": base64.b64encode(b"dummy").decode()},
+        )
 
     assert response.status_code == 400, (
         f"Expected 400 for missing encryption context, got {response.status_code}"

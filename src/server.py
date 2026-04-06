@@ -579,6 +579,17 @@ def add_routes(app: FastAPI) -> None:
 
             shared_key = encryption_manager.get_shared_key(execution_id)
             if shared_key is None:
+                # Check if the execution itself exists before returning 400;
+                # a cleaned-up execution should yield 404, not 400.
+                exec_manager = request.app.state.execution_manager
+                if not exec_manager.get_execution(execution_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=create_error_response(
+                            "execution_not_found",
+                            f"Execution ID not found: {execution_id}"
+                        )
+                    )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=create_error_response(
