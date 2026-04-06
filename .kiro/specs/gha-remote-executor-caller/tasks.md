@@ -444,8 +444,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test nonce as bytes is decoded correctly
     - _Requirements: 3.13, 5.14, 11.12_
 
-- [ ] 23. Implement `attest` method for server attestation and HPKE key exchange
-  - [ ] 23.1 Implement `attest` method on `RemoteExecutorCaller`
+- [x] 23. Implement `attest` method for server attestation and HPKE key exchange
+  - [x] 23.1 Implement `attest` method on `RemoteExecutorCaller`
     - Generate a unique random nonce via `generate_nonce()`
     - Send HTTP GET to `{server_url}/attest?nonce={nonce}` with no auth headers and no request body
     - On HTTP 200, extract `attestation_document` from JSON response
@@ -457,7 +457,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Set configurable timeout for the request
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8, 11.9, 11.10, 11.11, 11.12, 12.1, 12.2, 12.3, 12.4, 12.5, 13.1, 13.2, 13.3_
 
-  - [ ] 23.2 Write unit tests for attest method
+  - [x] 23.2 Write unit tests for attest method
     - Test successful attest extracts server public key and initializes encryption
     - Test missing `public_key` in attestation raises `CallerError` with phase "attest" (Req 11.7)
     - Test connection error raises `CallerError` with phase "attest" (Req 11.9)
@@ -466,7 +466,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test nonce is included as query parameter (Req 11.3)
     - _Requirements: 11.2, 11.3, 11.7, 11.8, 11.9_
 
-- [ ] 24. Checkpoint - Ensure attest and nonce tests pass
+- [x] 24. Checkpoint - Ensure attest and nonce tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 25. Update `execute` method for HPKE encryption

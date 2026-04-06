@@ -296,6 +296,68 @@ class RemoteExecutorCaller:
 
         return data
 
+    def attest(self) -> bytes:
+        """GET /attest?nonce={nonce} - retrieve server attestation and public key.
+
+        Validates the returned attestation document (COSE Sign1 + PKI + PCR + nonce).
+        Extracts the Server_Public_Key from the attestation's public_key field.
+        Initializes self._encryption (ClientEncryption) and derives the Shared_Key.
+
+        Returns the raw server public key bytes.
+        Raises CallerError on validation failure, missing public_key, or connection error.
+        """
+        nonce = self.generate_nonce()
+        url = f"{self.server_url}/attest"
+        try:
+            response = requests.get(url, params={"nonce": nonce}, timeout=self.timeout)
+        except requests.ConnectionError as exc:
+            raise CallerError(
+                message=f"Failed to connect to server attest endpoint: {exc}",
+                phase="attest",
+                details={"url": url, "error": str(exc)},
+            )
+        except requests.RequestException as exc:
+            raise CallerError(
+                message=f"Attest request failed: {exc}",
+                phase="attest",
+                details={"url": url, "error": str(exc)},
+            )
+
+        if response.status_code != 200:
+            raise CallerError(
+                message=f"Attest failed with HTTP {response.status_code}",
+                phase="attest",
+                details={
+                    "status_code": response.status_code,
+                    "body": response.text,
+                },
+            )
+
+        data = response.json()
+        attestation_b64 = data.get("attestation_document", "")
+
+        # Validate attestation (COSE Sign1 + PKI + PCR + nonce)
+        payload_doc = self.validate_attestation(attestation_b64, expected_nonce=nonce)
+
+        # Extract server public key
+        server_public_key = payload_doc.get("public_key")
+        if not server_public_key:
+            raise CallerError(
+                message="Attestation document missing public_key field",
+                phase="attest",
+                details={"attestation_fields": list(payload_doc.keys())},
+            )
+
+        # Initialize encryption and derive shared key
+        self._encryption = ClientEncryption()
+        self._encryption.derive_shared_key(server_public_key)
+
+        # Store nonce for later reference
+        self._attest_nonce = nonce
+
+        logger.info("Server attestation validated, HPKE key exchange complete")
+        return server_public_key
+
     def execute(
         self,
         repository_url: str,

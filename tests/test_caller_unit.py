@@ -697,3 +697,167 @@ class TestNonceVerificationEdgeCases:
 
         result = caller.validate_attestation(b64_str, expected_nonce=nonce)
         assert isinstance(result, dict)
+
+
+class TestAttestMethod:
+    """Unit tests for the attest method.
+    Validates: Requirements 11.2, 11.3, 11.7, 11.8, 11.9"""
+
+    def _make_attest_response(self, payload_dict: dict) -> dict:
+        """Build a mock /attest JSON response with a COSE Sign1 attestation document."""
+        payload_bytes = cbor2.dumps(payload_dict)
+        protected_header = cbor2.dumps({1: -35})
+        cose_array = [protected_header, {}, payload_bytes, b'\x00' * 96]
+        b64 = base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+        return {"attestation_document": b64}
+
+    def _make_valid_payload(self, nonce: str, public_key: bytes = b'\x01' * 32) -> dict:
+        return {
+            "module_id": "test-module",
+            "digest": "SHA384",
+            "timestamp": 1700000000000,
+            "pcrs": {0: b'\x00' * 48},
+            "certificate": b'\x00' * 32,
+            "cabundle": [b'\x00' * 32],
+            "nonce": nonce,
+            "public_key": public_key,
+        }
+
+    def test_successful_attest_extracts_public_key_and_initializes_encryption(self):
+        """Successful attest extracts server public key and initializes encryption.
+        Validates: Requirements 11.4, 11.5, 11.6, 12.1, 13.1"""
+        caller = _make_caller()
+        server_pub_key = os.urandom(32)
+
+        # We need to mock generate_nonce, requests.get, and validate_attestation
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce, public_key=server_pub_key)
+        mock_response_data = self._make_attest_response(payload)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    result = caller.attest()
+
+        assert result == server_pub_key
+        assert caller._attest_nonce == fixed_nonce
+        assert hasattr(caller, "_encryption")
+        assert isinstance(caller._encryption, ClientEncryption)
+
+    def test_missing_public_key_raises_caller_error(self):
+        """Missing public_key in attestation raises CallerError with phase 'attest'.
+        Validates: Requirement 11.7"""
+        caller = _make_caller()
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce)
+        payload.pop("public_key")  # Remove public_key
+        mock_response_data = self._make_attest_response(payload)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    with pytest.raises(CallerError) as exc_info:
+                        caller.attest()
+                    assert exc_info.value.phase == "attest"
+                    assert "public_key" in exc_info.value.message.lower()
+
+    def test_null_public_key_raises_caller_error(self):
+        """Null public_key in attestation raises CallerError with phase 'attest'.
+        Validates: Requirement 11.7"""
+        caller = _make_caller()
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce)
+        payload["public_key"] = None
+        mock_response_data = self._make_attest_response(payload)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    with pytest.raises(CallerError) as exc_info:
+                        caller.attest()
+                    assert exc_info.value.phase == "attest"
+
+    def test_connection_error_raises_caller_error(self):
+        """Connection error raises CallerError with phase 'attest'.
+        Validates: Requirement 11.9"""
+        caller = _make_caller()
+        with patch("call_remote_executor.requests.get", side_effect=requests.ConnectionError("Connection refused")):
+            with pytest.raises(CallerError) as exc_info:
+                caller.attest()
+            assert exc_info.value.phase == "attest"
+
+    def test_http_error_raises_caller_error(self):
+        """HTTP error raises CallerError with phase 'attest'.
+        Validates: Requirement 11.8"""
+        caller = _make_caller()
+        with patch("call_remote_executor.requests.get") as mock_get:
+            mock_resp = mock_get.return_value
+            mock_resp.status_code = 500
+            mock_resp.text = "Internal Server Error"
+
+            with pytest.raises(CallerError) as exc_info:
+                caller.attest()
+            assert exc_info.value.phase == "attest"
+            assert "500" in exc_info.value.message
+
+    def test_attest_does_not_include_authorization_header(self):
+        """Attest request does not include Authorization header or auth credentials.
+        Validates: Requirement 11.2"""
+        caller = _make_caller()
+        caller._oidc_token = "should-not-be-sent"
+        server_pub_key = os.urandom(32)
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce, public_key=server_pub_key)
+        mock_response_data = self._make_attest_response(payload)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    caller.attest()
+
+                # Verify the GET call did not include auth headers
+                call_kwargs = mock_get.call_args
+                # requests.get was called with positional url and keyword params/timeout
+                # There should be no 'headers' kwarg with Authorization
+                if "headers" in (call_kwargs.kwargs if call_kwargs.kwargs else {}):
+                    headers = call_kwargs.kwargs["headers"]
+                    assert "Authorization" not in headers
+                # Also verify no auth kwarg
+                assert "auth" not in (call_kwargs.kwargs if call_kwargs.kwargs else {})
+
+    def test_nonce_included_as_query_parameter(self):
+        """Nonce is included as query parameter in the /attest request.
+        Validates: Requirement 11.3"""
+        caller = _make_caller()
+        server_pub_key = os.urandom(32)
+        fixed_nonce = "test-nonce-12345678"
+        payload = self._make_valid_payload(fixed_nonce, public_key=server_pub_key)
+        mock_response_data = self._make_attest_response(payload)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    caller.attest()
+
+                call_kwargs = mock_get.call_args
+                assert call_kwargs.kwargs.get("params") == {"nonce": fixed_nonce}
