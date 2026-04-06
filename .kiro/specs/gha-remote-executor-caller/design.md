@@ -2,22 +2,27 @@
 
 ## Overview
 
-The GitHub Actions Remote Executor Caller is the client-side counterpart to the Remote Executor server. It consists of a GitHub Actions workflow (`call-remote-executor.yml`) and a Python caller script (`.github/scripts/call_remote_executor.py`) that together orchestrate the full lifecycle of a remote script execution: OIDC token acquisition, health check, submission, attestation validation, output polling, output integrity verification, and result reporting.
+The GitHub Actions Remote Executor Caller is the client-side counterpart to the Remote Executor server. It consists of a GitHub Actions workflow (`call-remote-executor.yml`) and a Python caller script (`.github/scripts/call_remote_executor.py`) that together orchestrate the full lifecycle of a remote script execution: health check, OIDC token acquisition, server attestation and public key retrieval, HPKE key exchange, encrypted execution submission, attestation validation, encrypted output polling, output integrity verification, and result reporting.
 
-The caller is designed to be triggered manually via `workflow_dispatch`, targeting a specific Remote Executor server URL. It authenticates to the server using GitHub Actions OIDC tokens (JWT) passed as Bearer tokens in the Authorization header. It validates the server's NitroTPM attestation documents at two points: once when the execution request is accepted (server identity attestation) and again when the output is returned (output integrity attestation). This dual-attestation approach ensures both that the server is a genuine attested environment and that the output has not been tampered with in transit.
+The caller communicates with the Remote Executor server using HPKE-based encryption for all sensitive endpoints (`/execute` and `/execution/{id}/output`). It first obtains the server's X25519 public key via the unauthenticated `/attest` endpoint (which also returns a NitroTPM attestation document for server identity verification), generates a client-side X25519 keypair, derives a shared AES-256-GCM key via ECDH + HKDF-SHA256, and encrypts all request payloads (including the OIDC token) before transmission. The OIDC token is transmitted exclusively within the encrypted payload — no `Authorization` header is used on any request.
+
+The caller validates the server's NitroTPM attestation documents at three points: (1) when the server's public key is retrieved via `/attest`, (2) when the execution request is accepted via `/execute`, and (3) when the output is returned via `/execution/{id}/output`. Each request includes a unique random nonce that is verified in the returned attestation document to ensure freshness and prevent replay attacks.
 
 ### Key Design Decisions
 
-1. **Single Python script**: All client logic (HTTP calls, COSE Sign1 verification, attestation validation, polling) lives in one `.github/scripts/call_remote_executor.py` file to keep the caller self-contained and easy to audit.
+1. **Single Python script**: All client logic (HTTP calls, HPKE encryption, COSE Sign1 verification, attestation validation, polling) lives in one `.github/scripts/call_remote_executor.py` file to keep the caller self-contained and easy to audit.
 2. **`cbor2` for CBOR decoding**: The attestation documents are COSE Sign1 structures encoded in CBOR. We use the `cbor2` library (pure Python) for decoding both the outer COSE structure and the inner attestation payload.
 3. **`pycose` for COSE Sign1 verification**: The `pycose` library provides `Sign1Message` and `EC2` key types for verifying the COSE signature using the signing certificate's public key.
 4. **`pyOpenSSL` for certificate chain validation**: The `OpenSSL.crypto` module provides `X509Store` and `X509StoreContext` for validating the signing certificate against the CA bundle and root certificate, matching the NitroTPM attestation verification pattern for attestable AMIs.
 5. **`pycryptodome` for key parameter extraction**: The `Crypto.Util.number.long_to_bytes` utility converts the EC public key coordinates from integers to bytes for COSE key construction.
-6. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (OIDC token acquisition → health check → execute → poll loop).
-7. **Canonical output format**: The server constructs `Script_Output` as `stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`. The caller must replicate this exact format when computing the SHA-256 digest for output attestation verification.
-8. **Exit code propagation**: The caller script exits with the remote script's exit code, allowing the GitHub Actions workflow to naturally fail when the remote script fails.
-9. **Hardcoded trust anchors**: The NitroTPM attestation root CA certificate PEM and expected PCR4/PCR7 values are hardcoded directly in the GitHub Actions workflow YAML. This eliminates the need for users to supply these values at dispatch time, ensuring every invocation performs full cryptographic verification. PKI validation and PCR validation are always performed. COSE signature verification is always performed when the signing certificate is present.
-10. **OIDC authentication**: The caller acquires a GitHub Actions OIDC token before making authenticated requests. The token is requested from the GitHub OIDC provider using the `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` environment variables (automatically set when `id-token: write` permission is granted). The token is included as a Bearer token in the Authorization header for `/execute` and `/execution/{id}/output` requests, but not for `/health`. This aligns with the server's OIDC validation which requires authentication on protected endpoints only.
+6. **`cryptography` for HPKE**: The `cryptography` library provides X25519 key generation, ECDH key exchange, HKDF-SHA256 key derivation, and AES-256-GCM encryption/decryption — all components needed for the HPKE encryption scheme.
+7. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (health check → OIDC → attest → execute → poll loop).
+8. **Canonical output format**: The server constructs `Script_Output` as `stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`. The caller must replicate this exact format when computing the SHA-256 digest for output attestation verification.
+9. **Exit code propagation**: The caller script exits with the remote script's exit code, allowing the GitHub Actions workflow to naturally fail when the remote script fails.
+10. **Hardcoded trust anchors**: The NitroTPM attestation root CA certificate PEM and expected PCR4/PCR7 values are hardcoded directly in the GitHub Actions workflow YAML. This eliminates the need for users to supply these values at dispatch time, ensuring every invocation performs full cryptographic verification.
+11. **OIDC token in encrypted payload**: The caller acquires a GitHub Actions OIDC token and includes it in the `oidc_token` field of the encrypted request payload for `/execute` and `/execution/{id}/output`. No `Authorization` header is sent on any request. This ensures the token is protected by HPKE encryption in transit.
+12. **Per-session HPKE keypair**: A fresh X25519 keypair is generated for each execution session. The keypair is held in memory only and never persisted to disk. The derived shared key is reused for all `/execution/{id}/output` requests within the same session.
+13. **Mandatory nonces on all attested endpoints**: Every request to `/attest`, `/execute`, and `/execution/{id}/output` includes a unique random nonce. The caller verifies the nonce appears in the returned attestation document to ensure freshness.
 
 ## Architecture
 
@@ -29,26 +34,48 @@ sequenceDiagram
     participant RE as Remote Executor Server
 
     GHA->>CS: Invoke with server_url, script_path, commit_hash, audience, root_cert_pem (hardcoded), expected_pcrs (hardcoded)
-    CS->>RE: GET /health (no Authorization header)
+
+    CS->>RE: GET /health (no auth, no encryption)
     RE-->>CS: {status: "healthy", ...}
+
     CS->>OIDC: GET ACTIONS_ID_TOKEN_REQUEST_URL?audience={audience} (Bearer ACTIONS_ID_TOKEN_REQUEST_TOKEN)
     OIDC-->>CS: {value: "<oidc_jwt_token>"}
-    CS->>CS: Store OIDC token for subsequent requests
-    CS->>RE: POST /execute {repository_url, commit_hash, script_path, github_token} (Authorization: Bearer <oidc_token>)
-    RE-->>CS: {execution_id, attestation_document, status}
-    CS->>CS: Decode base64 → CBOR → COSE Sign1 [phdr, uhdr, payload, sig]
-    CS->>CS: CBOR-decode payload → attestation fields
-    CS->>CS: Validate certificate chain (PKI) against hardcoded root cert
-    CS->>CS: Verify COSE Sign1 signature using certificate's EC2 public key
-    CS->>CS: Validate PCR4 and PCR7 values against hardcoded expected values
+    CS->>CS: Store OIDC token for encrypted payloads
+
+    Note over CS,RE: HPKE Key Exchange via /attest
+    CS->>CS: Generate random nonce for /attest
+    CS->>RE: GET /attest?nonce={nonce} (no auth, no encryption)
+    RE-->>CS: {attestation_document: "<base64>"}
+    CS->>CS: Validate attestation (COSE Sign1 + PKI + PCR4/PCR7)
+    CS->>CS: Verify nonce in attestation matches sent nonce
+    CS->>CS: Extract Server_Public_Key from attestation public_key field
+    CS->>CS: Generate Client_Keypair (X25519)
+    CS->>CS: Derive Shared_Key = HKDF-SHA256(ECDH(client_priv, server_pub), info=b"hpke-shared-key")
+
+    Note over CS,RE: Encrypted /execute
+    CS->>CS: Generate random nonce for /execute
+    CS->>CS: Build plaintext: {repository_url, commit_hash, script_path, github_token, oidc_token, nonce}
+    CS->>CS: Encrypt plaintext → AES-256-GCM → nonce||ciphertext → base64
+    CS->>RE: POST /execute {encrypted_payload: "base64", client_public_key: "base64"} (no Authorization header)
+    RE-->>CS: {encrypted_response: "base64"}
+    CS->>CS: Decrypt response → {execution_id, attestation_document, status}
+    CS->>CS: Validate attestation (COSE Sign1 + PKI + PCR4/PCR7)
+    CS->>CS: Verify nonce in attestation matches sent nonce
+
+    Note over CS,RE: Encrypted /output polling
     loop Poll until complete or timeout
-        CS->>RE: GET /execution/{id}/output (Authorization: Bearer <oidc_token>)
-        RE-->>CS: {stdout, stderr, complete, exit_code, output_attestation_document}
+        CS->>CS: Generate random nonce for this poll request
+        CS->>CS: Build plaintext: {oidc_token, nonce}
+        CS->>CS: Encrypt plaintext → AES-256-GCM → nonce||ciphertext → base64
+        CS->>RE: POST /execution/{id}/output {encrypted_payload: "base64"} (no Authorization header)
+        RE-->>CS: {encrypted_response: "base64"}
+        CS->>CS: Decrypt response → {stdout, stderr, complete, exit_code, output_attestation_document}
         CS->>CS: Log incremental output
     end
-    CS->>CS: Decode & verify output_attestation_document (COSE Sign1 + PKI + PCR4/PCR7)
-    CS->>CS: Extract user_data from verified payload
-    CS->>CS: Compute SHA-256 of canonical output, compare to user_data digest
+
+    CS->>CS: Validate output attestation (COSE Sign1 + PKI + PCR4/PCR7)
+    CS->>CS: Verify nonce in output attestation matches last sent nonce
+    CS->>CS: Extract user_data digest, compute SHA-256 of canonical output, compare
     CS->>GHA: Exit with remote exit_code, print results
     GHA->>GHA: Write $GITHUB_STEP_SUMMARY
 ```
@@ -61,7 +88,7 @@ sequenceDiagram
     call-remote-executor.yml    # workflow_dispatch workflow
   scripts/
     sample-build.sh             # sample build script for remote execution
-    call_remote_executor.py     # Python caller script
+    call_remote_executor.py     # Python caller script (HTTP, HPKE, attestation, polling)
     pyproject.toml              # caller dependencies (requests, cbor2, pycose, pyOpenSSL, pycryptodome, cryptography)
 ```
 
@@ -72,7 +99,7 @@ sequenceDiagram
 Responsibilities:
 - Define `workflow_dispatch` inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`), `audience` (optional, specifies the OIDC audience value)
 - Declare `id-token: write` in the `permissions` block to enable OIDC token requests
-- Hardcode the NitroTPM attestation root CA certificate PEM inline in the workflow YAML as an environment variable or step output, and pass it to the caller script via `--root-cert-pem`
+- Hardcode the NitroTPM attestation root CA certificate PEM inline in the workflow YAML as an environment variable, and pass it to the caller script via `--root-cert-pem`
 - Hardcode the expected PCR4 and PCR7 values as a JSON map inline in the workflow YAML, and pass it to the caller script via `--expected-pcrs`
 - Pass the `audience` input to the caller script via `--audience`
 - Validate that `server_url` is not empty
@@ -83,7 +110,50 @@ Responsibilities:
 
 ### 2. Caller Script (`.github/scripts/call_remote_executor.py`)
 
-The script is structured as a `RemoteExecutorCaller` class with the following interface:
+The script is structured as a `RemoteExecutorCaller` class with an `ClientEncryption` helper for HPKE operations:
+
+```python
+class ClientEncryption:
+    """HPKE encryption helper for the caller side.
+    
+    Generates a client X25519 keypair, derives a shared AES-256-GCM key
+    from the server's public key via ECDH + HKDF-SHA256, and provides
+    encrypt/decrypt methods for request/response payloads.
+    """
+
+    def __init__(self):
+        """Generate a fresh X25519 keypair for this session."""
+
+    @property
+    def client_public_key_bytes(self) -> bytes:
+        """Return the raw 32-byte client public key for transmission."""
+
+    def derive_shared_key(self, server_public_key_bytes: bytes) -> None:
+        """
+        Derive the Shared_Key from ECDH(client_private, server_public) + HKDF-SHA256.
+        
+        HKDF parameters: salt=None, info=b"hpke-shared-key", length=32.
+        Stores the derived key for use by encrypt_payload/decrypt_response.
+        
+        Raises CallerError if server_public_key_bytes is not a valid 32-byte X25519 key.
+        """
+
+    def encrypt_payload(self, payload_dict: dict) -> str:
+        """
+        Serialize payload_dict to JSON, encrypt with AES-256-GCM using Shared_Key.
+        
+        Returns base64-encoded string of (12-byte random nonce || ciphertext).
+        Raises CallerError if Shared_Key has not been derived yet.
+        """
+
+    def decrypt_response(self, encrypted_response_b64: str) -> dict:
+        """
+        Base64-decode, split into 12-byte nonce + ciphertext, decrypt with AES-256-GCM.
+        
+        Returns the deserialized JSON dict.
+        Raises CallerError on decryption failure or invalid JSON.
+        """
+```
 
 ```python
 class RemoteExecutorCaller:
@@ -105,6 +175,15 @@ class RemoteExecutorCaller:
                       Remote Executor server's expected audience configuration.
         """
 
+    @staticmethod
+    def generate_nonce() -> str:
+        """
+        Generate a unique random nonce string for attestation freshness verification.
+        
+        Returns a hex-encoded random string (e.g., 32 random bytes → 64 hex chars).
+        Each call produces a unique value.
+        """
+
     def request_oidc_token(self) -> str:
         """
         Request an OIDC token from GitHub's OIDC provider.
@@ -115,7 +194,7 @@ class RemoteExecutorCaller:
         - Query parameter: audience={self.audience}
         
         Extracts the JWT token from the response JSON 'value' field.
-        Stores the token on self._oidc_token for use by execute() and poll_output().
+        Stores the token on self._oidc_token for use in encrypted payloads.
         
         Returns the OIDC JWT token string.
         Raises CallerError(phase="oidc") if env vars are missing or request fails.
@@ -124,21 +203,46 @@ class RemoteExecutorCaller:
     def health_check(self) -> dict:
         """
         GET /health - verify server is healthy.
-        Does NOT include Authorization header.
+        Does NOT include Authorization header or any authentication.
         Returns parsed JSON response.
         Raises CallerError if unhealthy or unreachable.
+        """
+
+    def attest(self) -> bytes:
+        """
+        GET /attest?nonce={nonce} - retrieve server attestation and public key.
+        
+        Does NOT include Authorization header or any authentication.
+        Generates a unique random nonce and includes it as a query parameter.
+        Validates the returned attestation document (COSE Sign1 + PKI + PCR).
+        Verifies the nonce in the attestation matches the sent nonce.
+        Extracts the Server_Public_Key from the attestation's public_key field.
+        
+        Initializes self._encryption (ClientEncryption) and derives the Shared_Key.
+        
+        Returns the raw server public key bytes.
+        Raises CallerError on validation failure, missing public_key, or connection error.
         """
 
     def execute(self, repository_url: str, commit_hash: str,
                 script_path: str, github_token: str) -> dict:
         """
-        POST /execute - submit execution request.
-        Includes Authorization: Bearer <oidc_token> header.
-        Returns parsed JSON response with execution_id and attestation_document.
-        Raises CallerError on HTTP errors (including 401/403) or connection failures.
+        POST /execute - submit encrypted execution request.
+        
+        Builds plaintext payload: {repository_url, commit_hash, script_path,
+        github_token, oidc_token, nonce}.
+        Encrypts with Shared_Key via ClientEncryption.
+        Sends JSON body: {encrypted_payload: "base64", client_public_key: "base64"}.
+        No Authorization header.
+        
+        Decrypts the encrypted response to extract execution_id and attestation_document.
+        Validates the attestation and verifies the nonce matches.
+        
+        Returns parsed decrypted response dict.
+        Raises CallerError on HTTP errors, encryption/decryption failures, or attestation failures.
         """
 
-    def validate_attestation(self, attestation_b64: str) -> dict:
+    def validate_attestation(self, attestation_b64: str, expected_nonce: str | None = None) -> dict:
         """
         Full attestation verification:
         1. Decode base64 → binary → CBOR → COSE Sign1 array [phdr, uhdr, payload, sig]
@@ -147,6 +251,7 @@ class RemoteExecutorCaller:
         4. Validate certificate chain (PKI) against hardcoded root cert
         5. Verify COSE Sign1 signature using signing certificate's EC2 public key (P-384/ES384)
         6. Validate PCR4 and PCR7 values against hardcoded expected values
+        7. If expected_nonce is provided, verify the nonce field in the attestation matches
         Returns parsed attestation payload dict.
         Raises CallerError on any verification failure.
         """
@@ -154,9 +259,8 @@ class RemoteExecutorCaller:
     def _verify_certificate_chain(self, cert_der: bytes, cabundle: list[bytes]) -> None:
         """
         Validate the signing certificate against the CA bundle and root certificate.
-        Constructs an X509Store with root_cert_pem and intermediate certs from cabundle[1:].
+        Constructs an X509Store with root_cert_pem and intermediate certs from cabundle.
         Raises CallerError if certificate chain validation fails.
-        Always called — root_cert_pem is hardcoded in the workflow.
         """
 
     def _verify_cose_signature(self, cose_array: list) -> None:
@@ -171,39 +275,59 @@ class RemoteExecutorCaller:
         """
         Compare expected PCR values (PCR4 and PCR7) against those in the attestation document.
         Raises CallerError if any expected PCR is missing or mismatched.
-        Always called — expected_pcrs is hardcoded in the workflow.
+        """
+
+    def _verify_nonce(self, payload_doc: dict, expected_nonce: str, phase: str) -> None:
+        """
+        Verify the nonce field in the attestation payload matches the expected nonce.
+        Raises CallerError if the nonce is missing or does not match.
         """
 
     def poll_output(self, execution_id: str) -> dict:
         """
-        Poll GET /execution/{id}/output until complete or timeout.
-        Includes Authorization: Bearer <oidc_token> header.
+        Poll POST /execution/{id}/output until complete or timeout.
+        
+        Each poll request:
+        - Generates a unique random nonce
+        - Builds plaintext: {oidc_token, nonce}
+        - Encrypts with Shared_Key via ClientEncryption
+        - Sends JSON body: {encrypted_payload: "base64"} (no client_public_key)
+        - No Authorization header
+        - Decrypts the encrypted response
+        
+        On final response (complete=true), verifies the nonce in the
+        output_attestation_document matches the nonce sent in that request.
+        
         Logs incremental output during polling.
-        Returns final response with stdout, stderr, exit_code, output_attestation_document.
-        Raises CallerError on timeout, repeated HTTP failures, or auth errors (401/403).
+        Returns final decrypted response with stdout, stderr, exit_code,
+        output_attestation_document.
+        Raises CallerError on timeout, repeated HTTP failures, or decryption errors.
         """
 
     def validate_output_attestation(self, output_attestation_b64: str,
                                      stdout: str, stderr: str,
-                                     exit_code: int) -> bool:
+                                     exit_code: int,
+                                     expected_nonce: str | None = None) -> bool:
         """
         Full output attestation verification:
         1. Decode base64 → COSE Sign1 → attestation payload (same as validate_attestation)
         2. Validate certificate chain (PKI) against hardcoded root cert
         3. Verify COSE Sign1 signature
         4. Validate PCR4 and PCR7 values against hardcoded expected values
-        5. Extract user_data from verified payload (SHA-256 hex digest)
-        6. Compute SHA-256 of canonical output format
-        7. Compare digests
+        5. If expected_nonce provided, verify nonce in attestation matches
+        6. Extract user_data from verified payload (SHA-256 hex digest)
+        7. Compute SHA-256 of canonical output format
+        8. Compare digests
         Returns True if match. Raises CallerError on any failure.
         """
 
     def run(self, repository_url: str, commit_hash: str,
             script_path: str, github_token: str) -> int:
         """
-        Orchestrate full flow: health_check → request_oidc_token → execute
-        → validate_attestation → poll_output → validate_output_attestation
-        → report results.
+        Orchestrate full flow:
+        health_check → request_oidc_token → attest (get server public key + derive shared key)
+        → execute (encrypted) → validate_attestation → poll_output (encrypted)
+        → validate_output_attestation → report results.
         Returns remote script exit code.
         """
 ```
@@ -213,7 +337,8 @@ class CallerError(Exception):
     """Raised when the caller encounters a fatal error."""
     def __init__(self, message: str, phase: str, details: dict | None = None):
         self.message = message
-        self.phase = phase  # "health_check", "execute", "attestation", "polling", "output_attestation", "oidc"
+        self.phase = phase  # "health_check", "execute", "attestation", "polling",
+                            # "output_attestation", "oidc", "attest", "encryption"
         self.details = details or {}
 ```
 
@@ -231,7 +356,52 @@ echo "Working directory: $(pwd)"
 echo "=== Build Complete ==="
 ```
 
-### 4. Attestation Validation Logic
+### 4. ClientEncryption Implementation Details
+
+The `ClientEncryption` class mirrors the server's `EncryptionManager` (from `src/encryption.py`) but from the client perspective:
+
+**Key Generation:**
+- Uses `cryptography.hazmat.primitives.asymmetric.x25519.X25519PrivateKey.generate()` to create a fresh keypair
+- Serializes the public key via `public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)` → 32 bytes
+
+**Key Derivation (must match server exactly):**
+```python
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+# ECDH shared secret
+shared_secret = client_private_key.exchange(server_public_key)
+
+# HKDF-SHA256 derivation (must match server: salt=None, info=b"hpke-shared-key", length=32)
+shared_key = HKDF(
+    algorithm=SHA256(),
+    length=32,
+    salt=None,
+    info=b"hpke-shared-key",
+).derive(shared_secret)
+```
+
+**Encryption (request payloads):**
+```python
+plaintext = json.dumps(payload_dict).encode("utf-8")
+nonce = os.urandom(12)  # 12-byte random nonce for AES-GCM
+ciphertext = AESGCM(shared_key).encrypt(nonce, plaintext, None)
+wire_bytes = nonce + ciphertext  # nonce (12 bytes) || ciphertext
+encrypted_payload_b64 = base64.b64encode(wire_bytes).decode("ascii")
+```
+
+**Decryption (response payloads):**
+```python
+wire_bytes = base64.b64decode(encrypted_response_b64)
+nonce = wire_bytes[:12]
+ciphertext = wire_bytes[12:]
+plaintext = AESGCM(shared_key).decrypt(nonce, ciphertext, None)
+response_dict = json.loads(plaintext.decode("utf-8"))
+```
+
+### 5. Attestation Validation Logic
 
 The attestation document is a COSE Sign1 structure. When base64-decoded and CBOR-decoded, it yields a 4-element array:
 
@@ -288,12 +458,18 @@ Validation steps for server identity attestation (`validate_attestation`):
    - Convert the document PCR bytes to hex: `document_pcrs[index].hex()`
    - Compare against `expected_hex` — raise CallerError on mismatch
 
-**Step 5: Audit Logging**
+**Step 5: Nonce Verification**
+1. If `expected_nonce` is provided:
+   - Extract the `nonce` field from the attestation payload
+   - Decode from bytes to string if necessary
+   - Compare against `expected_nonce` — raise CallerError on mismatch or if nonce is missing
+
+**Step 6: Audit Logging**
 1. Log attestation field values for audit trail
 2. Return the parsed payload dict
 
 Validation steps for output integrity attestation (`validate_output_attestation`):
-1. Perform Steps 1–4 above on the output attestation document (same COSE Sign1 verification)
+1. Perform Steps 1–5 above on the output attestation document (same COSE Sign1 verification + nonce check)
 2. Extract the `user_data` field from the verified payload (CBOR-decoded, then `.decode()` to string — contains SHA-256 hex digest)
 3. Reconstruct the canonical `Script_Output`: `stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`
 4. Compute SHA-256 hex digest of the canonical output
@@ -323,22 +499,66 @@ The following values are hardcoded inline in the workflow YAML definition (not u
 
 | Constant | Description |
 |----------|-------------|
-| `ROOT_CERT_PEM` | NitroTPM attestation root CA certificate in PEM format, embedded as a multi-line string in the workflow env or step |
+| `ROOT_CERT_PEM` | NitroTPM attestation root CA certificate in PEM format, embedded as a multi-line string in the workflow env |
 | `EXPECTED_PCRS` | JSON map `{"4": "<hex>", "7": "<hex>"}` containing expected PCR4 and PCR7 values for the attestable AMI |
 
-### API Request/Response Shapes (from server)
+### API Request/Response Shapes
 
-**POST /execute request:**
+**GET /health request:**
+- No request body, no Authorization header
+
+**GET /health response:**
+```json
+{
+  "status": "healthy",
+  "attestation_available": true,
+  "disk_space_mb": 10240,
+  "active_executions": 0
+}
+```
+
+**GET /attest?nonce={nonce} request:**
+- No request body, no Authorization header
+- Query parameter: `nonce` (random hex string for freshness verification)
+
+**GET /attest response:**
+```json
+{
+  "attestation_document": "<base64-encoded-cbor>"
+}
+```
+
+The attestation document's payload contains the `public_key` field (raw X25519 server public key bytes) and the `nonce` field (the nonce sent in the query parameter).
+
+**POST /execute request (encrypted envelope):**
+```json
+{
+  "encrypted_payload": "<base64-encoded nonce||ciphertext>",
+  "client_public_key": "<base64-encoded raw 32-byte X25519 public key>"
+}
+```
+No Authorization header.
+
+Plaintext payload (before encryption):
 ```json
 {
   "repository_url": "https://github.com/owner/repo",
   "commit_hash": "abc123...",
   "script_path": ".github/scripts/sample-build.sh",
-  "github_token": "ghp_..."
+  "github_token": "ghp_...",
+  "oidc_token": "<jwt_token>",
+  "nonce": "<random_hex_string>"
 }
 ```
 
-**POST /execute response:**
+**POST /execute response (encrypted):**
+```json
+{
+  "encrypted_response": "<base64-encoded nonce||ciphertext>"
+}
+```
+
+Decrypted response payload:
 ```json
 {
   "execution_id": "uuid-v4",
@@ -347,7 +567,30 @@ The following values are hardcoded inline in the workflow YAML definition (not u
 }
 ```
 
-**GET /execution/{id}/output response (complete):**
+**POST /execution/{id}/output request (encrypted):**
+```json
+{
+  "encrypted_payload": "<base64-encoded nonce||ciphertext>"
+}
+```
+No Authorization header. No `client_public_key` (server already has the shared key from the execution context).
+
+Plaintext payload (before encryption):
+```json
+{
+  "oidc_token": "<jwt_token>",
+  "nonce": "<random_hex_string>"
+}
+```
+
+**POST /execution/{id}/output response (encrypted, complete):**
+```json
+{
+  "encrypted_response": "<base64-encoded nonce||ciphertext>"
+}
+```
+
+Decrypted response payload:
 ```json
 {
   "execution_id": "uuid-v4",
@@ -359,16 +602,6 @@ The following values are hardcoded inline in the workflow YAML definition (not u
   "complete": true,
   "exit_code": 0,
   "output_attestation_document": "<base64-encoded-cbor>"
-}
-```
-
-**GET /health response:**
-```json
-{
-  "status": "healthy",
-  "attestation_available": true,
-  "disk_space_mb": 10240,
-  "active_executions": 0
 }
 ```
 
@@ -386,14 +619,15 @@ Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}
 }
 ```
 
-### Authenticated Request Headers
+### HPKE Encryption Parameters
 
-Requests to `/execute` and `/execution/{id}/output` include:
-```
-Authorization: Bearer <oidc_jwt_token>
-```
-
-Requests to `/health` do NOT include an Authorization header.
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Key type | X25519 | Elliptic curve Diffie-Hellman key agreement |
+| Key derivation | HKDF-SHA256 | `salt=None`, `info=b"hpke-shared-key"`, `length=32` |
+| Symmetric cipher | AES-256-GCM | 256-bit key, 12-byte random nonce, authenticated encryption |
+| Wire format | `nonce (12 bytes) \|\| ciphertext` | Concatenated, then base64-encoded |
+| Client public key format | Raw X25519 | 32 bytes, base64-encoded for transmission |
 
 ### COSE Sign1 Attestation Document Structure
 
@@ -420,8 +654,8 @@ After CBOR-decoding the payload (index 2), the attestation document is a map wit
     "certificate": bytes,    # DER-encoded signing certificate (X.509, P-384 EC key)
     "cabundle": list[bytes], # Certificate chain (DER-encoded), first entry is root CA
     "user_data": bytes | None, # For output attestation: SHA-256 hex digest (UTF-8 encoded)
-    "nonce": bytes | None,   # Optional nonce (UTF-8 encoded)
-    "public_key": bytes | None, # Optional instance public key (e.g. X25519)
+    "nonce": bytes | None,   # Nonce for freshness verification (UTF-8 encoded)
+    "public_key": bytes | None, # For /attest: raw X25519 server public key (32 bytes)
 }
 ```
 
@@ -436,16 +670,15 @@ stdout:{stdout_value}\nstderr:{stderr_value}\nexit_code:{exit_code_value}
 
 The caller must replicate this exact format for SHA-256 digest comparison.
 
-
 ## Correctness Properties
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
 ### Property 1: COSE Sign1 attestation decode round-trip
 
-*For any* valid attestation payload dict (with expected structural fields), constructing a COSE Sign1 structure (wrapping the CBOR-encoded payload in a 4-element array with a protected header, empty unprotected header, and dummy signature), CBOR-encoding the outer structure, base64-encoding the result, then passing that base64 string through `validate_attestation` (with signature verification disabled or using a matching test key) should produce a payload dict equivalent to the original for the structural fields the validator inspects.
+*For any* valid attestation payload dict (with expected structural fields including `nonce` and `public_key`), constructing a COSE Sign1 structure (wrapping the CBOR-encoded payload in a 4-element array with a protected header, empty unprotected header, and a valid test signature), CBOR-encoding the outer structure, base64-encoding the result, then passing that base64 string through `validate_attestation` (signed with a matching test key) should produce a payload dict equivalent to the original for the structural fields the validator inspects, including the `nonce` and `public_key` fields.
 
-**Validates: Requirements 4A.1, 4A.2, 4A.3, 6A.1, 6A.2, 6A.3**
+**Validates: Requirements 4A.1, 4A.2, 4A.3, 6A.1, 6A.2, 6A.3, 11.5**
 
 ### Property 2: Attestation structural field validation
 
@@ -469,19 +702,19 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 
 *For any* HTTP error status code (4xx or 5xx), when the `/execute` endpoint returns that status, the `execute` method should raise a `CallerError` containing the status code and error details.
 
-**Validates: Requirements 3.5**
+**Validates: Requirements 3.8**
 
 ### Property 6: Polling termination on completion
 
-*For any* sequence of poll responses where the first N responses have `complete: false` and the (N+1)th response has `complete: true`, the `poll_output` method should make exactly N+1 HTTP requests and return the final response containing `stdout`, `stderr`, `exit_code`, and `output_attestation_document`.
+*For any* sequence of encrypted poll responses where the first N decrypted responses have `complete: false` and the (N+1)th decrypted response has `complete: true`, the `poll_output` method should make exactly N+1 HTTP POST requests (each with an encrypted payload) and return the final decrypted response containing `stdout`, `stderr`, `exit_code`, and `output_attestation_document`.
 
-**Validates: Requirements 5.3, 5.4**
+**Validates: Requirements 5.6, 5.7**
 
 ### Property 7: Polling retry on transient errors
 
 *For any* number of consecutive HTTP errors K where K < max_retries, followed by a successful response, `poll_output` should recover and continue polling. When K >= max_retries consecutive errors occur, `poll_output` should raise a `CallerError`.
 
-**Validates: Requirements 5.7**
+**Validates: Requirements 5.10**
 
 ### Property 8: Exit code propagation
 
@@ -515,21 +748,51 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 
 ### Property 13: OIDC token acquisition
 
-*For any* audience string and valid OIDC provider response containing a JWT token in the `value` field, `request_oidc_token` should make an HTTP GET to `ACTIONS_ID_TOKEN_REQUEST_URL` with the `audience` query parameter set to the configured audience and an `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}` header, and should store the returned token for reuse in subsequent requests.
+*For any* audience string and valid OIDC provider response containing a JWT token in the `value` field, `request_oidc_token` should make an HTTP GET to `ACTIONS_ID_TOKEN_REQUEST_URL` with the `audience` query parameter set to the configured audience and an `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}` header, and should store the returned token for reuse in subsequent encrypted payloads.
 
 **Validates: Requirements 9.3, 9.4, 9.7**
 
-### Property 14: OIDC token transmission
+### Property 14: OIDC token in encrypted payload, not in headers
 
-*For any* OIDC token stored on the caller instance, `execute` and `poll_output` should include `Authorization: Bearer <token>` in their HTTP request headers, while `health_check` should NOT include an Authorization header regardless of whether a token is stored.
+*For any* OIDC token stored on the caller instance, `execute` and `poll_output` should include the token in the `oidc_token` field of the encrypted request payload. No HTTP request to any endpoint (`/health`, `/attest`, `/execute`, `/execution/{id}/output`) should include an `Authorization` header.
 
-**Validates: Requirements 10.1, 10.2, 10.3**
+**Validates: Requirements 10.1, 10.2, 10.3, 10.4, 10.5**
 
 ### Property 15: OIDC authentication error handling
 
 *For any* HTTP 401 or 403 response from the Remote Executor server on `/execute` or `/execution/{id}/output`, the caller should raise a `CallerError` with an appropriate error message: "authentication failure" for 401 and "repository is not authorized" for 403. For any missing `ACTIONS_ID_TOKEN_REQUEST_URL` or `ACTIONS_ID_TOKEN_REQUEST_TOKEN` environment variable, `request_oidc_token` should raise a `CallerError` indicating that `id-token: write` permission is required.
 
-**Validates: Requirements 9.5, 9.6, 10.4, 10.5**
+**Validates: Requirements 9.5, 9.6, 10.6, 10.7**
+
+### Property 16: AES-256-GCM encryption round-trip
+
+*For any* JSON-serializable Python dict and any valid 32-byte AES key, encrypting the dict via `ClientEncryption.encrypt_payload` and then decrypting the result via `ClientEncryption.decrypt_response` using the same shared key should produce a dict equal to the original.
+
+**Validates: Requirements 3.2, 14.1, 15.3, 15.4, 15.5**
+
+### Property 17: HPKE key derivation symmetry
+
+*For any* X25519 client keypair and X25519 server keypair, deriving the shared key on the client side (ECDH(client_private, server_public) → HKDF-SHA256) and on the server side (ECDH(server_private, client_public) → HKDF-SHA256) with the same HKDF parameters (`salt=None`, `info=b"hpke-shared-key"`, `length=32`) should produce identical 32-byte shared keys.
+
+**Validates: Requirements 13.1, 13.2**
+
+### Property 18: Nonce freshness verification
+
+*For any* random nonce string, if the attestation document's `nonce` field matches the sent nonce, `validate_attestation` (with `expected_nonce` set) should accept. If the attestation document's `nonce` field differs from the sent nonce (or is missing), `validate_attestation` should raise a `CallerError`.
+
+**Validates: Requirements 3.11, 3.12, 3.13, 5.13, 5.14, 11.3, 11.11, 11.12**
+
+### Property 19: Encrypted envelope structure
+
+*For any* request to `/execute`, the HTTP request body should be a JSON object with exactly `encrypted_payload` and `client_public_key` fields (both base64-encoded strings). *For any* request to `/execution/{id}/output`, the HTTP request body should be a JSON object with exactly `encrypted_payload` (base64-encoded string) and no `client_public_key` field.
+
+**Validates: Requirements 3.1, 14.6, 14.7**
+
+### Property 20: AES-256-GCM decryption rejects tampered ciphertext
+
+*For any* valid encrypted payload (produced by `ClientEncryption.encrypt_payload`), if any byte of the base64-decoded wire format (nonce || ciphertext) is modified, `ClientEncryption.decrypt_response` should raise a `CallerError` indicating decryption failure.
+
+**Validates: Requirements 15.6**
 
 ## Error Handling
 
@@ -542,10 +805,22 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 | OIDC | OIDC provider request fails (HTTP error or connection error) | Raise `CallerError(phase="oidc")` with failure details |
 | Health Check | Server unreachable | Raise `CallerError(phase="health_check")`, workflow step fails |
 | Health Check | Non-200 or status != "healthy" | Raise `CallerError(phase="health_check")`, workflow step fails |
+| Attest | Server unreachable | Raise `CallerError(phase="attest")`, workflow step fails |
+| Attest | HTTP error status | Raise `CallerError(phase="attest")` with status code and response body |
+| Attest | Attestation validation failure (COSE/PKI/PCR) | Raise `CallerError(phase="attest")` with validation details |
+| Attest | Nonce mismatch in attestation | Raise `CallerError(phase="attest")` indicating nonce verification failure |
+| Attest | Missing `public_key` in attestation payload | Raise `CallerError(phase="attest")` indicating server did not provide a public key |
+| Attest | Invalid server public key (not 32-byte X25519) | Raise `CallerError(phase="encryption")` indicating invalid server public key |
+| Encryption | Shared key not yet derived | Raise `CallerError(phase="encryption")` indicating key exchange not completed |
+| Encryption | AES-256-GCM encryption failure | Raise `CallerError(phase="encryption")` with encryption error details |
+| Decryption | Base64 decode failure on encrypted_response | Raise `CallerError(phase="encryption")` with decoding details |
+| Decryption | AES-256-GCM decryption failure (invalid key, tampered ciphertext, corrupt nonce) | Raise `CallerError(phase="encryption")` with decryption error |
+| Decryption | Decrypted bytes not valid JSON | Raise `CallerError(phase="encryption")` with deserialization error |
 | Execute | Connection error | Raise `CallerError(phase="execute")`, workflow step fails |
 | Execute | HTTP 401 Unauthorized | Raise `CallerError(phase="execute")` with authentication failure message |
 | Execute | HTTP 403 Forbidden | Raise `CallerError(phase="execute")` with repository not authorized message |
 | Execute | HTTP 4xx/5xx (other) | Raise `CallerError(phase="execute")` with status code and response body |
+| Execute | Nonce mismatch in attestation from /execute response | Raise `CallerError(phase="attestation")` indicating nonce verification failure |
 | Attestation | Invalid base64 | Raise `CallerError(phase="attestation")` with decoding details |
 | Attestation | Invalid CBOR or not a 4-element array | Raise `CallerError(phase="attestation")` with COSE Sign1 structure error |
 | Attestation | Payload CBOR decode failure | Raise `CallerError(phase="attestation")` with payload parsing details |
@@ -553,15 +828,18 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 | Attestation | Certificate chain validation failure | Raise `CallerError(phase="attestation")` with PKI validation details |
 | Attestation | COSE signature verification failure | Raise `CallerError(phase="attestation")` with signature error |
 | Attestation | PCR value missing or mismatch | Raise `CallerError(phase="attestation")` identifying the PCR index |
+| Attestation | Nonce missing or mismatch | Raise `CallerError(phase="attestation")` with expected vs actual nonce |
 | Polling | HTTP error (transient) | Retry up to `max_retries` times, then raise `CallerError(phase="polling")` |
 | Polling | HTTP 401 Unauthorized | Raise `CallerError(phase="polling")` with authentication failure message (no retry) |
 | Polling | HTTP 403 Forbidden | Raise `CallerError(phase="polling")` with repository not authorized message (no retry) |
+| Polling | Decryption failure on poll response | Raise `CallerError(phase="polling")` with decryption error details |
 | Polling | Timeout exceeded | Raise `CallerError(phase="polling")` with elapsed duration |
 | Output Attestation | Null/missing document | Log warning, continue (verification skipped) |
 | Output Attestation | Invalid base64/CBOR/COSE structure | Raise `CallerError(phase="output_attestation")` |
 | Output Attestation | Certificate chain validation failure | Raise `CallerError(phase="output_attestation")` with PKI details |
 | Output Attestation | COSE signature verification failure | Raise `CallerError(phase="output_attestation")` with signature error |
 | Output Attestation | PCR value missing or mismatch | Raise `CallerError(phase="output_attestation")` identifying the PCR index |
+| Output Attestation | Nonce missing or mismatch | Raise `CallerError(phase="output_attestation")` with expected vs actual nonce |
 | Output Attestation | Digest mismatch | Raise `CallerError(phase="output_attestation")` with both digests |
 
 ### Error Propagation Strategy
@@ -571,6 +849,7 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 3. On any `CallerError`, the script exits with code 1 (unless the error occurs after output is received, in which case the remote exit code is used if available).
 4. The GitHub Actions workflow step naturally fails when the script exits with a non-zero code.
 5. All errors are logged to stderr so they appear in the GitHub Actions workflow log.
+6. If the `/attest` step fails, the caller fails immediately before attempting any encrypted requests.
 
 ### Timeout Configuration
 
@@ -587,7 +866,7 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 
 The caller uses both unit tests and property-based tests for comprehensive coverage:
 
-- **Unit tests** (`tests/test_caller_unit.py`): Verify specific examples, edge cases, integration points, and error conditions. These cover workflow YAML structure, sample build script content, connection error handling, null attestation documents, and specific API response scenarios.
+- **Unit tests** (`tests/test_caller_unit.py`): Verify specific examples, edge cases, integration points, and error conditions. These cover workflow YAML structure, sample build script content, connection error handling, null attestation documents, specific API response scenarios, and encryption edge cases.
 - **Property-based tests** (`tests/test_caller_properties.py`): Verify universal properties across randomly generated inputs using the Hypothesis library. Each property test runs a minimum of 100 iterations.
 
 ### Property-Based Testing Configuration
@@ -595,18 +874,18 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - **Library**: [Hypothesis](https://hypothesis.readthedocs.io/) (already in project dev dependencies)
 - **CBOR library**: `cbor2` for encoding/decoding in tests
 - **COSE library**: `pycose` for constructing test COSE Sign1 messages
-- **Crypto libraries**: `pyOpenSSL`, `cryptography` for generating test certificates and keys
+- **Crypto libraries**: `pyOpenSSL`, `cryptography` for generating test certificates, keys, and HPKE operations
 - **Minimum iterations**: 100 per property test (via `@settings(max_examples=100)`)
 - **Each property test references its design property** with a tag comment in the format:
   `# Feature: gha-remote-executor-caller, Property {number}: {property_text}`
 - **Each correctness property is implemented by a single property-based test**
-- **Test key fixtures**: Property tests that involve COSE signature verification use a shared test EC P-384 key pair fixture to sign and verify test attestation documents
+- **Test key fixtures**: Property tests that involve COSE signature verification use a shared test EC P-384 key pair fixture. Property tests involving HPKE use test X25519 keypairs.
 
 ### Test Plan
 
 **Property-based tests** (one per correctness property):
 
-1. **COSE Sign1 attestation decode round-trip**: Generate random dicts with expected attestation fields, wrap in a COSE Sign1 structure (signed with a test P-384 key), CBOR-encode + base64-encode, pass through `validate_attestation`, verify decoded payload matches original fields.
+1. **COSE Sign1 attestation decode round-trip**: Generate random dicts with expected attestation fields (including `nonce` and `public_key`), wrap in a COSE Sign1 structure (signed with a test P-384 key), CBOR-encode + base64-encode, pass through `validate_attestation` with matching `expected_nonce`, verify decoded payload matches original fields.
    `# Feature: gha-remote-executor-caller, Property 1: COSE Sign1 attestation decode round-trip`
 
 2. **Attestation structural field validation**: Generate random dicts with random subsets of expected fields, verify `validate_attestation` accepts iff all required fields present (with COSE Sign1 wrapping and test signature).
@@ -621,13 +900,13 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 5. **Execute HTTP error propagation**: Generate random 4xx/5xx status codes and response bodies. Verify `execute` raises `CallerError` with the status code.
    `# Feature: gha-remote-executor-caller, Property 5: Execute HTTP error propagation`
 
-6. **Polling termination on completion**: Generate random N (0-20), create a mock that returns `complete: false` N times then `complete: true`. Verify exactly N+1 requests made and final response fields extracted.
+6. **Polling termination on completion**: Generate random N (0-20), create a mock that returns encrypted `complete: false` N times then encrypted `complete: true`. Verify exactly N+1 POST requests made and final decrypted response fields extracted.
    `# Feature: gha-remote-executor-caller, Property 6: Polling termination on completion`
 
 7. **Polling retry on transient errors**: Generate random K < max_retries consecutive errors followed by success. Verify polling recovers. Generate K >= max_retries and verify CallerError raised.
    `# Feature: gha-remote-executor-caller, Property 7: Polling retry on transient errors`
 
-8. **Exit code propagation**: Generate random integer exit codes (0-255). Mock the full run flow. Verify `run()` returns the same exit code.
+8. **Exit code propagation**: Generate random integer exit codes (0-255). Mock the full run flow (including HPKE key exchange). Verify `run()` returns the same exit code.
    `# Feature: gha-remote-executor-caller, Property 8: Exit code propagation`
 
 9. **Summary contains execution results**: Generate random execution results. Call summary generation. Verify the output string contains all expected fields.
@@ -645,11 +924,26 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 13. **OIDC token acquisition**: Generate random audience strings. Mock the OIDC provider endpoint. Verify `request_oidc_token` makes an HTTP GET to `ACTIONS_ID_TOKEN_REQUEST_URL` with the correct `audience` query parameter and `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}` header, and that the returned token is stored on the instance.
     `# Feature: gha-remote-executor-caller, Property 13: OIDC token acquisition`
 
-14. **OIDC token transmission**: Generate random OIDC tokens. Set the token on the caller instance. Mock HTTP endpoints. Verify `execute` and `poll_output` include `Authorization: Bearer <token>` in request headers, and `health_check` does NOT include an Authorization header.
-    `# Feature: gha-remote-executor-caller, Property 14: OIDC token transmission`
+14. **OIDC token in encrypted payload, not in headers**: Generate random OIDC tokens. Set the token on the caller instance. Mock HTTP endpoints and HPKE encryption. Verify `execute` and `poll_output` include the token in the encrypted payload's `oidc_token` field. Verify NO HTTP request to any endpoint includes an `Authorization` header.
+    `# Feature: gha-remote-executor-caller, Property 14: OIDC token in encrypted payload, not in headers`
 
 15. **OIDC authentication error handling**: Generate random 401 and 403 HTTP responses for `/execute` and `/execution/{id}/output`. Verify the caller raises `CallerError` with appropriate auth error messages. Also test missing `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` env vars cause `CallerError` with `id-token: write` permission message.
     `# Feature: gha-remote-executor-caller, Property 15: OIDC authentication error handling`
+
+16. **AES-256-GCM encryption round-trip**: Generate random JSON-serializable dicts and random 32-byte AES keys. Encrypt via `ClientEncryption.encrypt_payload`, decrypt via `ClientEncryption.decrypt_response` with the same key. Verify the result equals the original dict.
+    `# Feature: gha-remote-executor-caller, Property 16: AES-256-GCM encryption round-trip`
+
+17. **HPKE key derivation symmetry**: Generate random X25519 keypairs for both client and server. Derive the shared key on both sides using ECDH + HKDF-SHA256 with `salt=None`, `info=b"hpke-shared-key"`, `length=32`. Verify both sides produce identical 32-byte keys.
+    `# Feature: gha-remote-executor-caller, Property 17: HPKE key derivation symmetry`
+
+18. **Nonce freshness verification**: Generate random nonce strings. Build attestation documents with matching and non-matching nonces. Verify `validate_attestation` with `expected_nonce` accepts when nonces match and raises `CallerError` when they differ or the nonce field is missing.
+    `# Feature: gha-remote-executor-caller, Property 18: Nonce freshness verification`
+
+19. **Encrypted envelope structure**: Generate random payloads. Call `execute` (mocked HTTP) and verify the request body is JSON with `encrypted_payload` and `client_public_key` fields. Call `poll_output` (mocked HTTP) and verify the request body is JSON with `encrypted_payload` only (no `client_public_key`).
+    `# Feature: gha-remote-executor-caller, Property 19: Encrypted envelope structure`
+
+20. **AES-256-GCM decryption rejects tampered ciphertext**: Generate random dicts, encrypt via `ClientEncryption.encrypt_payload`. Modify a random byte in the base64-decoded wire format. Verify `ClientEncryption.decrypt_response` raises a `CallerError`.
+    `# Feature: gha-remote-executor-caller, Property 20: AES-256-GCM decryption rejects tampered ciphertext`
 
 **Unit tests** (specific examples and edge cases):
 
@@ -657,7 +951,8 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - Sample build script file exists and is executable (Req 2.1)
 - Sample build script contains system info commands (Req 2.4)
 - Connection refused raises `CallerError` with phase "health_check" (Req 8.4)
-- Connection refused raises `CallerError` with phase "execute" (Req 3.6)
+- Connection refused raises `CallerError` with phase "execute" (Req 3.9)
+- Connection refused raises `CallerError` with phase "attest" (Req 11.9)
 - Null `output_attestation_document` logs warning and continues (Req 6C.13)
 - Invalid base64 in attestation raises `CallerError` (Req 4A.4)
 - Invalid CBOR in attestation raises `CallerError` (Req 4A.5)
@@ -667,16 +962,24 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - COSE signature verification failure raises `CallerError` (Req 4C.16)
 - PCR index missing from attestation raises `CallerError` (Req 4D.18)
 - PCR value mismatch raises `CallerError` (Req 4D.19)
-- Poll timeout raises `CallerError` after configured duration (Req 5.5, 5.6)
-- Default poll interval is 5 seconds (Req 5.2)
-- Default max poll duration is 600 seconds (Req 5.5)
+- Poll timeout raises `CallerError` after configured duration (Req 5.8, 5.9)
+- Default poll interval is 5 seconds (Req 5.4)
+- Default max poll duration is 600 seconds (Req 5.8)
 - Missing `ACTIONS_ID_TOKEN_REQUEST_URL` raises `CallerError` with phase "oidc" (Req 9.5)
 - Missing `ACTIONS_ID_TOKEN_REQUEST_TOKEN` raises `CallerError` with phase "oidc" (Req 9.5)
 - OIDC provider returns HTTP error raises `CallerError` with phase "oidc" (Req 9.6)
-- Execute with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
-- Execute with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
-- Poll output with HTTP 401 raises `CallerError` with authentication failure message (Req 10.4)
-- Poll output with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.5)
-- Health check does not include Authorization header (Req 10.3)
+- Execute with HTTP 401 raises `CallerError` with authentication failure message (Req 10.6)
+- Execute with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.7)
+- Poll output with HTTP 401 raises `CallerError` with authentication failure message (Req 10.6)
+- Poll output with HTTP 403 raises `CallerError` with repository not authorized message (Req 10.7)
+- No Authorization header on any HTTP request (Req 10.3)
+- Health check does not include OIDC token (Req 10.4)
+- Attest does not include OIDC token or Authorization header (Req 10.5, 11.2)
 - Workflow YAML contains `id-token: write` permission (Req 9.1)
 - Workflow YAML contains `audience` input (Req 9.2)
+- Missing `public_key` in /attest attestation raises `CallerError` (Req 11.7)
+- Invalid server public key (not 32 bytes) raises `CallerError` (Req 13.5)
+- Decryption failure on tampered response raises `CallerError` with phase "encryption" (Req 15.6)
+- Decrypted response that is not valid JSON raises `CallerError` (Req 15.7)
+- Attest failure prevents encrypted requests from being sent (Req 16.6)
+- /health and /attest requests have no request body (Req 16.4, 16.5)

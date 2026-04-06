@@ -367,6 +367,227 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 19. Final checkpoint - Ensure all OIDC tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 20. Implement ClientEncryption class
+  - [ ] 20.1 Create `ClientEncryption` class in `call_remote_executor.py`
+    - Add imports for `X25519PrivateKey`, `X25519PublicKey`, `HKDF`, `SHA256`, `AESGCM`, `Encoding`, `PublicFormat` from `cryptography`
+    - Implement `__init__` to generate a fresh X25519 keypair via `X25519PrivateKey.generate()`
+    - Implement `client_public_key_bytes` property returning raw 32-byte public key via `public_bytes(Encoding.Raw, PublicFormat.Raw)`
+    - Implement `derive_shared_key(server_public_key_bytes)` performing ECDH + HKDF-SHA256 with `salt=None`, `info=b"hpke-shared-key"`, `length=32`; raise `CallerError(phase="encryption")` if server key is not valid 32-byte X25519
+    - Implement `encrypt_payload(payload_dict)` serializing dict to JSON, encrypting with AES-256-GCM using 12-byte random nonce, returning base64-encoded `nonce || ciphertext`; raise `CallerError(phase="encryption")` if shared key not derived
+    - Implement `decrypt_response(encrypted_response_b64)` base64-decoding, splitting 12-byte nonce + ciphertext, decrypting with AES-256-GCM, deserializing JSON; raise `CallerError(phase="encryption")` on decryption failure or invalid JSON
+    - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 13.1, 13.2, 13.3, 13.4, 13.5, 14.1, 14.2, 14.3, 14.5, 15.3, 15.4, 15.5, 15.6, 15.7_
+
+  - [ ] 20.2 Write property test for AES-256-GCM encryption round-trip
+    - **Property 16: AES-256-GCM encryption round-trip**
+    - Generate random JSON-serializable dicts and random 32-byte AES keys
+    - Encrypt via `encrypt_payload`, decrypt via `decrypt_response` with same shared key
+    - Verify result equals original dict
+    - **Validates: Requirements 3.2, 14.1, 15.3, 15.4, 15.5**
+
+  - [ ] 20.3 Write property test for HPKE key derivation symmetry
+    - **Property 17: HPKE key derivation symmetry**
+    - Generate random X25519 keypairs for client and server
+    - Derive shared key on both sides using ECDH + HKDF-SHA256 with same parameters
+    - Verify both sides produce identical 32-byte keys
+    - **Validates: Requirements 13.1, 13.2**
+
+  - [ ] 20.4 Write property test for AES-256-GCM decryption rejects tampered ciphertext
+    - **Property 20: AES-256-GCM decryption rejects tampered ciphertext**
+    - Generate random dicts, encrypt via `encrypt_payload`
+    - Modify a random byte in the base64-decoded wire format
+    - Verify `decrypt_response` raises `CallerError`
+    - **Validates: Requirements 15.6**
+
+  - [ ] 20.5 Write unit tests for ClientEncryption edge cases
+    - Test invalid server public key (not 32 bytes) raises `CallerError` with phase "encryption" (Req 13.5)
+    - Test `encrypt_payload` before `derive_shared_key` raises `CallerError` (Req 14.1)
+    - Test decryption failure on tampered response raises `CallerError` with phase "encryption" (Req 15.6)
+    - Test decrypted response that is not valid JSON raises `CallerError` (Req 15.7)
+    - _Requirements: 13.5, 14.1, 15.6, 15.7_
+
+- [ ] 21. Checkpoint - Ensure ClientEncryption tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 22. Implement `generate_nonce` and `_verify_nonce` methods
+  - [ ] 22.1 Implement `generate_nonce` static method on `RemoteExecutorCaller`
+    - Generate 32 random bytes and return as 64-char hex string
+    - Each call must produce a unique value
+    - _Requirements: 3.12, 5.13, 11.11, 11.12_
+
+  - [ ] 22.2 Implement `_verify_nonce` private method on `RemoteExecutorCaller`
+    - Accept `payload_doc` dict, `expected_nonce` string, and `phase` string
+    - Extract `nonce` field from payload, decode from bytes if necessary
+    - Compare against `expected_nonce`; raise `CallerError` if missing or mismatched
+    - _Requirements: 3.13, 5.14, 11.12_
+
+  - [ ] 22.3 Update `validate_attestation` to accept optional `expected_nonce` parameter
+    - Add `expected_nonce: str | None = None` parameter
+    - After PCR validation, if `expected_nonce` is provided, call `_verify_nonce`
+    - _Requirements: 3.13, 11.12_
+
+  - [ ] 22.4 Update `validate_output_attestation` to accept optional `expected_nonce` parameter
+    - Add `expected_nonce: str | None = None` parameter
+    - After PCR validation, if `expected_nonce` is provided, call `_verify_nonce`
+    - _Requirements: 5.14_
+
+  - [ ] 22.5 Write property test for nonce freshness verification
+    - **Property 18: Nonce freshness verification**
+    - Generate random nonce strings, build attestation documents with matching and non-matching nonces
+    - Verify `validate_attestation` with `expected_nonce` accepts when nonces match
+    - Verify raises `CallerError` when nonces differ or nonce field is missing
+    - **Validates: Requirements 3.11, 3.12, 3.13, 5.13, 5.14, 11.3, 11.11, 11.12**
+
+  - [ ] 22.6 Write unit tests for nonce verification edge cases
+    - Test matching nonce passes validation
+    - Test mismatched nonce raises `CallerError`
+    - Test missing nonce field raises `CallerError`
+    - Test nonce as bytes is decoded correctly
+    - _Requirements: 3.13, 5.14, 11.12_
+
+- [ ] 23. Implement `attest` method for server attestation and HPKE key exchange
+  - [ ] 23.1 Implement `attest` method on `RemoteExecutorCaller`
+    - Generate a unique random nonce via `generate_nonce()`
+    - Send HTTP GET to `{server_url}/attest?nonce={nonce}` with no auth headers and no request body
+    - On HTTP 200, extract `attestation_document` from JSON response
+    - Call `validate_attestation(attestation_b64, expected_nonce=nonce)` to validate COSE Sign1 + PKI + PCR + nonce
+    - Extract `public_key` field from validated attestation payload; raise `CallerError(phase="attest")` if null or missing
+    - Initialize `self._encryption = ClientEncryption()` and call `derive_shared_key(server_public_key_bytes)`
+    - Store the nonce for later reference
+    - On HTTP error or connection error, raise `CallerError(phase="attest")`
+    - Set configurable timeout for the request
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8, 11.9, 11.10, 11.11, 11.12, 12.1, 12.2, 12.3, 12.4, 12.5, 13.1, 13.2, 13.3_
+
+  - [ ] 23.2 Write unit tests for attest method
+    - Test successful attest extracts server public key and initializes encryption
+    - Test missing `public_key` in attestation raises `CallerError` with phase "attest" (Req 11.7)
+    - Test connection error raises `CallerError` with phase "attest" (Req 11.9)
+    - Test HTTP error raises `CallerError` with phase "attest" (Req 11.8)
+    - Test attest does not include Authorization header or auth credentials (Req 11.2)
+    - Test nonce is included as query parameter (Req 11.3)
+    - _Requirements: 11.2, 11.3, 11.7, 11.8, 11.9_
+
+- [ ] 24. Checkpoint - Ensure attest and nonce tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 25. Update `execute` method for HPKE encryption
+  - [ ] 25.1 Rewrite `execute` method to use encrypted communication
+    - Generate a unique random nonce via `generate_nonce()`
+    - Build plaintext payload: `{repository_url, commit_hash, script_path, github_token, oidc_token, nonce}`
+    - Encrypt payload via `self._encryption.encrypt_payload()`
+    - Send HTTP POST to `{server_url}/execute` with JSON body `{encrypted_payload: "base64", client_public_key: "base64"}` — no Authorization header
+    - On HTTP 200, extract `encrypted_response` from JSON response and decrypt via `self._encryption.decrypt_response()`
+    - Extract `execution_id` and `attestation_document` from decrypted response
+    - Call `validate_attestation(attestation_b64, expected_nonce=nonce)` to verify nonce in returned attestation
+    - Remove the `Authorization` header from the request (OIDC token is now in encrypted payload only)
+    - Handle HTTP 401/403 errors as before
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12, 3.13, 10.1, 10.3, 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 15.1_
+
+  - [ ] 25.2 Write property test for encrypted envelope structure
+    - **Property 19: Encrypted envelope structure**
+    - Generate random payloads, call `execute` (mocked HTTP)
+    - Verify request body is JSON with `encrypted_payload` and `client_public_key` fields (both base64)
+    - Call `poll_output` (mocked HTTP) and verify request body has `encrypted_payload` only (no `client_public_key`)
+    - **Validates: Requirements 3.1, 14.6, 14.7**
+
+  - [ ] 25.3 Write unit tests for encrypted execute
+    - Test execute sends encrypted envelope with `encrypted_payload` and `client_public_key` fields
+    - Test execute does not include Authorization header (Req 10.3)
+    - Test execute includes OIDC token in encrypted payload (Req 10.1)
+    - Test execute includes nonce in encrypted payload (Req 3.11)
+    - Test execute verifies nonce in returned attestation (Req 3.13)
+    - _Requirements: 3.1, 3.11, 3.13, 10.1, 10.3, 14.6_
+
+- [ ] 26. Update `poll_output` method for HPKE encryption
+  - [ ] 26.1 Rewrite `poll_output` to use encrypted POST requests
+    - Change from HTTP GET to HTTP POST for each poll request
+    - For each poll iteration: generate unique nonce, build plaintext `{oidc_token, nonce}`, encrypt via `self._encryption.encrypt_payload()`
+    - Send JSON body `{encrypted_payload: "base64"}` — no `client_public_key`, no Authorization header
+    - On HTTP 200, extract `encrypted_response` and decrypt via `self._encryption.decrypt_response()`
+    - On final response (`complete=true`), store the last nonce for output attestation nonce verification
+    - Handle HTTP 401/403 errors as before (no retry)
+    - Handle transient HTTP errors with retry logic as before
+    - _Requirements: 5.1, 5.2, 5.3, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 10.2, 10.3, 14.7, 15.2_
+
+  - [ ] 26.2 Write unit tests for encrypted poll_output
+    - Test poll_output sends POST (not GET) with encrypted payload
+    - Test poll_output does not include Authorization header (Req 10.3)
+    - Test poll_output includes OIDC token in encrypted payload (Req 10.2)
+    - Test poll_output includes unique nonce in each request (Req 5.13)
+    - Test poll_output request body has `encrypted_payload` only, no `client_public_key` (Req 14.7)
+    - Test poll_output decrypts response correctly
+    - _Requirements: 5.1, 5.13, 10.2, 10.3, 14.7_
+
+- [ ] 27. Checkpoint - Ensure encrypted execute and poll_output tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 28. Update `run` method and orchestration flow
+  - [ ] 28.1 Update `run` method to include attest step and pass nonces
+    - Insert `attest()` call between `request_oidc_token()` and `execute()`
+    - Flow becomes: health_check → request_oidc_token → attest → execute (encrypted) → validate_attestation (with nonce) → poll_output (encrypted) → validate_output_attestation (with nonce)
+    - Pass the last poll nonce to `validate_output_attestation` for nonce verification
+    - Remove standalone `validate_attestation` call after execute (now done inside `execute`)
+    - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6_
+
+  - [ ] 28.2 Write unit tests for updated run flow
+    - Test run calls methods in correct order: health_check → request_oidc_token → attest → execute → poll_output → validate_output_attestation
+    - Test attest failure prevents execute from being called (Req 16.6)
+    - Test no unencrypted payloads sent to /execute or /output (Req 16.3)
+    - _Requirements: 16.1, 16.3, 16.6_
+
+- [ ] 29. Update existing property tests for HPKE and nonce compatibility
+  - [ ] 29.1 Update Property 14 test for OIDC token in encrypted payload
+    - Change from verifying Authorization header to verifying OIDC token in encrypted payload's `oidc_token` field
+    - Verify NO HTTP request to any endpoint includes an Authorization header
+    - Mock `ClientEncryption` to inspect encrypted payloads
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
+
+  - [ ] 29.2 Update Property 6 (polling termination) for encrypted POST
+    - Change mock from GET responses to POST responses with encrypted payloads
+    - Mock `ClientEncryption` encrypt/decrypt for poll requests
+    - Verify exactly N+1 POST requests made
+    - _Requirements: 5.6, 5.7_
+
+  - [ ] 29.3 Update Property 7 (polling retry) for encrypted POST
+    - Change mock from GET to POST with encrypted payloads
+    - _Requirements: 5.10_
+
+  - [ ] 29.4 Update Property 5 (execute HTTP error propagation) for encrypted POST
+    - Update mock to handle encrypted envelope format
+    - _Requirements: 3.8_
+
+  - [ ] 29.5 Update Property 8 (exit code propagation) for full encrypted flow
+    - Mock the full flow including attest, HPKE key exchange, encrypted execute/poll
+    - _Requirements: 7.6_
+
+  - [ ] 29.6 Update Property 1 (attestation decode round-trip) for nonce field
+    - Include `nonce` and `public_key` fields in generated attestation payloads
+    - Test with `expected_nonce` parameter
+    - _Requirements: 4A.1, 4A.2, 4A.3, 11.5_
+
+- [ ] 30. Update existing unit tests for HPKE and nonce compatibility
+  - [ ] 30.1 Update `tests/test_caller_unit.py` for encrypted communication
+    - Update execute tests to use encrypted envelope format and mock `ClientEncryption`
+    - Update poll_output tests to use POST with encrypted payloads
+    - Set `_encryption` attribute on caller instances where execute/poll_output tests need it
+    - Remove Authorization header assertions from execute and poll_output tests
+    - Add assertions that no Authorization header is sent on any request
+    - _Requirements: 10.3, 14.6, 14.7_
+
+  - [ ] 30.2 Update `tests/test_caller_properties.py` for encrypted communication
+    - Update all property tests that construct `RemoteExecutorCaller` to initialize `_encryption`
+    - Update execute and poll_output property tests to mock encrypted request/response
+    - _Requirements: 14.6, 14.7_
+
+- [ ] 31. Update GitHub Actions workflow for encrypted flow
+  - [ ] 31.1 Verify workflow YAML is compatible with encrypted flow
+    - Ensure the caller script invocation does not pass `--github-token` via Authorization header
+    - Verify `--audience` is still passed for OIDC token (now used in encrypted payload)
+    - No workflow YAML changes should be needed since encryption is handled inside the Python script
+    - _Requirements: 16.1, 10.3_
+
+- [ ] 32. Final checkpoint - Ensure all HPKE and nonce tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -378,3 +599,4 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - The caller's `pyproject.toml` at `.github/scripts/pyproject.toml` is separate from the existing `scripts/pyproject.toml`
 - Tasks 1-11 cover the original caller implementation (all completed)
 - Tasks 12-19 cover OIDC authentication support (Requirements 9, 10; Properties 13-15)
+- Tasks 20-32 cover HPKE encrypted communication, mandatory nonces, and related updates (Requirements 11-16; Properties 16-20)

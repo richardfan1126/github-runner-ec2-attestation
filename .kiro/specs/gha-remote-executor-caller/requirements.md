@@ -4,19 +4,22 @@
 
 This document specifies the requirements for the GitHub Actions Remote Executor Caller — a GitHub Actions workflow and supporting scripts that act as the client side of the Remote Executor system. The caller workflow is triggered via `workflow_dispatch`, sends execution requests to an already-deployed Remote Executor server, validates the server's identity and response integrity through NitroTPM attestation documents, and reports results back in the GitHub Actions workflow output.
 
+All communication with the Remote Executor server's `/execute` and `/execution/{id}/output` endpoints uses HPKE-based encryption. The caller first obtains the server's public key via the unauthenticated `/attest` endpoint, generates a client-side X25519 keypair, derives a shared AES-256-GCM key via ECDH + HKDF-SHA256, and encrypts all request payloads (including the OIDC token) before transmission. Responses from these endpoints are also encrypted and must be decrypted by the caller using the same shared key.
+
 The caller includes:
 
-1. **GitHub Actions Workflow**: A `workflow_dispatch`-triggered workflow that orchestrates the entire call-validate-poll-verify cycle against the Remote Executor server.
+1. **GitHub Actions Workflow**: A `workflow_dispatch`-triggered workflow that orchestrates the entire attest-encrypt-execute-poll-verify cycle against the Remote Executor server.
 2. **Sample Build Script**: A sample script included in the repository that the Remote Executor server will fetch and execute.
 3. **Attestation Validation Logic**: Client-side logic to decode, cryptographically verify, and validate COSE Sign1-encoded NitroTPM attestation documents returned by the server, including certificate chain (PKI) validation, COSE signature verification, PCR value validation, and output integrity verification.
+4. **HPKE Encryption Logic**: Client-side X25519 key generation, ECDH key agreement, HKDF-SHA256 key derivation, and AES-256-GCM encryption/decryption for all request and response payloads on encrypted endpoints.
 
 ## Glossary
 
 - **Caller_Workflow**: GitHub Actions workflow (triggered by `workflow_dispatch`) that sends execution requests to the Remote Executor server and processes results
 - **Remote_Executor_Server**: The already-deployed HTTP server (specified in the `github-actions-remote-executor` spec) that executes scripts and returns attestation documents
 - **Sample_Build_Script**: A shell script included in the repository that serves as the payload for remote execution
-- **Attestation_Document**: Base64-encoded COSE Sign1 structure returned by the Remote Executor server on POST /execute, signed by the NitroTPM, proving the server's execution environment identity. The outer CBOR decoding yields a 4-element array: [protected_header, unprotected_header, payload, signature]. The payload is itself CBOR-encoded and contains the attestation fields (module_id, pcrs, certificate, cabundle, user_data, nonce, public_key, etc.)
-- **Output_Attestation_Document**: Base64-encoded COSE Sign1 structure returned by the Remote Executor server on GET /execution/{id}/output when execution is complete, containing a SHA-256 digest of the script output in the user_data field of the payload
+- **Attestation_Document**: Base64-encoded COSE Sign1 structure returned by the Remote Executor server, signed by the NitroTPM, proving the server's execution environment identity. Returned unencrypted from GET /attest (containing the Server_Public_Key in the `public_key` field) and within the encrypted response from POST /execute. The outer CBOR decoding yields a 4-element array: [protected_header, unprotected_header, payload, signature]. The payload is itself CBOR-encoded and contains the attestation fields (module_id, pcrs, certificate, cabundle, user_data, nonce, public_key, etc.)
+- **Output_Attestation_Document**: Base64-encoded COSE Sign1 structure returned by the Remote Executor server within the encrypted response from POST /execution/{id}/output when execution is complete, containing a SHA-256 digest of the script output in the user_data field of the payload
 - **COSE_Sign1**: CBOR Object Signing and Encryption Sign1 structure — a CBOR array of 4 elements [protected_header, unprotected_header, payload, signature] used to carry a signed attestation payload
 - **Execution_ID**: UUID returned by the Remote Executor server that uniquely identifies a script execution request
 - **CBOR**: Concise Binary Object Representation — the binary encoding format used for attestation documents and COSE structures
@@ -28,11 +31,18 @@ The caller includes:
 - **Expected_PCRs**: A JSON map of PCR index (integer) to expected hex-encoded PCR value for PCR4 and PCR7, hardcoded in the Caller_Workflow definition, used to validate the attestable AMI's Platform Configuration Registers against known-good values
 - **Certificate_Chain**: The ordered list of intermediate CA certificates (cabundle) included in the attestation document, linking the signing certificate to the Root_CA_Certificate
 - **Signing_Certificate**: The DER-encoded X.509 certificate embedded in the attestation document payload, whose public key is used to verify the COSE Sign1 signature
-- **OIDC_Token**: JSON Web Token (JWT) issued by GitHub's OIDC provider (`https://token.actions.githubusercontent.com`) to a GitHub Actions workflow, used as a Bearer token in the Authorization header to authenticate requests to the Remote_Executor_Server
+- **OIDC_Token**: JSON Web Token (JWT) issued by GitHub's OIDC provider (`https://token.actions.githubusercontent.com`) to a GitHub Actions workflow, included in the `oidc_token` field of HPKE-encrypted request payloads to authenticate requests to the Remote_Executor_Server
 - **OIDC_Provider**: GitHub Actions' built-in OpenID Connect identity provider that issues OIDC_Tokens to workflows with `id-token: write` permission
 - **Audience**: A configurable string passed when requesting an OIDC_Token, which must match the Remote_Executor_Server's expected audience configuration to ensure the token was issued for the correct server instance
 - **ACTIONS_ID_TOKEN_REQUEST_TOKEN**: Environment variable automatically set by GitHub Actions when `id-token: write` permission is granted, containing the bearer token used to authenticate the OIDC token request to the OIDC_Provider
 - **ACTIONS_ID_TOKEN_REQUEST_URL**: Environment variable automatically set by GitHub Actions when `id-token: write` permission is granted, containing the URL endpoint to request an OIDC_Token from the OIDC_Provider
+- **Server_Public_Key**: The X25519 public key of the Remote_Executor_Server, obtained from the `public_key` field of the Attestation_Document returned by the `/attest` endpoint, used for HPKE key exchange
+- **Client_Keypair**: An X25519 keypair generated by the Caller_Script for each execution session, used for HPKE key agreement with the Remote_Executor_Server
+- **Client_Public_Key**: The public component of the Client_Keypair, sent unencrypted alongside encrypted request payloads so the server can derive the same Shared_Key
+- **Shared_Key**: A 256-bit AES key derived from the ECDH shared secret between the Client_Keypair private key and the Server_Public_Key, using HKDF-SHA256 with info=`b"hpke-shared-key"`, used for AES-256-GCM encryption and decryption of request and response payloads
+- **HPKE**: Hybrid Public Key Encryption — the encryption scheme used for securing communication between the Caller_Script and the Remote_Executor_Server, combining X25519 key agreement with AES-256-GCM symmetric encryption
+- **Encrypted_Envelope**: The JSON structure sent to encrypted endpoints, containing `encrypted_payload` (base64-encoded `nonce || ciphertext`) and `client_public_key` (base64-encoded raw X25519 public key)
+- **Nonce**: A random value included in all attestation requests and encrypted payloads to verify freshness of attestation documents and prevent replay attacks. The caller generates a unique nonce for every request to an endpoint that supports it (/attest, /execute, /execution/{id}/output)
 
 ## Requirements
 
@@ -63,17 +73,23 @@ The caller includes:
 
 ### Requirement 3: Execution Request Submission
 
-**User Story:** As a GitHub Actions workflow, I want to send an execution request to the Remote Executor server, so that the server fetches and runs my script.
+**User Story:** As a GitHub Actions workflow, I want to send an encrypted execution request to the Remote Executor server, so that the server fetches and runs my script while sensitive data is protected in transit.
 
 #### Acceptance Criteria
 
-1. THE Caller_Script SHALL send an HTTP POST request to `{Server_URL}/execute` with a JSON body containing `repository_url`, `commit_hash`, `script_path`, and `github_token`
-2. THE Caller_Script SHALL use the repository URL of the current GitHub repository
-3. THE Caller_Script SHALL use the `GITHUB_TOKEN` secret for the `github_token` field
-4. WHEN the Remote_Executor_Server returns HTTP 200, THE Caller_Script SHALL extract the Execution_ID and Attestation_Document from the response
-5. IF the Remote_Executor_Server returns an HTTP error status, THEN THE Caller_Script SHALL fail the workflow step with the error details
-6. IF the Remote_Executor_Server is unreachable, THEN THE Caller_Script SHALL fail the workflow step with a connection error message
-7. THE Caller_Script SHALL set a configurable timeout for the HTTP POST request
+1. THE Caller_Script SHALL send an HTTP POST request to `{Server_URL}/execute` with a JSON body containing `encrypted_payload` (base64-encoded `nonce || ciphertext`) and `client_public_key` (base64-encoded raw X25519 public key)
+2. THE Caller_Script SHALL encrypt the request payload using the Shared_Key derived from the Client_Keypair and Server_Public_Key before sending
+3. THE encrypted request payload SHALL contain `repository_url`, `commit_hash`, `script_path`, `github_token`, and `oidc_token` fields
+4. THE Caller_Script SHALL use the repository URL of the current GitHub repository for the `repository_url` field
+5. THE Caller_Script SHALL use the `GITHUB_TOKEN` secret for the `github_token` field
+6. THE Caller_Script SHALL include the OIDC_Token in the `oidc_token` field of the encrypted request payload
+7. WHEN the Remote_Executor_Server returns HTTP 200, THE Caller_Script SHALL decrypt the encrypted response using the Shared_Key and extract the Execution_ID and Attestation_Document from the decrypted payload
+8. IF the Remote_Executor_Server returns an HTTP error status, THEN THE Caller_Script SHALL fail the workflow step with the error details
+9. IF the Remote_Executor_Server is unreachable, THEN THE Caller_Script SHALL fail the workflow step with a connection error message
+10. THE Caller_Script SHALL set a configurable timeout for the HTTP POST request
+11. THE Caller_Script SHALL include a `nonce` field in the encrypted request payload for attestation freshness verification
+12. THE Caller_Script SHALL generate a unique random nonce for each `/execute` request
+13. THE Caller_Script SHALL verify that the nonce in the Attestation_Document returned within the `/execute` response matches the nonce that was sent
 
 ### Requirement 4: Server Identity Attestation Validation
 
@@ -118,18 +134,24 @@ The caller includes:
 
 ### Requirement 5: Execution Output Polling
 
-**User Story:** As a GitHub Actions workflow, I want to poll for execution results, so that I can retrieve the script output once execution completes.
+**User Story:** As a GitHub Actions workflow, I want to poll for execution results using encrypted communication, so that I can retrieve the script output once execution completes while keeping sensitive data protected.
 
 #### Acceptance Criteria
 
-1. THE Caller_Script SHALL send HTTP GET requests to `{Server_URL}/execution/{Execution_ID}/output` to poll for results
-2. THE Caller_Script SHALL poll at a configurable interval with a default of 5 seconds
-3. WHILE the response field `complete` is false, THE Caller_Script SHALL continue polling
-4. WHEN the response field `complete` is true, THE Caller_Script SHALL extract `stdout`, `stderr`, `exit_code`, and `output_attestation_document` from the response
-5. THE Caller_Script SHALL enforce a configurable maximum polling duration with a default of 10 minutes
-6. IF the maximum polling duration is exceeded, THEN THE Caller_Script SHALL fail the workflow step with a timeout error
-7. IF a polling request fails with an HTTP error, THEN THE Caller_Script SHALL retry up to a configurable number of times before failing
-8. THE Caller_Script SHALL log incremental output during polling to provide real-time feedback in the workflow log
+1. THE Caller_Script SHALL send HTTP POST requests to `{Server_URL}/execution/{Execution_ID}/output` with an encrypted request body to poll for results
+2. THE Caller_Script SHALL encrypt the output request payload using the same Shared_Key derived during the `/execute` HPKE key exchange
+3. THE encrypted output request payload SHALL contain the `oidc_token` field and a `nonce` field
+13. THE Caller_Script SHALL generate a unique random nonce for each `/execution/{id}/output` request
+14. WHEN the execution is complete and the decrypted response contains an Output_Attestation_Document, THE Caller_Script SHALL verify that the nonce in the Output_Attestation_Document matches the nonce that was sent in that polling request
+4. THE Caller_Script SHALL poll at a configurable interval with a default of 5 seconds
+5. WHEN the Caller_Script receives an encrypted response, THE Caller_Script SHALL decrypt the response using the Shared_Key
+6. WHILE the decrypted response field `complete` is false, THE Caller_Script SHALL continue polling
+7. WHEN the decrypted response field `complete` is true, THE Caller_Script SHALL extract `stdout`, `stderr`, `exit_code`, and `output_attestation_document` from the decrypted response
+8. THE Caller_Script SHALL enforce a configurable maximum polling duration with a default of 10 minutes
+9. IF the maximum polling duration is exceeded, THEN THE Caller_Script SHALL fail the workflow step with a timeout error
+10. IF a polling request fails with an HTTP error, THEN THE Caller_Script SHALL retry up to a configurable number of times before failing
+11. THE Caller_Script SHALL log incremental output during polling to provide real-time feedback in the workflow log
+12. THE encrypted output request payload SHALL include an optional `offset` field to support incremental output retrieval
 
 ### Requirement 6: Output Attestation Validation
 
@@ -202,12 +224,100 @@ The caller includes:
 
 ### Requirement 10: OIDC Token Transmission
 
-**User Story:** As a GitHub Actions workflow, I want to include the OIDC token in requests to the Remote Executor server, so that the server can authenticate and authorize the caller.
+**User Story:** As a GitHub Actions workflow, I want to include the OIDC token in the encrypted request body sent to the Remote Executor server, so that the server can authenticate and authorize the caller while the token is protected by HPKE encryption.
 
 #### Acceptance Criteria
 
-1. THE Caller_Script SHALL include the OIDC_Token as a Bearer token in the Authorization header of HTTP POST requests to `{Server_URL}/execute`
-2. THE Caller_Script SHALL include the OIDC_Token as a Bearer token in the Authorization header of HTTP GET requests to `{Server_URL}/execution/{Execution_ID}/output`
-3. THE Caller_Script SHALL NOT include an Authorization header in HTTP GET requests to `{Server_URL}/health`
-4. IF the Remote_Executor_Server returns HTTP 401 Unauthorized, THEN THE Caller_Script SHALL fail the workflow step with an error message indicating authentication failure
-5. IF the Remote_Executor_Server returns HTTP 403 Forbidden, THEN THE Caller_Script SHALL fail the workflow step with an error message indicating the repository is not authorized
+1. THE Caller_Script SHALL include the OIDC_Token in the `oidc_token` field of the encrypted request payload for HTTP POST requests to `{Server_URL}/execute`
+2. THE Caller_Script SHALL include the OIDC_Token in the `oidc_token` field of the encrypted request payload for HTTP POST requests to `{Server_URL}/execution/{Execution_ID}/output`
+3. THE Caller_Script SHALL NOT include an Authorization header in any HTTP request to the Remote_Executor_Server (the OIDC_Token is transmitted exclusively within the encrypted payload)
+4. THE Caller_Script SHALL NOT include an OIDC_Token in HTTP GET requests to `{Server_URL}/health` (the health endpoint has no authentication)
+5. THE Caller_Script SHALL NOT include an OIDC_Token in HTTP GET requests to `{Server_URL}/attest` (the attest endpoint has no authentication)
+6. IF the Remote_Executor_Server returns HTTP 401 Unauthorized, THEN THE Caller_Script SHALL fail the workflow step with an error message indicating authentication failure
+7. IF the Remote_Executor_Server returns HTTP 403 Forbidden, THEN THE Caller_Script SHALL fail the workflow step with an error message indicating the repository is not authorized
+
+
+### Requirement 11: Server Attestation and Public Key Retrieval
+
+**User Story:** As a GitHub Actions workflow, I want to call the server's `/attest` endpoint to obtain an attestation document containing the server's public key, so that I can verify the server's identity and establish an encrypted channel.
+
+#### Acceptance Criteria
+
+1. THE Caller_Script SHALL send an HTTP GET request to `{Server_URL}/attest` before submitting the execution request
+2. THE `/attest` request SHALL NOT include an Authorization header or any authentication credentials
+3. THE Caller_Script SHALL include a `nonce` query parameter in the `/attest` request for attestation freshness verification
+12. THE Caller_Script SHALL generate a unique random nonce for each `/attest` request
+4. WHEN the `/attest` endpoint returns HTTP 200, THE Caller_Script SHALL extract the `attestation_document` field from the JSON response
+5. THE Caller_Script SHALL validate the Attestation_Document from `/attest` using the same COSE Sign1 parsing, PKI validation, COSE signature verification, and PCR validation as Requirement 4
+6. THE Caller_Script SHALL extract the Server_Public_Key from the `public_key` field of the validated attestation payload
+7. IF the `public_key` field is null or missing in the attestation payload, THEN THE Caller_Script SHALL fail the workflow step with an error indicating the server did not provide a public key
+8. IF the `/attest` endpoint returns an HTTP error status, THEN THE Caller_Script SHALL fail the workflow step with the error details
+9. IF the `/attest` endpoint is unreachable, THEN THE Caller_Script SHALL fail the workflow step with a connection error message
+10. THE Caller_Script SHALL set a configurable timeout for the `/attest` request
+11. THE Caller_Script SHALL generate a unique random nonce for each `/attest` request
+12. THE Caller_Script SHALL verify that the nonce in the validated attestation payload matches the nonce that was sent
+
+### Requirement 12: Client-Side HPKE Key Generation
+
+**User Story:** As a security engineer, I want the caller to generate a fresh X25519 keypair for each execution session, so that each session uses unique cryptographic material for HPKE key exchange.
+
+#### Acceptance Criteria
+
+1. THE Caller_Script SHALL generate a new Client_Keypair (X25519 private key and public key) for each execution session
+2. THE Caller_Script SHALL use the `cryptography` library to generate the Client_Keypair
+3. THE Caller_Script SHALL serialize the Client_Public_Key in raw format (32 bytes) for transmission to the Remote_Executor_Server
+4. THE Caller_Script SHALL NOT persist the Client_Keypair to disk
+5. THE Caller_Script SHALL retain the Client_Keypair in memory for the duration of the execution session to derive the Shared_Key and decrypt responses
+
+### Requirement 13: HPKE Key Derivation
+
+**User Story:** As a security engineer, I want the caller to derive a shared encryption key using ECDH and HKDF, so that the caller and server can encrypt and decrypt payloads using the same symmetric key.
+
+#### Acceptance Criteria
+
+1. THE Caller_Script SHALL compute an ECDH shared secret by performing X25519 key exchange between the Client_Keypair private key and the Server_Public_Key
+2. THE Caller_Script SHALL derive the Shared_Key from the ECDH shared secret using HKDF-SHA256 with `salt=None`, `info=b"hpke-shared-key"`, and `length=32` (256-bit AES key)
+3. THE Caller_Script SHALL use the `cryptography` library for both the ECDH key exchange and HKDF key derivation
+4. THE Caller_Script SHALL retain the Shared_Key in memory for the duration of the execution session to encrypt requests and decrypt responses for both `/execute` and `/execution/{id}/output`
+5. IF the Server_Public_Key is not a valid 32-byte X25519 public key, THEN THE Caller_Script SHALL fail with an error indicating an invalid server public key
+
+### Requirement 14: Request Payload Encryption
+
+**User Story:** As a security engineer, I want all request payloads to encrypted endpoints encrypted using AES-256-GCM with the derived shared key, so that sensitive data including OIDC tokens and GitHub tokens are protected in transit.
+
+#### Acceptance Criteria
+
+1. THE Caller_Script SHALL encrypt request payloads by serializing the payload dict to JSON, then encrypting with AES-256-GCM using the Shared_Key
+2. THE Caller_Script SHALL generate a random 12-byte nonce for each encryption operation
+3. THE encrypted wire format SHALL be `nonce (12 bytes) || ciphertext` concatenated, then base64-encoded for the `encrypted_payload` field
+4. THE Caller_Script SHALL base64-encode the raw Client_Public_Key bytes for the `client_public_key` field in the `/execute` request
+5. THE Caller_Script SHALL use the `cryptography` library's AESGCM implementation for encryption
+6. THE `/execute` Encrypted_Envelope SHALL contain both `encrypted_payload` and `client_public_key` fields
+7. THE `/execution/{id}/output` encrypted request body SHALL contain only the `encrypted_payload` field (the server already has the Shared_Key from the execution context)
+
+### Requirement 15: Response Payload Decryption
+
+**User Story:** As a security engineer, I want the caller to decrypt encrypted responses from the server, so that the caller can process execution results and attestation documents.
+
+#### Acceptance Criteria
+
+1. WHEN the Remote_Executor_Server returns an encrypted response from `/execute`, THE Caller_Script SHALL extract the `encrypted_response` field from the JSON response body
+2. WHEN the Remote_Executor_Server returns an encrypted response from `/execution/{id}/output`, THE Caller_Script SHALL extract the `encrypted_response` field from the JSON response body
+3. THE Caller_Script SHALL base64-decode the `encrypted_response` value to obtain the `nonce || ciphertext` bytes
+4. THE Caller_Script SHALL decrypt the ciphertext using AES-256-GCM with the Shared_Key and the 12-byte nonce prefix
+5. THE Caller_Script SHALL deserialize the decrypted bytes as UTF-8 JSON to obtain the response payload dict
+6. IF decryption fails (invalid key, tampered ciphertext, or corrupted nonce), THEN THE Caller_Script SHALL fail the workflow step with a decryption error
+7. IF the decrypted bytes are not valid JSON, THEN THE Caller_Script SHALL fail the workflow step with a deserialization error
+
+### Requirement 16: Encrypted Communication Flow Orchestration
+
+**User Story:** As a developer, I want the caller to orchestrate the full encrypted communication flow in the correct order, so that all endpoints are called with proper encryption and the execution lifecycle is handled correctly.
+
+#### Acceptance Criteria
+
+1. THE Caller_Script SHALL execute the communication flow in this order: health_check → request_oidc_token → attest (get server public key) → generate Client_Keypair → derive Shared_Key → encrypt and send /execute → decrypt /execute response → validate attestation → encrypt and send /output polls → decrypt /output responses → validate output attestation
+2. THE Caller_Script SHALL reuse the same Shared_Key for all `/execution/{id}/output` requests within a single execution session
+3. THE Caller_Script SHALL NOT send any unencrypted request payloads to the `/execute` or `/execution/{id}/output` endpoints
+4. THE `/health` endpoint SHALL remain unencrypted (plain HTTP GET with no request body)
+5. THE `/attest` endpoint SHALL remain unencrypted (plain HTTP GET with no request body)
+6. IF the attest step fails (attestation validation failure, missing public key, or connection error), THEN THE Caller_Script SHALL fail the workflow step before attempting to send any encrypted requests
