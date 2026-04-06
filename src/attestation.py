@@ -238,6 +238,7 @@ class AttestationGenerator:
     def generate_output_attestation(
         self,
         script_output: str,
+        nonce: Optional[str] = None,
     ) -> tuple[Optional[bytes], Optional[str]]:
         """
         Generate an output attestation document for a completed script execution.
@@ -247,12 +248,15 @@ class AttestationGenerator:
 
         Args:
             script_output: The canonical Script_Output string (stdout + stderr + exit_code)
+            nonce: Optional client-provided nonce for inclusion in attestation
 
         Returns:
             Tuple of (attestation_bytes, None) on success or (None, error_message) on failure
         """
         user_data_fd = None
         user_data_path = None
+        nonce_fd = None
+        nonce_path = None
 
         try:
             # Compute SHA-256 hex digest of the script output
@@ -270,6 +274,16 @@ class AttestationGenerator:
 
             # Build command
             cmd = [self.tpm_attest_path, "--user-data", user_data_path]
+
+            # Write nonce to temporary file if provided
+            if nonce is not None:
+                nonce_fd, nonce_path = tempfile.mkstemp(
+                    prefix="output_attestation_nonce_", suffix=".txt"
+                )
+                os.write(nonce_fd, nonce.encode("utf-8"))
+                os.close(nonce_fd)
+                nonce_fd = None  # Mark as closed
+                cmd.extend(["--nonce", nonce_path])
 
             # Invoke nitro-tpm-attest with timeout
             try:
@@ -309,5 +323,15 @@ class AttestationGenerator:
             if user_data_path is not None:
                 try:
                     os.unlink(user_data_path)
+                except OSError:
+                    pass
+            if nonce_fd is not None:
+                try:
+                    os.close(nonce_fd)
+                except OSError:
+                    pass
+            if nonce_path is not None:
+                try:
+                    os.unlink(nonce_path)
                 except OSError:
                     pass

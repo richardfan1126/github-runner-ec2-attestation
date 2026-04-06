@@ -1966,22 +1966,22 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify attestation documents generated for /execute and /execution/{id}/output do NOT include Server_Public_Key
     - **Validates: Requirements 37.9, 39.2**
 
-- [ ] 94. Checkpoint - Ensure attest endpoint and encryption manager tests pass
+- [x] 94. Checkpoint - Ensure attest endpoint and encryption manager tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 95. Add nonce support across all attestation-producing endpoints
-  - [ ] 95.1 Update /execute endpoint to pass nonce from decrypted body to attestation generator
+- [x] 95. Add nonce support across all attestation-producing endpoints
+  - [x] 95.1 Update /execute endpoint to pass nonce from decrypted body to attestation generator
     - Extract optional `nonce` field from decrypted request body
     - Pass nonce to AttestationGenerator.generate_attestation
     - _Requirements: 38.2, 38.4_
 
-  - [ ] 95.2 Update /execution/{id}/output endpoint to pass nonce to attestation generator
+  - [x] 95.2 Update /execution/{id}/output endpoint to pass nonce to attestation generator
     - Extract optional `nonce` from decrypted request body
     - Pass nonce to generate_output_attestation when generating Output_Attestation_Document
     - Update generate_output_attestation to accept optional nonce parameter
     - _Requirements: 38.3, 38.4_
 
-  - [ ] 95.3 Write property test for Nonce Passthrough in Attestation
+  - [x] 95.3 Write property test for Nonce Passthrough in Attestation
     - **Property 126: Nonce Passthrough in Attestation**
     - For random nonce values on /attest, /execute, and /execution/{id}/output, verify the nonce is passed to nitro-tpm-attest and included in the attestation document
     - **Validates: Requirements 37.5, 38.2, 38.3, 38.4, 38.6**

@@ -399,7 +399,8 @@ def add_routes(app: FastAPI) -> None:
             attestation_doc, attestation_error = attestation_gen.generate_attestation(
                 body['repository_url'],
                 body['commit_hash'],
-                body['script_path']
+                body['script_path'],
+                nonce=body.get('nonce'),
             )
             
             if attestation_error:
@@ -478,7 +479,7 @@ def add_routes(app: FastAPI) -> None:
 
     
     @app.get("/execution/{execution_id}/output")
-    async def get_execution_output(execution_id: str, request: Request, offset: int = 0):
+    async def get_execution_output(execution_id: str, request: Request, offset: int = 0, nonce: str = None):
         """
         Get execution status and output
         
@@ -578,7 +579,7 @@ def add_routes(app: FastAPI) -> None:
                     
                     attestation_gen = request.app.state.attestation_generator
                     attestation_bytes, attestation_error_msg = (
-                        attestation_gen.generate_output_attestation(script_output)
+                        attestation_gen.generate_output_attestation(script_output, nonce=nonce)
                     )
                     
                     if attestation_bytes is not None:
