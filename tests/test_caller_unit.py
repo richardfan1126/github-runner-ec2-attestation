@@ -625,3 +625,75 @@ class TestClientEncryptionEdgeCases:
         with pytest.raises(CallerError) as exc_info:
             server.decrypt_response(encoded)
         assert exc_info.value.phase == "encryption"
+
+
+class TestNonceVerificationEdgeCases:
+    """Unit tests for nonce verification edge cases.
+    Validates: Requirements 3.13, 5.14, 11.12"""
+
+    def _wrap_cose_sign1(self, payload_dict: dict) -> str:
+        """Wrap a payload dict in a COSE Sign1 structure and return base64 string."""
+        payload_bytes = cbor2.dumps(payload_dict)
+        protected_header = cbor2.dumps({1: -35})
+        cose_array = [protected_header, {}, payload_bytes, b'\x00' * 96]
+        return base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
+
+    def _make_base_payload(self, extra_fields: dict | None = None) -> dict:
+        """Create a valid attestation payload dict for testing."""
+        doc = {
+            "module_id": "test-module",
+            "digest": "SHA384",
+            "timestamp": 1700000000000,
+            "nitrotpm_pcrs": {0: b'\x00' * 48},
+            "certificate": b'\x00' * 32,
+            "cabundle": [b'\x00' * 32],
+        }
+        if extra_fields:
+            doc.update(extra_fields)
+        return doc
+
+    def test_matching_nonce_passes_validation(self):
+        """Matching nonce passes validation.
+        Validates: Requirement 3.13"""
+        caller = _make_caller()
+        nonce = "abc123"
+        payload = self._make_base_payload({"nonce": nonce})
+        b64_str = self._wrap_cose_sign1(payload)
+
+        result = caller.validate_attestation(b64_str, expected_nonce=nonce)
+        assert isinstance(result, dict)
+
+    def test_mismatched_nonce_raises_caller_error(self):
+        """Mismatched nonce raises CallerError.
+        Validates: Requirement 3.13"""
+        caller = _make_caller()
+        payload = self._make_base_payload({"nonce": "actual-nonce"})
+        b64_str = self._wrap_cose_sign1(payload)
+
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str, expected_nonce="expected-nonce")
+        assert exc_info.value.phase == "attestation"
+        assert "nonce" in exc_info.value.message.lower() or "mismatch" in exc_info.value.message.lower()
+
+    def test_missing_nonce_field_raises_caller_error(self):
+        """Missing nonce field raises CallerError.
+        Validates: Requirement 11.12"""
+        caller = _make_caller()
+        payload = self._make_base_payload()  # No nonce field
+        b64_str = self._wrap_cose_sign1(payload)
+
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str, expected_nonce="some-nonce")
+        assert exc_info.value.phase == "attestation"
+        assert "nonce" in exc_info.value.message.lower() or "missing" in exc_info.value.message.lower()
+
+    def test_nonce_as_bytes_decoded_correctly(self):
+        """Nonce stored as bytes is decoded to string for comparison.
+        Validates: Requirement 5.14"""
+        caller = _make_caller()
+        nonce = "hex-nonce-value"
+        payload = self._make_base_payload({"nonce": nonce.encode("utf-8")})
+        b64_str = self._wrap_cose_sign1(payload)
+
+        result = caller.validate_attestation(b64_str, expected_nonce=nonce)
+        assert isinstance(result, dict)

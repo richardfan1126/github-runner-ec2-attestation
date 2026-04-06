@@ -168,6 +168,37 @@ class RemoteExecutorCaller:
         self.audience = audience
         self._oidc_token: str | None = None
 
+    @staticmethod
+    def generate_nonce() -> str:
+        """Generate a unique random nonce for attestation freshness verification.
+
+        Returns a 64-character hex string (32 random bytes).
+        """
+        return os.urandom(32).hex()
+
+    def _verify_nonce(self, payload_doc: dict, expected_nonce: str, phase: str) -> None:
+        """Verify the nonce field in the attestation payload matches the expected nonce.
+
+        Raises CallerError if the nonce is missing or does not match.
+        """
+        nonce_raw = payload_doc.get("nonce")
+        if nonce_raw is None:
+            raise CallerError(
+                message="Attestation document missing nonce field",
+                phase=phase,
+                details={"expected_nonce": expected_nonce},
+            )
+        if isinstance(nonce_raw, bytes):
+            nonce_value = nonce_raw.decode("utf-8")
+        else:
+            nonce_value = str(nonce_raw)
+        if nonce_value != expected_nonce:
+            raise CallerError(
+                message=f"Nonce mismatch: expected {expected_nonce}, got {nonce_value}",
+                phase=phase,
+                details={"expected": expected_nonce, "actual": nonce_value},
+            )
+
     def request_oidc_token(self) -> str:
         """Request an OIDC token from GitHub's OIDC provider.
 
@@ -366,7 +397,7 @@ class RemoteExecutorCaller:
 
         return list(cose_array)
 
-    def validate_attestation(self, attestation_b64: str) -> dict:
+    def validate_attestation(self, attestation_b64: str, expected_nonce: str | None = None) -> dict:
         """Decode base64 -> CBOR -> COSE Sign1 array. Validate and verify.
 
         Returns parsed attestation payload dict.
@@ -419,6 +450,10 @@ class RemoteExecutorCaller:
 
         # Validate PCR values
         self._validate_pcrs(payload_doc["nitrotpm_pcrs"])
+
+        # Verify nonce freshness if expected
+        if expected_nonce is not None:
+            self._verify_nonce(payload_doc, expected_nonce, phase="attestation")
 
         # Log attestation document fields for audit
         for field in EXPECTED_ATTESTATION_FIELDS:
@@ -632,6 +667,7 @@ class RemoteExecutorCaller:
         stdout: str,
         stderr: str,
         exit_code: int,
+        expected_nonce: str | None = None,
     ) -> bool:
         """Decode output attestation CBOR, extract user_data digest.
 
@@ -706,6 +742,17 @@ class RemoteExecutorCaller:
                 phase="output_attestation",
                 details=exc.details,
             )
+
+        # Verify nonce freshness if expected
+        if expected_nonce is not None:
+            try:
+                self._verify_nonce(payload_doc, expected_nonce, phase="output_attestation")
+            except CallerError as exc:
+                raise CallerError(
+                    message=exc.message,
+                    phase="output_attestation",
+                    details=exc.details,
+                )
 
         # Extract user_data from verified payload (SHA-256 hex digest)
         user_data_raw = payload_doc.get("user_data")

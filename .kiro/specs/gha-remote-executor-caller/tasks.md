@@ -405,39 +405,39 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test decrypted response that is not valid JSON raises `CallerError` (Req 15.7)
     - _Requirements: 13.5, 14.1, 15.6, 15.7_
 
-- [ ] 21. Checkpoint - Ensure ClientEncryption tests pass
+- [x] 21. Checkpoint - Ensure ClientEncryption tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 22. Implement `generate_nonce` and `_verify_nonce` methods
-  - [ ] 22.1 Implement `generate_nonce` static method on `RemoteExecutorCaller`
+- [x] 22. Implement `generate_nonce` and `_verify_nonce` methods
+  - [x] 22.1 Implement `generate_nonce` static method on `RemoteExecutorCaller`
     - Generate 32 random bytes and return as 64-char hex string
     - Each call must produce a unique value
     - _Requirements: 3.12, 5.13, 11.11, 11.12_
 
-  - [ ] 22.2 Implement `_verify_nonce` private method on `RemoteExecutorCaller`
+  - [x] 22.2 Implement `_verify_nonce` private method on `RemoteExecutorCaller`
     - Accept `payload_doc` dict, `expected_nonce` string, and `phase` string
     - Extract `nonce` field from payload, decode from bytes if necessary
     - Compare against `expected_nonce`; raise `CallerError` if missing or mismatched
     - _Requirements: 3.13, 5.14, 11.12_
 
-  - [ ] 22.3 Update `validate_attestation` to accept optional `expected_nonce` parameter
+  - [x] 22.3 Update `validate_attestation` to accept optional `expected_nonce` parameter
     - Add `expected_nonce: str | None = None` parameter
     - After PCR validation, if `expected_nonce` is provided, call `_verify_nonce`
     - _Requirements: 3.13, 11.12_
 
-  - [ ] 22.4 Update `validate_output_attestation` to accept optional `expected_nonce` parameter
+  - [x] 22.4 Update `validate_output_attestation` to accept optional `expected_nonce` parameter
     - Add `expected_nonce: str | None = None` parameter
     - After PCR validation, if `expected_nonce` is provided, call `_verify_nonce`
     - _Requirements: 5.14_
 
-  - [ ] 22.5 Write property test for nonce freshness verification
+  - [x] 22.5 Write property test for nonce freshness verification
     - **Property 18: Nonce freshness verification**
     - Generate random nonce strings, build attestation documents with matching and non-matching nonces
     - Verify `validate_attestation` with `expected_nonce` accepts when nonces match
     - Verify raises `CallerError` when nonces differ or nonce field is missing
     - **Validates: Requirements 3.11, 3.12, 3.13, 5.13, 5.14, 11.3, 11.11, 11.12**
 
-  - [ ] 22.6 Write unit tests for nonce verification edge cases
+  - [x] 22.6 Write unit tests for nonce verification edge cases
     - Test matching nonce passes validation
     - Test mismatched nonce raises `CallerError`
     - Test missing nonce field raises `CallerError`

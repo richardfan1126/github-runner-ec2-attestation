@@ -1190,3 +1190,133 @@ class TestAESGCMDecryptionRejectsTamperedCiphertext:
         with pytest.raises(CallerError) as exc_info:
             server.decrypt_response(tampered_b64)
         assert exc_info.value.phase == "encryption"
+
+
+# ---------------------------------------------------------------------------
+# Property 18: Nonce freshness verification
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 18: Nonce freshness verification
+# **Validates: Requirements 3.11, 3.12, 3.13, 5.13, 5.14, 11.3, 11.11, 11.12**
+class TestNonceFreshnessVerification:
+    """Property 18: Nonce freshness verification.
+
+    For any random nonce string, an attestation document containing a matching
+    nonce should pass validation when expected_nonce is provided. A mismatched
+    or missing nonce should raise CallerError.
+    """
+
+    @given(
+        nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_matching_nonce_accepted(self, nonce: str):
+        """validate_attestation accepts when nonce in payload matches expected_nonce."""
+        caller = _make_caller()
+        payload = _make_test_payload(extra_fields={"nonce": nonce.encode("utf-8")})
+        b64_str = _wrap_cose_sign1(payload)
+
+        result = caller.validate_attestation(b64_str, expected_nonce=nonce)
+        assert isinstance(result, dict)
+        assert result["nonce"] == nonce.encode("utf-8")
+
+    @given(
+        nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+        other_nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_mismatched_nonce_rejected(self, nonce: str, other_nonce: str):
+        """validate_attestation raises CallerError when nonce in payload differs from expected_nonce."""
+        assume(nonce != other_nonce)
+        caller = _make_caller()
+        payload = _make_test_payload(extra_fields={"nonce": nonce.encode("utf-8")})
+        b64_str = _wrap_cose_sign1(payload)
+
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str, expected_nonce=other_nonce)
+        assert exc_info.value.phase == "attestation"
+        assert "nonce" in exc_info.value.message.lower() or "mismatch" in exc_info.value.message.lower()
+
+    @given(
+        nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_missing_nonce_rejected(self, nonce: str):
+        """validate_attestation raises CallerError when nonce field is missing from payload."""
+        caller = _make_caller()
+        payload = _make_test_payload()  # No nonce field
+        b64_str = _wrap_cose_sign1(payload)
+
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_attestation(b64_str, expected_nonce=nonce)
+        assert exc_info.value.phase == "attestation"
+        assert "nonce" in exc_info.value.message.lower() or "missing" in exc_info.value.message.lower()
+
+    @given(
+        nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=50)
+    def test_no_expected_nonce_skips_verification(self, nonce: str):
+        """validate_attestation without expected_nonce does not check nonce field."""
+        caller = _make_caller()
+        payload = _make_test_payload()  # No nonce field
+        b64_str = _wrap_cose_sign1(payload)
+
+        # Should pass — no nonce verification when expected_nonce is None
+        result = caller.validate_attestation(b64_str)
+        assert isinstance(result, dict)
+
+    def test_generate_nonce_produces_unique_values(self):
+        """generate_nonce produces unique 64-char hex strings."""
+        nonces = {RemoteExecutorCaller.generate_nonce() for _ in range(100)}
+        assert len(nonces) == 100
+        for n in nonces:
+            assert len(n) == 64
+            int(n, 16)  # Validates it's valid hex
+
+    @given(
+        nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=20)
+    def test_output_attestation_matching_nonce_accepted(self, nonce: str):
+        """validate_output_attestation accepts when nonce matches expected_nonce."""
+        import hashlib as _hashlib
+
+        stdout_val, stderr_val, exit_code_val = "out", "err", 0
+        canonical = f"stdout:{stdout_val}\nstderr:{stderr_val}\nexit_code:{exit_code_val}"
+        digest = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        payload = _make_test_payload(extra_fields={
+            "user_data": digest.encode("utf-8"),
+            "nonce": nonce.encode("utf-8"),
+        })
+        b64_str = _wrap_cose_sign1(payload)
+
+        caller = _make_caller()
+        result = caller.validate_output_attestation(b64_str, stdout_val, stderr_val, exit_code_val, expected_nonce=nonce)
+        assert result is True
+
+    @given(
+        nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+        other_nonce=st.text(min_size=1, max_size=128, alphabet=st.characters(whitelist_categories=("L", "N"))),
+    )
+    @settings(max_examples=20)
+    def test_output_attestation_mismatched_nonce_rejected(self, nonce: str, other_nonce: str):
+        """validate_output_attestation raises CallerError when nonce differs."""
+        assume(nonce != other_nonce)
+        import hashlib as _hashlib
+
+        stdout_val, stderr_val, exit_code_val = "out", "err", 0
+        canonical = f"stdout:{stdout_val}\nstderr:{stderr_val}\nexit_code:{exit_code_val}"
+        digest = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        payload = _make_test_payload(extra_fields={
+            "user_data": digest.encode("utf-8"),
+            "nonce": nonce.encode("utf-8"),
+        })
+        b64_str = _wrap_cose_sign1(payload)
+
+        caller = _make_caller()
+        with pytest.raises(CallerError) as exc_info:
+            caller.validate_output_attestation(b64_str, stdout_val, stderr_val, exit_code_val, expected_nonce=other_nonce)
+        assert exc_info.value.phase == "output_attestation"
