@@ -2070,14 +2070,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify Shared_Key is stored after /execute, persists during execution, and is removed when execution record is cleaned up
     - **Validates: Requirements 41.1, 41.2, 41.6**
 
-- [ ] 101. Verify encryption exemption for non-context endpoints
-  - [ ] 101.1 Ensure /attest, /health, /metrics return plain unencrypted JSON
+- [x] 101. Verify encryption exemption for non-context endpoints
+  - [x] 101.1 Ensure /attest, /health, /metrics return plain unencrypted JSON
     - Verify no encryption middleware is applied to these endpoints
     - /attest returns plain JSON with base64-encoded attestation document
     - /health and /metrics return plain JSON as before
     - _Requirements: 43.1, 43.2, 43.3, 43.4_
 
-  - [ ] 101.2 Write property test for Encryption Exemption
+  - [x] 101.2 Write property test for Encryption Exemption
     - **Property 135: Encryption Exemption for Non-Context Endpoints**
     - Verify /attest, /health, /metrics responses are plain unencrypted JSON
     - **Validates: Requirements 43.1, 43.2, 43.3, 43.4**
