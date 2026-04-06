@@ -1887,8 +1887,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Parse `kiwi-descriptions/appliance.kiwi` XML and verify the `git` package is listed in the `<packages type="image">` section
     - **Validates: Requirements 35.1**
 
-- [ ] 91. Implement EncryptionManager class
-  - [ ] 91.1 Create src/encryption.py with EncryptionManager class
+- [x] 91. Implement EncryptionManager class
+  - [x] 91.1 Create src/encryption.py with EncryptionManager class
     - Generate Server_Keypair (X25519) at initialization using the `cryptography` library; hold in memory only, never persist to disk
     - Implement `server_public_key` property returning serialized Server_Public_Key bytes
     - Implement `decrypt_request(encrypted_payload, client_public_key)` that derives Shared_Key via HPKE from Client_Public_Key and Server_Keypair, decrypts the payload, and returns `(decrypted_dict, shared_key_bytes)`
@@ -1901,22 +1901,22 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Log keypair generation at INFO level without logging private key material
     - _Requirements: 36.1, 36.2, 36.3, 36.4, 36.5, 40.3, 40.4, 40.5, 41.1, 41.2, 41.6, 41.7_
 
-  - [ ] 91.2 Write property test for Server Keypair Consistency
+  - [x] 91.2 Write property test for Server Keypair Consistency
     - **Property 122: Server Keypair Consistency**
     - Create a single EncryptionManager instance and verify that `server_public_key` returns the same bytes across multiple accesses
     - **Validates: Requirements 36.3, 37.4**
 
-  - [ ] 91.3 Write property test for Server Public Key Serialization Round-Trip
+  - [x] 91.3 Write property test for Server Public Key Serialization Round-Trip
     - **Property 127: Server Public Key Serialization Round-Trip**
     - Serialize the Server_Public_Key, deserialize it, and verify it can be used for HPKE key exchange producing the same Shared_Key
     - **Validates: Requirements 39.3, 39.4**
 
-  - [ ] 91.4 Write property test for HPKE Encrypt-Decrypt Round-Trip
+  - [x] 91.4 Write property test for HPKE Encrypt-Decrypt Round-Trip
     - **Property 128: HPKE Encrypt-Decrypt Round-Trip for Execute**
     - For random valid payloads, client-side encrypt with Server_Public_Key, server-side decrypt with Server_Keypair, verify original payload is recovered
     - **Validates: Requirements 40.1, 40.3, 40.4, 40.8**
 
-  - [ ] 91.5 Write unit tests for EncryptionManager
+  - [x] 91.5 Write unit tests for EncryptionManager
     - Test keypair generation at startup
     - Test encrypt/decrypt round-trip with known payloads
     - Test decryption failure with wrong key or corrupted ciphertext raises ValueError

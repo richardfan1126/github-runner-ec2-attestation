@@ -478,6 +478,7 @@ name = "github-actions-remote-executor"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "docker" },
     { name = "fastapi" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -505,6 +506,7 @@ dev = [
 requires-dist = [
     { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.42.77" },
     { name = "cbor2", marker = "extra == 'dev'", specifier = ">=5.9.0" },
+    { name = "cryptography", specifier = ">=41.0.0" },
     { name = "cryptography", marker = "extra == 'dev'", specifier = ">=41.0.0" },
     { name = "docker", specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
