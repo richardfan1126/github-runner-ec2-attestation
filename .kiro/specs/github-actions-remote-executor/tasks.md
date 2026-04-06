@@ -1986,8 +1986,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - For random nonce values on /attest, /execute, and /execution/{id}/output, verify the nonce is passed to nitro-tpm-attest and included in the attestation document
     - **Validates: Requirements 37.5, 38.2, 38.3, 38.4, 38.6**
 
-- [ ] 96. Update /execute endpoint for encrypted payloads
-  - [ ] 96.1 Modify POST /execute to accept encrypted request envelope
+- [x] 96. Update /execute endpoint for encrypted payloads
+  - [x] 96.1 Modify POST /execute to accept encrypted request envelope
     - Parse outer JSON body: `{"encrypted_payload": "base64", "client_public_key": "base64"}`
     - Call EncryptionManager.decrypt_request to derive Shared_Key and decrypt payload
     - Return HTTP 400 on decryption failure
@@ -1995,26 +1995,26 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Extract all execution request fields from decrypted body
     - _Requirements: 40.1, 40.2, 40.3, 40.4, 40.5, 40.6, 40.7, 40.9_
 
-  - [ ] 96.2 Store Encryption_Context after successful /execute decryption
+  - [x] 96.2 Store Encryption_Context after successful /execute decryption
     - After creating execution record, call EncryptionManager.store_encryption_context(execution_id, shared_key)
     - _Requirements: 41.1, 41.2, 41.7_
 
-  - [ ] 96.3 Encrypt /execute response payload
+  - [x] 96.3 Encrypt /execute response payload
     - Encrypt the response dict (execution_id, attestation_document, status) using EncryptionManager.encrypt_response with the Shared_Key
     - Return base64-encoded encrypted response
     - _Requirements: 41.3, 42.1_
 
-  - [ ] 96.4 Write property test for Decryption Failure Returns HTTP 400
+  - [x] 96.4 Write property test for Decryption Failure Returns HTTP 400
     - **Property 129: Decryption Failure Returns HTTP 400**
     - Send random bytes, wrong key, or corrupted ciphertext to /execute and verify HTTP 400 response
     - **Validates: Requirements 40.5, 42.7**
 
-  - [ ] 96.5 Write property test for OIDC Token Extracted from Decrypted Body
+  - [x] 96.5 Write property test for OIDC Token Extracted from Decrypted Body
     - **Property 130: OIDC Token Extracted from Decrypted Body**
     - Verify the server extracts and validates OIDC token from decrypted body `oidc_token` field, not from Authorization header
     - **Validates: Requirements 40.6, 40.9, 2.1, 2.2**
 
-  - [ ] 96.6 Write property test for Execute Response Encryption Round-Trip
+  - [x] 96.6 Write property test for Execute Response Encryption Round-Trip
     - **Property 132: Execute Response Encryption Round-Trip**
     - Encrypt /execute response with Shared_Key, client decrypts with same key, verify original content recovered
     - **Validates: Requirements 41.3, 42.1, 42.8**
