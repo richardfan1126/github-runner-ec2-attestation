@@ -666,21 +666,31 @@ class RemoteExecutorCaller:
                 )
 
     def poll_output(self, execution_id: str) -> dict:
-        """Poll GET /execution/{id}/output until complete or timeout.
+        """Poll POST /execution/{id}/output with encrypted requests until complete or timeout.
+
+        Each poll request generates a unique nonce, encrypts {oidc_token, nonce}
+        via HPKE, and sends {encrypted_payload} (no client_public_key, no Authorization header).
+        Decrypts the encrypted response from the server.
+
+        On final response (complete=true), stores the last nonce for output
+        attestation nonce verification.
 
         Logs incremental output during polling.
-        Returns final response with stdout, stderr, exit_code,
+        Returns final decrypted response with stdout, stderr, exit_code,
         output_attestation_document.
-        Raises CallerError on timeout or repeated HTTP failures.
+        Raises CallerError on timeout, repeated HTTP failures, or decryption errors.
         """
+        if not hasattr(self, "_encryption") or self._encryption is None:
+            raise CallerError(
+                message="Cannot poll: HPKE key exchange not completed (call attest() first)",
+                phase="polling",
+            )
+
         url = f"{self.server_url}/execution/{execution_id}/output"
         start_time = time.monotonic()
         consecutive_errors = 0
         prev_stdout_offset = 0
         prev_stderr_offset = 0
-        headers = {}
-        if self._oidc_token:
-            headers["Authorization"] = f"Bearer {self._oidc_token}"
 
         while True:
             elapsed = time.monotonic() - start_time
@@ -691,8 +701,16 @@ class RemoteExecutorCaller:
                     details={"elapsed": elapsed, "max_poll_duration": self.max_poll_duration},
                 )
 
+            nonce = self.generate_nonce()
+            plaintext_payload = {
+                "oidc_token": self._oidc_token or "",
+                "nonce": nonce,
+            }
+            encrypted_payload = self._encryption.encrypt_payload(plaintext_payload)
+            envelope = {"encrypted_payload": encrypted_payload}
+
             try:
-                response = requests.get(url, headers=headers, timeout=self.timeout)
+                response = requests.post(url, json=envelope, timeout=self.timeout)
             except requests.RequestException as exc:
                 consecutive_errors += 1
                 if consecutive_errors >= self.max_retries:
@@ -732,7 +750,9 @@ class RemoteExecutorCaller:
 
             # Reset consecutive error counter on success
             consecutive_errors = 0
-            data = response.json()
+            resp_data = response.json()
+            encrypted_response_b64 = resp_data.get("encrypted_response", "")
+            data = self._encryption.decrypt_response(encrypted_response_b64)
 
             # Log incremental output
             stdout = data.get("stdout", "")
@@ -745,6 +765,7 @@ class RemoteExecutorCaller:
                 prev_stderr_offset = len(stderr)
 
             if data.get("complete"):
+                self._last_poll_nonce = nonce
                 return {
                     "stdout": data.get("stdout", ""),
                     "stderr": data.get("stderr", ""),

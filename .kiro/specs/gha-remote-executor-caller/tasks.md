@@ -497,8 +497,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test execute verifies nonce in returned attestation (Req 3.13)
     - _Requirements: 3.1, 3.11, 3.13, 10.1, 10.3, 14.6_
 
-- [ ] 26. Update `poll_output` method for HPKE encryption
-  - [ ] 26.1 Rewrite `poll_output` to use encrypted POST requests
+- [x] 26. Update `poll_output` method for HPKE encryption
+  - [x] 26.1 Rewrite `poll_output` to use encrypted POST requests
     - Change from HTTP GET to HTTP POST for each poll request
     - For each poll iteration: generate unique nonce, build plaintext `{oidc_token, nonce}`, encrypt via `self._encryption.encrypt_payload()`
     - Send JSON body `{encrypted_payload: "base64"}` — no `client_public_key`, no Authorization header
@@ -508,7 +508,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Handle transient HTTP errors with retry logic as before
     - _Requirements: 5.1, 5.2, 5.3, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 10.2, 10.3, 14.7, 15.2_
 
-  - [ ] 26.2 Write unit tests for encrypted poll_output
+  - [x] 26.2 Write unit tests for encrypted poll_output
     - Test poll_output sends POST (not GET) with encrypted payload
     - Test poll_output does not include Authorization header (Req 10.3)
     - Test poll_output includes OIDC token in encrypted payload (Req 10.2)
@@ -517,7 +517,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test poll_output decrypts response correctly
     - _Requirements: 5.1, 5.13, 10.2, 10.3, 14.7_
 
-- [ ] 27. Checkpoint - Ensure encrypted execute and poll_output tests pass
+- [x] 27. Checkpoint - Ensure encrypted execute and poll_output tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 28. Update `run` method and orchestration flow

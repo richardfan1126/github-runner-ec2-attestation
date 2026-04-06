@@ -301,18 +301,31 @@ class TestPollingEdgeCases:
             audience="test-audience",
         )
         caller._oidc_token = "test-token"
+        # Set up encryption so poll_output can encrypt payloads
+        caller._encryption = ClientEncryption()
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        server_key = X25519PrivateKey.generate()
+        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        caller._encryption.derive_shared_key(server_pub_bytes)
 
-        incomplete_response = patch("call_remote_executor.requests.get")
-        mock_get = incomplete_response.start()
-        mock_resp = mock_get.return_value
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
+        # Build encrypted incomplete response
+        server_enc = ClientEncryption.__new__(ClientEncryption)
+        server_enc._shared_key = caller._encryption._shared_key
+        incomplete_data = {
             "stdout": "",
             "stderr": "",
             "complete": False,
             "exit_code": None,
             "output_attestation_document": None,
         }
+        encrypted_resp = server_enc.encrypt_payload(incomplete_data)
+
+        mock_post_patcher = patch("call_remote_executor.requests.post")
+        mock_post = mock_post_patcher.start()
+        mock_resp = mock_post.return_value
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"encrypted_response": encrypted_resp}
 
         try:
             with patch("call_remote_executor.time.sleep"):
@@ -321,7 +334,7 @@ class TestPollingEdgeCases:
                 assert exc_info.value.phase == "polling"
                 assert "timed out" in exc_info.value.message.lower() or "timeout" in exc_info.value.message.lower()
         finally:
-            incomplete_response.stop()
+            mock_post_patcher.stop()
 
     def test_default_poll_interval_is_5_seconds(self):
         """Default poll interval is 5 seconds.
@@ -405,6 +418,13 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.4"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
+        caller._encryption = ClientEncryption()
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        server_key = X25519PrivateKey.generate()
+        caller._encryption.derive_shared_key(
+            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        )
         mock_resp = type("MockResp", (), {"status_code": 401, "text": "Unauthorized"})()
         with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
@@ -417,6 +437,13 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.5"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
+        caller._encryption = ClientEncryption()
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        server_key = X25519PrivateKey.generate()
+        caller._encryption.derive_shared_key(
+            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        )
         mock_resp = type("MockResp", (), {"status_code": 403, "text": "Forbidden"})()
         with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
@@ -429,8 +456,15 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.4"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
+        caller._encryption = ClientEncryption()
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        server_key = X25519PrivateKey.generate()
+        caller._encryption.derive_shared_key(
+            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        )
         mock_resp = type("MockResp", (), {"status_code": 401, "text": "Unauthorized"})()
-        with patch("call_remote_executor.requests.get", return_value=mock_resp):
+        with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
                 caller.poll_output("test-exec-id")
             assert exc_info.value.phase == "polling"
@@ -441,8 +475,15 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.5"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
+        caller._encryption = ClientEncryption()
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        server_key = X25519PrivateKey.generate()
+        caller._encryption.derive_shared_key(
+            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        )
         mock_resp = type("MockResp", (), {"status_code": 403, "text": "Forbidden"})()
-        with patch("call_remote_executor.requests.get", return_value=mock_resp):
+        with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
                 caller.poll_output("test-exec-id")
             assert exc_info.value.phase == "polling"
@@ -1024,4 +1065,206 @@ class TestEncryptedExecute:
         with pytest.raises(CallerError) as exc_info:
             caller.execute("https://github.com/o/r", "abc", "s.sh", "ghp_x")
         assert exc_info.value.phase == "execute"
+        assert "hpke" in exc_info.value.message.lower() or "attest" in exc_info.value.message.lower()
+
+
+class TestEncryptedPollOutput:
+    """Unit tests for encrypted poll_output method (HPKE encryption).
+    Validates: Requirements 5.1, 5.13, 10.2, 10.3, 14.7"""
+
+    def _setup_caller_with_encryption(self):
+        """Create a caller with encryption initialized (simulating attest())."""
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        caller = _make_caller()
+        caller._oidc_token = "test-oidc-token"
+        caller._encryption = ClientEncryption()
+        server_key = X25519PrivateKey.generate()
+        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        caller._encryption.derive_shared_key(server_pub_bytes)
+
+        server_enc = ClientEncryption.__new__(ClientEncryption)
+        server_enc._shared_key = caller._encryption._shared_key
+        server_enc._private_key = server_key
+        return caller, server_enc
+
+    def _make_encrypted_response(self, server_enc, payload_dict):
+        """Build a mock HTTP response with an encrypted response body."""
+        encrypted_resp = server_enc.encrypt_payload(payload_dict)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"encrypted_response": encrypted_resp}
+        return mock_resp
+
+    def test_poll_output_sends_post_with_encrypted_payload(self):
+        """poll_output sends POST (not GET) with encrypted payload.
+        Validates: Requirement 5.1"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "hello",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        with patch("call_remote_executor.requests.post", return_value=mock_resp) as mock_post:
+            with patch("call_remote_executor.requests.get") as mock_get:
+                caller.poll_output("exec-1")
+
+        mock_post.assert_called_once()
+        mock_get.assert_not_called()
+        sent_json = mock_post.call_args[1]["json"]
+        assert "encrypted_payload" in sent_json
+
+    def test_poll_output_does_not_include_authorization_header(self):
+        """poll_output does not include Authorization header.
+        Validates: Requirement 10.3"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        with patch("call_remote_executor.requests.post", return_value=mock_resp) as mock_post:
+            caller.poll_output("exec-1")
+
+        call_kwargs = mock_post.call_args[1]
+        assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get("headers", {})
+
+    def test_poll_output_includes_oidc_token_in_encrypted_payload(self):
+        """poll_output includes OIDC token in the encrypted payload.
+        Validates: Requirement 10.2"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        caller._oidc_token = "my-poll-oidc-jwt"
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        captured_payloads = []
+        original_encrypt = caller._encryption.encrypt_payload
+
+        def capturing_encrypt(payload_dict):
+            captured_payloads.append(dict(payload_dict))
+            return original_encrypt(payload_dict)
+
+        with patch.object(caller._encryption, "encrypt_payload", side_effect=capturing_encrypt):
+            with patch("call_remote_executor.requests.post", return_value=mock_resp):
+                caller.poll_output("exec-1")
+
+        assert len(captured_payloads) == 1
+        assert captured_payloads[0]["oidc_token"] == "my-poll-oidc-jwt"
+
+    def test_poll_output_includes_unique_nonce_in_each_request(self):
+        """poll_output includes a unique nonce in each poll request.
+        Validates: Requirement 5.13"""
+        caller, server_enc = self._setup_caller_with_encryption()
+
+        # First response: incomplete, second: complete
+        incomplete_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "",
+            "stderr": "",
+            "complete": False,
+            "exit_code": None,
+            "output_attestation_document": None,
+        })
+        complete_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "done",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        captured_payloads = []
+        original_encrypt = caller._encryption.encrypt_payload
+
+        def capturing_encrypt(payload_dict):
+            captured_payloads.append(dict(payload_dict))
+            return original_encrypt(payload_dict)
+
+        with patch.object(caller._encryption, "encrypt_payload", side_effect=capturing_encrypt):
+            with patch("call_remote_executor.requests.post", side_effect=[incomplete_resp, complete_resp]):
+                with patch("call_remote_executor.time.sleep"):
+                    caller.poll_output("exec-1")
+
+        assert len(captured_payloads) == 2
+        nonce1 = captured_payloads[0]["nonce"]
+        nonce2 = captured_payloads[1]["nonce"]
+        assert len(nonce1) == 64
+        assert len(nonce2) == 64
+        assert nonce1 != nonce2  # Each request gets a unique nonce
+
+    def test_poll_output_request_body_has_encrypted_payload_only(self):
+        """poll_output request body has encrypted_payload only, no client_public_key.
+        Validates: Requirement 14.7"""
+        caller, server_enc = self._setup_caller_with_encryption()
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        with patch("call_remote_executor.requests.post", return_value=mock_resp) as mock_post:
+            caller.poll_output("exec-1")
+
+        sent_json = mock_post.call_args[1]["json"]
+        assert "encrypted_payload" in sent_json
+        assert "client_public_key" not in sent_json
+
+    def test_poll_output_decrypts_response_correctly(self):
+        """poll_output decrypts the encrypted response and returns correct data."""
+        caller, server_enc = self._setup_caller_with_encryption()
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "build output",
+            "stderr": "some warnings",
+            "complete": True,
+            "exit_code": 42,
+            "output_attestation_document": "attest-b64",
+        })
+
+        with patch("call_remote_executor.requests.post", return_value=mock_resp):
+            result = caller.poll_output("exec-1")
+
+        assert result["stdout"] == "build output"
+        assert result["stderr"] == "some warnings"
+        assert result["exit_code"] == 42
+        assert result["output_attestation_document"] == "attest-b64"
+
+    def test_poll_output_stores_last_nonce_on_completion(self):
+        """poll_output stores the last nonce for output attestation verification."""
+        caller, server_enc = self._setup_caller_with_encryption()
+        fixed_nonce = "f1e2d3c4" * 8
+
+        mock_resp = self._make_encrypted_response(server_enc, {
+            "stdout": "",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.post", return_value=mock_resp):
+                caller.poll_output("exec-1")
+
+        assert caller._last_poll_nonce == fixed_nonce
+
+    def test_poll_output_without_encryption_raises_caller_error(self):
+        """poll_output without prior attest() raises CallerError."""
+        caller = _make_caller()
+        caller._oidc_token = "test-token"
+        with pytest.raises(CallerError) as exc_info:
+            caller.poll_output("exec-1")
+        assert exc_info.value.phase == "polling"
         assert "hpke" in exc_info.value.message.lower() or "attest" in exc_info.value.message.lower()

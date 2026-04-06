@@ -86,6 +86,32 @@ def _make_caller() -> RemoteExecutorCaller:
     return RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
 
 
+def _setup_encryption(caller):
+    """Set up HPKE encryption on a caller instance (simulating attest()).
+    Returns a server-side encryption helper that shares the same key."""
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    caller._encryption = ClientEncryption()
+    server_key = X25519PrivateKey.generate()
+    server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    caller._encryption.derive_shared_key(server_pub_bytes)
+
+    server_enc = ClientEncryption.__new__(ClientEncryption)
+    server_enc._shared_key = caller._encryption._shared_key
+    server_enc._private_key = server_key
+    return server_enc
+
+
+def _make_encrypted_mock_response(server_enc, payload_dict):
+    """Build a mock HTTP response with an encrypted response body."""
+    encrypted_resp = server_enc.encrypt_payload(payload_dict)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"encrypted_response": encrypted_resp}
+    return mock_resp
+
+
 def _wrap_cose_sign1(payload_dict: dict) -> str:
     """Wrap a payload dict in a COSE Sign1 structure and return base64 string."""
     payload_bytes = cbor2.dumps(payload_dict)
@@ -290,6 +316,7 @@ class TestExecuteHTTPErrorPropagation:
     def test_execute_http_error_propagation(self, status_code: int, response_body: str):
         caller = _make_caller()
         caller._oidc_token = "test-token"
+        _setup_encryption(caller)
 
         mock_response = MagicMock()
         mock_response.status_code = status_code
@@ -558,28 +585,6 @@ class TestPollingTerminationOnCompletion:
     def test_polls_until_complete(self, n_incomplete: int, stdout_val: str, stderr_val: str, exit_code_val: int):
         """Given N incomplete responses followed by 1 complete response,
         poll_output should make exactly N+1 requests and return the final response."""
-        incomplete_response = MagicMock()
-        incomplete_response.status_code = 200
-        incomplete_response.json.return_value = {
-            "stdout": "",
-            "stderr": "",
-            "complete": False,
-            "exit_code": None,
-            "output_attestation_document": None,
-        }
-
-        complete_response = MagicMock()
-        complete_response.status_code = 200
-        complete_response.json.return_value = {
-            "stdout": stdout_val,
-            "stderr": stderr_val,
-            "complete": True,
-            "exit_code": exit_code_val,
-            "output_attestation_document": "some_b64_doc",
-        }
-
-        responses = [incomplete_response] * n_incomplete + [complete_response]
-
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             poll_interval=0,  # No sleep in tests
@@ -587,12 +592,31 @@ class TestPollingTerminationOnCompletion:
             audience="test-audience",
         )
         caller._oidc_token = "test-token"
+        server_enc = _setup_encryption(caller)
 
-        with patch("call_remote_executor.requests.get", side_effect=responses) as mock_get:
+        incomplete_resp = _make_encrypted_mock_response(server_enc, {
+            "stdout": "",
+            "stderr": "",
+            "complete": False,
+            "exit_code": None,
+            "output_attestation_document": None,
+        })
+
+        complete_resp = _make_encrypted_mock_response(server_enc, {
+            "stdout": stdout_val,
+            "stderr": stderr_val,
+            "complete": True,
+            "exit_code": exit_code_val,
+            "output_attestation_document": "some_b64_doc",
+        })
+
+        responses = [incomplete_resp] * n_incomplete + [complete_resp]
+
+        with patch("call_remote_executor.requests.post", side_effect=responses) as mock_post:
             with patch("call_remote_executor.time.sleep"):
                 result = caller.poll_output("test-exec-id")
 
-        assert mock_get.call_count == n_incomplete + 1
+        assert mock_post.call_count == n_incomplete + 1
         assert result["stdout"] == stdout_val
         assert result["stderr"] == stderr_val
         assert result["exit_code"] == exit_code_val
@@ -621,18 +645,6 @@ class TestPollingRetryOnTransientErrors:
         error_response.status_code = 500
         error_response.text = "Internal Server Error"
 
-        complete_response = MagicMock()
-        complete_response.status_code = 200
-        complete_response.json.return_value = {
-            "stdout": "ok",
-            "stderr": "",
-            "complete": True,
-            "exit_code": 0,
-            "output_attestation_document": None,
-        }
-
-        responses = [error_response] * k_errors + [complete_response]
-
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             poll_interval=0,
@@ -641,8 +653,19 @@ class TestPollingRetryOnTransientErrors:
             audience="test-audience",
         )
         caller._oidc_token = "test-token"
+        server_enc = _setup_encryption(caller)
 
-        with patch("call_remote_executor.requests.get", side_effect=responses):
+        complete_resp = _make_encrypted_mock_response(server_enc, {
+            "stdout": "ok",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        responses = [error_response] * k_errors + [complete_resp]
+
+        with patch("call_remote_executor.requests.post", side_effect=responses):
             with patch("call_remote_executor.time.sleep"):
                 result = caller.poll_output("test-exec-id")
 
@@ -669,8 +692,9 @@ class TestPollingRetryOnTransientErrors:
             audience="test-audience",
         )
         caller._oidc_token = "test-token"
+        _setup_encryption(caller)
 
-        with patch("call_remote_executor.requests.get", side_effect=responses):
+        with patch("call_remote_executor.requests.post", side_effect=responses):
             with patch("call_remote_executor.time.sleep"):
                 with pytest.raises(CallerError) as exc_info:
                     caller.poll_output("test-exec-id")
@@ -685,18 +709,6 @@ class TestPollingRetryOnTransientErrors:
         poll_output should recover."""
         max_retries = 3
 
-        complete_response = MagicMock()
-        complete_response.status_code = 200
-        complete_response.json.return_value = {
-            "stdout": "recovered",
-            "stderr": "",
-            "complete": True,
-            "exit_code": 0,
-            "output_attestation_document": None,
-        }
-
-        side_effects = [requests.ConnectionError("timeout")] * k_errors + [complete_response]
-
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             poll_interval=0,
@@ -705,8 +717,19 @@ class TestPollingRetryOnTransientErrors:
             audience="test-audience",
         )
         caller._oidc_token = "test-token"
+        server_enc = _setup_encryption(caller)
 
-        with patch("call_remote_executor.requests.get", side_effect=side_effects):
+        complete_resp = _make_encrypted_mock_response(server_enc, {
+            "stdout": "recovered",
+            "stderr": "",
+            "complete": True,
+            "exit_code": 0,
+            "output_attestation_document": None,
+        })
+
+        side_effects = [requests.ConnectionError("timeout")] * k_errors + [complete_resp]
+
+        with patch("call_remote_executor.requests.post", side_effect=side_effects):
             with patch("call_remote_executor.time.sleep"):
                 result = caller.poll_output("test-exec-id")
 
@@ -739,29 +762,25 @@ class TestExitCodePropagation:
         health_response.status_code = 200
         health_response.json.return_value = {"status": "healthy"}
 
-        exec_response = MagicMock()
-        exec_response.status_code = 200
-        exec_response.json.return_value = {
+        # Mock execute and poll_output at the method level since they now require encryption
+        exec_result = {
             "execution_id": "test-id",
             "attestation_document": "dGVzdA==",
             "status": "queued",
         }
-
-        poll_response = MagicMock()
-        poll_response.status_code = 200
-        poll_response.json.return_value = {
+        poll_result = {
             "stdout": "out",
             "stderr": "err",
-            "complete": True,
             "exit_code": exit_code,
             "output_attestation_document": None,
         }
 
-        with patch("call_remote_executor.requests.get", side_effect=[health_response, poll_response]):
-            with patch("call_remote_executor.requests.post", return_value=exec_response):
+        with patch("call_remote_executor.requests.get", return_value=health_response):
+            with patch.object(caller, "execute", return_value=exec_result):
                 with patch.object(caller, "validate_attestation", return_value={}):
-                    with patch.object(caller, "request_oidc_token", return_value="mock-token"):
-                        result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+                    with patch.object(caller, "poll_output", return_value=poll_result):
+                        with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                            result = caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
 
         assert result == exit_code
 
@@ -795,29 +814,25 @@ class TestSummaryContainsExecutionResults:
         health_response.status_code = 200
         health_response.json.return_value = {"status": "healthy"}
 
-        exec_response = MagicMock()
-        exec_response.status_code = 200
-        exec_response.json.return_value = {
+        # Mock execute and poll_output at the method level since they now require encryption
+        exec_result = {
             "execution_id": "test-id",
             "attestation_document": "dGVzdA==",
             "status": "queued",
         }
-
-        poll_response = MagicMock()
-        poll_response.status_code = 200
-        poll_response.json.return_value = {
+        poll_result = {
             "stdout": stdout_val,
             "stderr": stderr_val,
-            "complete": True,
             "exit_code": exit_code_val,
             "output_attestation_document": None,
         }
 
-        with patch("call_remote_executor.requests.get", side_effect=[health_response, poll_response]):
-            with patch("call_remote_executor.requests.post", return_value=exec_response):
+        with patch("call_remote_executor.requests.get", return_value=health_response):
+            with patch.object(caller, "execute", return_value=exec_result):
                 with patch.object(caller, "validate_attestation", return_value={}):
-                    with patch.object(caller, "request_oidc_token", return_value="mock-token"):
-                        caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
+                    with patch.object(caller, "poll_output", return_value=poll_result):
+                        with patch.object(caller, "request_oidc_token", return_value="mock-token"):
+                            caller.run("https://github.com/o/r", "abc", "script.sh", "tok")
 
         summary = caller.summary
         assert stdout_val in summary
@@ -888,38 +903,48 @@ class TestOIDCTokenAcquisition:
 # Feature: gha-remote-executor-caller, Property 14: OIDC token transmission
 # **Validates: Requirements 10.1, 10.2, 10.3**
 class TestOIDCTokenTransmission:
-    """Property 14: execute and poll_output include Authorization: Bearer <token>
-    in their HTTP request headers, while health_check does NOT."""
+    """Property 14: execute and poll_output include OIDC token in encrypted payload,
+    while health_check does NOT include any auth."""
 
     @given(
         oidc_token=st.text(min_size=1, max_size=200, alphabet=st.characters(whitelist_categories=("L", "N"))),
     )
     @settings(max_examples=50)
     def test_execute_includes_bearer_token(self, oidc_token: str):
-        """execute() includes Authorization: Bearer <token> header."""
+        """execute() includes OIDC token in the encrypted payload (no Authorization header)."""
         caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         caller._oidc_token = oidc_token
+        server_enc = _setup_encryption(caller)
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
+        mock_response = _make_encrypted_mock_response(server_enc, {
             "execution_id": "test-id",
-            "attestation_document": "dGVzdA==",
+            "attestation_document": "",
             "status": "queued",
-        }
+        })
 
-        with patch("call_remote_executor.requests.post", return_value=mock_response) as mock_post:
-            caller.execute("https://github.com/o/r", "abc", "script.sh", "tok")
+        captured_payloads = []
+        original_encrypt = caller._encryption.encrypt_payload
 
+        def capturing_encrypt(payload_dict):
+            captured_payloads.append(dict(payload_dict))
+            return original_encrypt(payload_dict)
+
+        with patch.object(caller._encryption, "encrypt_payload", side_effect=capturing_encrypt):
+            with patch("call_remote_executor.requests.post", return_value=mock_response) as mock_post:
+                caller.execute("https://github.com/o/r", "abc", "script.sh", "tok")
+
+        # OIDC token should be in the encrypted payload, not in headers
+        assert len(captured_payloads) == 1
+        assert captured_payloads[0]["oidc_token"] == oidc_token
         call_kwargs = mock_post.call_args[1]
-        assert call_kwargs["headers"]["Authorization"] == f"Bearer {oidc_token}"
+        assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get("headers", {})
 
     @given(
         oidc_token=st.text(min_size=1, max_size=200, alphabet=st.characters(whitelist_categories=("L", "N"))),
     )
     @settings(max_examples=50)
     def test_poll_output_includes_bearer_token(self, oidc_token: str):
-        """poll_output() includes Authorization: Bearer <token> header."""
+        """poll_output() includes OIDC token in the encrypted payload (no Authorization header)."""
         caller = RemoteExecutorCaller(
             server_url="http://localhost:8080",
             poll_interval=0,
@@ -927,23 +952,33 @@ class TestOIDCTokenTransmission:
             audience="test-audience",
         )
         caller._oidc_token = oidc_token
+        server_enc = _setup_encryption(caller)
 
-        complete_response = MagicMock()
-        complete_response.status_code = 200
-        complete_response.json.return_value = {
+        complete_resp = _make_encrypted_mock_response(server_enc, {
             "stdout": "ok",
             "stderr": "",
             "complete": True,
             "exit_code": 0,
             "output_attestation_document": None,
-        }
+        })
 
-        with patch("call_remote_executor.requests.get", return_value=complete_response) as mock_get:
-            with patch("call_remote_executor.time.sleep"):
-                caller.poll_output("test-exec-id")
+        captured_payloads = []
+        original_encrypt = caller._encryption.encrypt_payload
 
-        call_kwargs = mock_get.call_args[1]
-        assert call_kwargs["headers"]["Authorization"] == f"Bearer {oidc_token}"
+        def capturing_encrypt(payload_dict):
+            captured_payloads.append(dict(payload_dict))
+            return original_encrypt(payload_dict)
+
+        with patch.object(caller._encryption, "encrypt_payload", side_effect=capturing_encrypt):
+            with patch("call_remote_executor.requests.post", return_value=complete_resp) as mock_post:
+                with patch("call_remote_executor.time.sleep"):
+                    caller.poll_output("test-exec-id")
+
+        # OIDC token should be in the encrypted payload, not in headers
+        assert len(captured_payloads) == 1
+        assert captured_payloads[0]["oidc_token"] == oidc_token
+        call_kwargs = mock_post.call_args[1]
+        assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get("headers", {})
 
     @given(
         oidc_token=st.text(min_size=1, max_size=200, alphabet=st.characters(whitelist_categories=("L", "N"))),
@@ -986,6 +1021,7 @@ class TestOIDCAuthenticationErrorHandling:
         """execute() raises CallerError with correct message for 401/403."""
         caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         caller._oidc_token = "some-token"
+        _setup_encryption(caller)
 
         mock_response = MagicMock()
         mock_response.status_code = status_code
@@ -1017,12 +1053,13 @@ class TestOIDCAuthenticationErrorHandling:
             audience="test-audience",
         )
         caller._oidc_token = "some-token"
+        _setup_encryption(caller)
 
         mock_response = MagicMock()
         mock_response.status_code = status_code
         mock_response.text = response_body
 
-        with patch("call_remote_executor.requests.get", return_value=mock_response):
+        with patch("call_remote_executor.requests.post", return_value=mock_response):
             with patch("call_remote_executor.time.sleep"):
                 with pytest.raises(CallerError) as exc_info:
                     caller.poll_output("test-exec-id")
