@@ -125,7 +125,7 @@ def _mock_successful_execution(app):
         def __enter__(self_ctx):
             self_ctx._patches = []
 
-            p1 = _patch.object(app.state.request_validator, "validate_oidc_token", return_value=VALID_OIDC_RESULT)
+            p1 = _patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT)
             self_ctx._patches.append(p1)
             p1.start()
 
@@ -296,24 +296,22 @@ class TestOIDCTokenExtractedFromDecryptedBody:
 
         captured_calls = []
 
-        original_validate = app.state.request_validator.validate_oidc_token
-
-        def spy_validate(auth_header):
-            captured_calls.append(auth_header)
+        def spy_validate(token_str):
+            captured_calls.append(token_str)
             return VALID_OIDC_RESULT
 
         with _mock_successful_execution(app):
             with patch.object(
                 app.state.request_validator,
-                "validate_oidc_token",
+                "validate_oidc_token_from_body",
                 side_effect=spy_validate,
             ):
                 # Send request WITHOUT Authorization header
                 response = client.post("/execute", json=outer_body)
 
-        # The validator should have been called with the token from the body
+        # The validator should have been called with the raw token from the body
         assert len(captured_calls) >= 1
-        assert captured_calls[0] == f"Bearer {oidc_token}"
+        assert captured_calls[0] == oidc_token
 
         # If the server tried to use the Authorization header (which is absent),
         # it would have passed None → 401. A 200 confirms body extraction worked.

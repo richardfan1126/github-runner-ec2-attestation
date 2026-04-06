@@ -189,6 +189,107 @@ class RequestValidator:
             claims=claims,
         )
 
+    def validate_oidc_token_from_body(self, oidc_token: Optional[str]) -> OIDCValidationResult:
+        """Validate a raw OIDC token string extracted from the decrypted request body.
+
+        Unlike ``validate_oidc_token`` which expects an ``Authorization: Bearer <token>``
+        header, this method accepts the bare JWT string directly (the ``oidc_token``
+        field from the decrypted request body).
+
+        Returns an ``OIDCValidationResult`` with ``status_code`` 200 on
+        success, 401 for authentication failures, or 403 when the token
+        is valid but the repository is not in the allow-list.
+        """
+        if not oidc_token:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="oidc_token is required",
+                claims=None,
+            )
+
+        # --- decode JWT header to get kid ---
+        try:
+            unverified_header = jwt.get_unverified_header(oidc_token)
+        except jwt.exceptions.DecodeError as exc:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message=f"Invalid token format: {exc}",
+                claims=None,
+            )
+
+        kid = unverified_header.get("kid")
+        if not kid:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Token header missing key ID (kid)",
+                claims=None,
+            )
+
+        # --- find matching key in JWKS (retry once on cache miss) ---
+        signing_key = self._find_signing_key(kid)
+        if signing_key is None:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message=f"No matching key found for kid: {kid}",
+                claims=None,
+            )
+
+        # --- verify signature and decode claims ---
+        try:
+            claims = jwt.decode(
+                oidc_token,
+                signing_key,
+                algorithms=["RS256"],
+                issuer=GITHUB_OIDC_ISSUER,
+                audience=self.expected_audience,
+                options={"require": ["exp", "iss", "aud"]},
+            )
+        except jwt.ExpiredSignatureError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Token has expired",
+                claims=None,
+            )
+        except jwt.InvalidIssuerError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Invalid token issuer",
+                claims=None,
+            )
+        except jwt.InvalidAudienceError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Invalid token audience",
+                claims=None,
+            )
+        except jwt.InvalidSignatureError:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message="Token signature verification failed",
+                claims=None,
+            )
+        except jwt.PyJWTError as exc:
+            return OIDCValidationResult(
+                valid=False, status_code=401,
+                error_message=f"Token validation failed: {exc}",
+                claims=None,
+            )
+
+        # --- validate repository claim ---
+        repository = claims.get("repository")
+        if not repository or repository not in self.allowed_repositories:
+            return OIDCValidationResult(
+                valid=False, status_code=403,
+                error_message=f"Repository not authorized: {repository}",
+                claims=None,
+            )
+
+        return OIDCValidationResult(
+            valid=True, status_code=200,
+            error_message=None,
+            claims=claims,
+        )
+
     def _find_signing_key(self, kid: str):
         """Look up a signing key by kid, refreshing JWKS once on miss."""
         for attempt in range(2):

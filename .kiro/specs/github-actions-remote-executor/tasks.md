@@ -2019,14 +2019,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Encrypt /execute response with Shared_Key, client decrypts with same key, verify original content recovered
     - **Validates: Requirements 41.3, 42.1, 42.8**
 
-- [ ] 97. Update RequestValidator for OIDC token from body
-  - [ ] 97.1 Add validate_oidc_token_from_body method to RequestValidator
+- [x] 97. Update RequestValidator for OIDC token from body
+  - [x] 97.1 Add validate_oidc_token_from_body method to RequestValidator
     - Accept raw OIDC token string (not Authorization header) from decrypted body `oidc_token` field
     - Reuse existing JWT verification logic (JWKS fetch, signature check, claims validation)
     - Return OIDCValidationResult with appropriate status codes
     - _Requirements: 2.1, 2.2, 2.3, 40.6, 40.9_
 
-  - [ ] 97.2 Update /execute and /output endpoints to use new validation method
+  - [x] 97.2 Update /execute and /output endpoints to use new validation method
     - Replace `validate_oidc_token(authorization_header)` calls with `validate_oidc_token_from_body(oidc_token_string)` on encrypted endpoints
     - Keep existing validate_oidc_token for any non-encrypted endpoints if needed
     - _Requirements: 2.1, 2.2, 40.9_

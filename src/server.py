@@ -346,9 +346,7 @@ def add_routes(app: FastAPI) -> None:
             oidc_start = time.time()
             validator = request.app.state.request_validator
             oidc_token = body.get("oidc_token")
-            oidc_result = validator.validate_oidc_token(
-                f"Bearer {oidc_token}" if oidc_token else None
-            )
+            oidc_result = validator.validate_oidc_token_from_body(oidc_token)
 
             if not oidc_result.valid:
                 repo_claim = (oidc_result.claims or {}).get("repository", "unknown")
