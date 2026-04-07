@@ -588,13 +588,13 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 32. Final checkpoint - Ensure all HPKE and nonce tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 33. Update sample build script with execution marker and isolation tests
-  - [ ] 33.1 Add execution marker generation to `.github/scripts/sample-build.sh`
+- [x] 33. Update sample build script with execution marker and isolation tests
+  - [x] 33.1 Add execution marker generation to `.github/scripts/sample-build.sh`
     - Generate a unique marker at runtime via `cat /proc/sys/kernel/random/uuid`
     - Echo `MARKER:${EXECUTION_MARKER}` on a dedicated stdout line
     - _Requirements: 2.5, 2.6_
 
-  - [ ] 33.2 Add filesystem isolation test to `.github/scripts/sample-build.sh`
+  - [x] 33.2 Add filesystem isolation test to `.github/scripts/sample-build.sh`
     - Generate a unique random string via `cat /proc/sys/kernel/random/uuid`
     - Write the random string to `/tmp/isolation-test.txt`
     - Sleep for 2 seconds
@@ -602,14 +602,14 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Output `ISOLATION_FILE:PASS` if values match, `ISOLATION_FILE:FAIL` if they differ
     - _Requirements: 2.7, 2.8, 2.9, 2.14_
 
-  - [ ] 33.3 Add process isolation test to `.github/scripts/sample-build.sh`
+  - [x] 33.3 Add process isolation test to `.github/scripts/sample-build.sh`
     - Start a dummy long-running background process with a unique name derived from the execution marker (e.g., `isolation-probe-${EXECUTION_MARKER}`)
     - Use `exec -a` to set the process name, then `pgrep -c -f` to count matching processes
     - Output `ISOLATION_PROCESS:PASS` if exactly one matching process is visible, `ISOLATION_PROCESS:FAIL` otherwise
     - Clean up the dummy background process after the test
     - _Requirements: 2.10, 2.11, 2.12, 2.13, 2.14_
 
-  - [ ] 33.4 Write unit tests for updated sample build script content
+  - [x] 33.4 Write unit tests for updated sample build script content
     - Test sample build script generates its own marker via `/proc/sys/kernel/random/uuid` (Req 2.5)
     - Test sample build script echoes `MARKER:<value>` unconditionally (Req 2.6)
     - Test sample build script contains filesystem isolation test logic (write/sleep/read at /tmp/isolation-test.txt) (Req 2.7)

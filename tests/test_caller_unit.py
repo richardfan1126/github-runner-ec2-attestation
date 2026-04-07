@@ -551,6 +551,62 @@ class TestSampleBuildScript:
         assert "whoami" in content
         assert "pwd" in content
 
+    def _read_script(self) -> str:
+        with open(self.SCRIPT_PATH) as f:
+            return f.read()
+
+    def test_generates_marker_via_proc_uuid(self):
+        """Sample build script generates its own marker via /proc/sys/kernel/random/uuid.
+        Validates: Requirement 2.5"""
+        content = self._read_script()
+        assert "/proc/sys/kernel/random/uuid" in content
+        assert "EXECUTION_MARKER" in content
+
+    def test_echoes_marker_unconditionally(self):
+        """Sample build script echoes MARKER:<value> on a dedicated stdout line.
+        Validates: Requirement 2.6"""
+        content = self._read_script()
+        assert 'echo "MARKER:${EXECUTION_MARKER}"' in content
+
+    def test_contains_filesystem_isolation_test(self):
+        """Sample build script contains filesystem isolation test logic.
+        Validates: Requirement 2.7"""
+        content = self._read_script()
+        assert "/tmp/isolation-test.txt" in content
+        assert "sleep 2" in content
+        # Writes a random value and reads it back
+        assert "RANDOM_VALUE" in content
+        assert "READ_VALUE" in content
+
+    def test_outputs_isolation_file_pass_and_fail(self):
+        """Sample build script outputs ISOLATION_FILE:PASS and ISOLATION_FILE:FAIL.
+        Validates: Requirements 2.8, 2.9"""
+        content = self._read_script()
+        assert "ISOLATION_FILE:PASS" in content
+        assert "ISOLATION_FILE:FAIL" in content
+
+    def test_contains_process_isolation_test(self):
+        """Sample build script contains process isolation test with uniquely-named dummy process.
+        Validates: Requirement 2.10"""
+        content = self._read_script()
+        assert "isolation-probe-${EXECUTION_MARKER}" in content
+        assert "exec -a" in content
+        assert "pgrep" in content
+
+    def test_outputs_isolation_process_pass_and_fail(self):
+        """Sample build script outputs ISOLATION_PROCESS:PASS and ISOLATION_PROCESS:FAIL.
+        Validates: Requirements 2.11, 2.12"""
+        content = self._read_script()
+        assert "ISOLATION_PROCESS:PASS" in content
+        assert "ISOLATION_PROCESS:FAIL" in content
+
+    def test_cleans_up_dummy_background_process(self):
+        """Sample build script cleans up the dummy background process after the test.
+        Validates: Requirement 2.13"""
+        content = self._read_script()
+        assert "kill" in content
+        assert "DUMMY_PID" in content
+
 
 class TestWorkflowValidation:
     """Unit tests for the GitHub Actions workflow definition."""
