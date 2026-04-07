@@ -452,7 +452,6 @@ def test_property_101_deploy_script_ssh_terraform_variable_passing(enable_ssh, k
         result = deploy.terraform_apply(
             "/tmp/fake-tf-dir",
             ami_build_result,
-            "1.2.3.4/32",
             "c5.9xlarge",
             enable_ssh=enable_ssh,
             key_pair_name=key_pair_name if enable_ssh else "",

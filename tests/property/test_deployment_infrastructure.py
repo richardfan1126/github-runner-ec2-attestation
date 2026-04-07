@@ -87,8 +87,8 @@ def test_property_82_security_group_http_only_access(allowed_cidr):
     Property 82: Security Group HTTP-Only Access
 
     For any deployment security group configuration, the only allowed inbound
-    traffic should be TCP on port 8080 from the allowed_http_cidr variable —
-    no SSH (port 22) or any other port should be permitted inbound.
+    traffic should be TCP on port 8080 open to the world (0.0.0.0/0) —
+    no SSH (port 22) or any other port should be permitted inbound by default.
 
     Validates: Requirements 23.2, 23.4, 23.5
     """
@@ -109,9 +109,9 @@ def test_property_82_security_group_http_only_access(allowed_cidr):
     assert 'protocol    = "tcp"' in content or 'protocol = "tcp"' in content, \
         "Security group ingress must use TCP protocol"
 
-    # Verify ingress uses the allowed_http_cidr variable
-    assert "var.allowed_http_cidr" in content, \
-        "Security group must use allowed_http_cidr variable for ingress"
+    # Verify HTTP ingress is open to the world per Requirement 23.2
+    assert '"0.0.0.0/0"' in content, \
+        "Security group HTTP ingress must be open to the world (0.0.0.0/0)"
 
     # Verify NO unconditional SSH (port 22) ingress rule exists.
     # A dynamic ingress block gated by var.enable_ssh is acceptable (debug feature),
@@ -216,8 +216,6 @@ def test_deployment_variables_configuration():
         "attestable_ami_id variable must be defined"
     assert 'variable "instance_type"' in content, \
         "instance_type variable must be defined"
-    assert 'variable "allowed_http_cidr"' in content, \
-        "allowed_http_cidr variable must be defined"
     assert 'variable "aws_region"' in content, \
         "aws_region variable must be defined"
 
@@ -238,13 +236,6 @@ def test_deployment_variables_configuration():
     ami_block = content[ami_block_start:ami_block_end]
     assert "default" not in ami_block, \
         "attestable_ami_id must not have a default value (required)"
-
-    # Verify allowed_http_cidr has no default (required)
-    http_block_start = content.index('variable "allowed_http_cidr"')
-    http_block_end = content.index("}", http_block_start)
-    http_block = content[http_block_start:http_block_end]
-    assert "default" not in http_block, \
-        "allowed_http_cidr must not have a default value (required)"
 
 
 def test_deployment_outputs_configuration():

@@ -2174,7 +2174,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - The destroy command should only pass `-var attestable_ami_id=dummy`
     - _Requirements: 29.5_
 
-- [ ] 110. Checkpoint - Ensure Terraform and script changes are consistent
+- [x] 110. Checkpoint - Ensure Terraform and script changes are consistent
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 111. Update existing tests for allowed_http_cidr to allowed_ssh_cidr migration

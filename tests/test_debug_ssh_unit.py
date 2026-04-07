@@ -248,7 +248,7 @@ class TestTerraformVariableConstruction:
     """Test Terraform variable construction with and without SSH."""
 
     def test_without_ssh_four_vars(self):
-        """Without SSH: 4 base Terraform variables."""
+        """Without SSH: 3 base Terraform variables."""
         ami_build_result = {"ami_id": "ami-abc", "region": "us-east-1"}
 
         with patch("subprocess.run") as mock_run:
@@ -260,22 +260,21 @@ class TestTerraformVariableConstruction:
             )
             mock_run.side_effect = [mock_apply, mock_output]
 
-            deploy.terraform_apply("/tmp/tf", ami_build_result, "1.2.3.4/32", "c5.9xlarge")
+            deploy.terraform_apply("/tmp/tf", ami_build_result, "c5.9xlarge")
 
             cmd = mock_run.call_args_list[0][0][0]
             var_flags = [cmd[i + 1] for i in range(len(cmd)) if cmd[i] == '-var']
 
-            assert len(var_flags) == 4, f"Expected 4 vars, got {len(var_flags)}: {var_flags}"
+            assert len(var_flags) == 3, f"Expected 3 vars, got {len(var_flags)}: {var_flags}"
             var_keys = [v.split('=')[0] for v in var_flags]
             assert "attestable_ami_id" in var_keys
             assert "instance_type" in var_keys
-            assert "allowed_http_cidr" in var_keys
             assert "aws_region" in var_keys
             assert "enable_ssh" not in var_keys
             assert "key_pair_name" not in var_keys
 
     def test_with_ssh_six_vars(self):
-        """With SSH: 6 Terraform variables (base 4 + enable_ssh + key_pair_name)."""
+        """With SSH: 5 Terraform variables (base 3 + enable_ssh + key_pair_name)."""
         ami_build_result = {"ami_id": "ami-abc", "region": "us-east-1"}
 
         with patch("subprocess.run") as mock_run:
@@ -288,7 +287,7 @@ class TestTerraformVariableConstruction:
             mock_run.side_effect = [mock_apply, mock_output]
 
             deploy.terraform_apply(
-                "/tmp/tf", ami_build_result, "1.2.3.4/32", "c5.9xlarge",
+                "/tmp/tf", ami_build_result, "c5.9xlarge",
                 enable_ssh=True, key_pair_name="my-key",
             )
 
