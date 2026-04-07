@@ -83,8 +83,7 @@ def destroy_infrastructure(terraform_dir: str) -> None:
     result = subprocess.run(
         [
             'terraform', 'destroy', '-auto-approve',
-            '-var', 'attestable_ami_id=dummy',
-            '-var', 'allowed_http_cidr=0.0.0.0/0'
+            '-var', 'attestable_ami_id=dummy'
         ],
         cwd=terraform_path,
         capture_output=True,

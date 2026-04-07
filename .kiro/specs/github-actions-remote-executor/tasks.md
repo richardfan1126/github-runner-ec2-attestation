@@ -2168,8 +2168,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - When `enable_ssh` is True, add `allowed_ssh_cidr` to `tf_vars`
     - _Requirements: 32.26, 32.27_
 
-- [ ] 109. Update cleanup script to remove allowed_http_cidr from terraform destroy
-  - [ ] 109.1 Update scripts/cleanup.py destroy_infrastructure() function
+- [x] 109. Update cleanup script to remove allowed_http_cidr from terraform destroy
+  - [x] 109.1 Update scripts/cleanup.py destroy_infrastructure() function
     - Remove `-var allowed_http_cidr=0.0.0.0/0` from the `terraform destroy` command
     - The destroy command should only pass `-var attestable_ami_id=dummy`
     - _Requirements: 29.5_
