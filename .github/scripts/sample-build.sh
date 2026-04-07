@@ -30,7 +30,7 @@ bash -c "exec -a $PROC_NAME sleep 300" &
 DUMMY_PID=$!
 sleep 1
 # Count how many processes with this unique name are visible
-PROC_COUNT=$(pgrep -c -f "$PROC_NAME" || true)
+PROC_COUNT=$(ps aux 2>/dev/null | grep -F "$PROC_NAME" | grep -v grep | wc -l)
 if [ "$PROC_COUNT" -eq 1 ]; then
     echo "ISOLATION_PROCESS:PASS"
 else
