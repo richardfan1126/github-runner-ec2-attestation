@@ -168,113 +168,37 @@ jobs:
     needs: [execute]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_hash || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".github/scripts/[dev]"
+
       - name: Download all execution outputs
         uses: actions/download-artifact@v4
         with:
           pattern: execution-output-*
           path: outputs
 
-      - name: Verify isolation
-        shell: python
+      - name: Collect output files
         run: |
-          import os
-          import re
-          import sys
+          mkdir -p collected-outputs
+          for dir in outputs/execution-output-*/; do
+            index=$(basename "$dir" | sed 's/execution-output-//')
+            cp "$dir/execution-output.txt" "collected-outputs/execution-$index.txt"
+          done
 
-          outputs_dir = "outputs"
-          markers = {}
-          results = []
-          has_failure = False
-          has_warning = False
-
-          # Iterate over each execution output artifact directory
-          for artifact_name in sorted(os.listdir(outputs_dir)):
-              artifact_dir = os.path.join(outputs_dir, artifact_name)
-              if not os.path.isdir(artifact_dir):
-                  continue
-
-              # Extract index from artifact name (execution-output-N)
-              match = re.match(r"execution-output-(\d+)", artifact_name)
-              if not match:
-                  continue
-              index = match.group(1)
-
-              output_file = os.path.join(artifact_dir, "execution-output.txt")
-              if not os.path.exists(output_file):
-                  print(f"::error::Output file missing for execution {index}")
-                  has_failure = True
-                  continue
-
-              with open(output_file) as f:
-                  content = f.read()
-
-              # Extract MARKER:<value>
-              marker_matches = re.findall(r"^MARKER:(.+)$", content, re.MULTILINE)
-              if len(marker_matches) == 0:
-                  print(f"::error::Execution {index}: MARKER line not found in output")
-                  has_failure = True
-                  marker_value = None
-              elif len(marker_matches) > 1:
-                  print(f"::error::Execution {index}: Multiple MARKER lines found in output")
-                  has_failure = True
-                  marker_value = marker_matches[0]
-              else:
-                  marker_value = marker_matches[0]
-
-              # Check for duplicate markers
-              if marker_value is not None:
-                  if marker_value in markers:
-                      print(f"::error::Isolation violation: Execution {index} and execution {markers[marker_value]} produced the same marker '{marker_value}'")
-                      has_failure = True
-                  markers[marker_value] = index
-
-              # Parse ISOLATION_FILE result
-              file_iso_matches = re.findall(r"^ISOLATION_FILE:(PASS|FAIL)$", content, re.MULTILINE)
-              if not file_iso_matches:
-                  print(f"::warning::Execution {index}: ISOLATION_FILE result not found in output")
-                  has_warning = True
-                  file_iso = "MISSING"
-              else:
-                  file_iso = file_iso_matches[0]
-                  if file_iso == "FAIL":
-                      print(f"::error::Execution {index}: Filesystem isolation violation (ISOLATION_FILE:FAIL)")
-                      has_failure = True
-
-              # Parse ISOLATION_PROCESS result
-              proc_iso_matches = re.findall(r"^ISOLATION_PROCESS:(PASS|FAIL)$", content, re.MULTILINE)
-              if not proc_iso_matches:
-                  print(f"::warning::Execution {index}: ISOLATION_PROCESS result not found in output")
-                  has_warning = True
-                  proc_iso = "MISSING"
-              else:
-                  proc_iso = proc_iso_matches[0]
-                  if proc_iso == "FAIL":
-                      print(f"::error::Execution {index}: Process isolation violation (ISOLATION_PROCESS:FAIL)")
-                      has_failure = True
-
-              results.append({
-                  "index": index,
-                  "marker": marker_value or "N/A",
-                  "file_isolation": file_iso,
-                  "process_isolation": proc_iso,
-              })
-
-          # Write summary to GITHUB_STEP_SUMMARY
-          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
-          if summary_path:
-              with open(summary_path, "a") as summary:
-                  summary.write("## Isolation Verification Summary\n\n")
-                  summary.write("| Execution | Marker | Filesystem Isolation | Process Isolation |\n")
-                  summary.write("|-----------|--------|---------------------|------------------|\n")
-                  for r in results:
-                      file_icon = "✅" if r["file_isolation"] == "PASS" else ("❌" if r["file_isolation"] == "FAIL" else "⚠️")
-                      proc_icon = "✅" if r["process_isolation"] == "PASS" else ("❌" if r["process_isolation"] == "FAIL" else "⚠️")
-                      summary.write(f"| {r['index']} | `{r['marker']}` | {file_icon} {r['file_isolation']} | {proc_icon} {r['process_isolation']} |\n")
-                  summary.write(f"\n**Marker uniqueness**: {'✅ All markers unique' if not has_failure else '❌ Isolation violation detected'}\n")
-                  summary.write(f"**Overall result**: {'✅ PASS' if not has_failure else '❌ FAIL'}\n")
-
-          if has_failure:
-              print("::error::Isolation verification failed")
-              sys.exit(1)
-          else:
-              print("Isolation verification passed")
+      - name: Verify isolation
+        run: |
+          summary=$(python .github/scripts/verify_isolation.py collected-outputs)
+          echo "$summary"
+          if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+            echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+          fi

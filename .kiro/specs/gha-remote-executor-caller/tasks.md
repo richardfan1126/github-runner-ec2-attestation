@@ -703,20 +703,20 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 38. Checkpoint - Ensure all isolation verification tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 39. Wire isolation verification into workflow and final integration
-  - [ ] 39.1 Wire the isolation verification logic into the `verify-isolation` workflow job
+- [x] 39. Wire isolation verification into workflow and final integration
+  - [x] 39.1 Wire the isolation verification logic into the `verify-isolation` workflow job
     - Ensure the `verify-isolation` job invokes the isolation verification script/logic with the downloaded artifacts
     - Ensure the job writes the isolation summary to `$GITHUB_STEP_SUMMARY`
     - Ensure the job exits with non-zero code if any isolation check fails
     - _Requirements: 17B.3, 17D.17, 17D.18, 17D.19, 17D.20_
 
-  - [ ] 39.2 Write integration-level unit tests for end-to-end workflow structure
+  - [x] 39.2 Write integration-level unit tests for end-to-end workflow structure
     - Test that the workflow YAML is valid and all jobs are properly connected
     - Test that the `verify-isolation` job depends on the `execute` matrix jobs
     - Test that the `execute` job uploads artifacts and `verify-isolation` downloads them
     - _Requirements: 17A.1, 17B.3, 17D.19_
 
-- [ ] 40. Final checkpoint - Ensure all concurrent execution isolation tests pass
+- [x] 40. Final checkpoint - Ensure all concurrent execution isolation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

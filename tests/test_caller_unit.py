@@ -758,6 +758,84 @@ class TestWorkflowValidation:
             "(each invocation performs its own independent HPKE key exchange)"
         )
 
+    def test_workflow_yaml_is_valid_and_all_jobs_connected(self):
+        """Workflow YAML is valid and all jobs are properly connected.
+        Validates: Requirement 17A.1"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        jobs = workflow.get("jobs", {})
+        # All expected jobs must exist
+        expected_jobs = {"call-remote-executor", "prepare-matrix", "execute", "verify-isolation"}
+        assert expected_jobs.issubset(set(jobs.keys())), (
+            f"Workflow must define all expected jobs. Missing: {expected_jobs - set(jobs.keys())}"
+        )
+        # prepare-matrix must be needed by execute
+        execute_needs = jobs["execute"].get("needs", [])
+        assert "prepare-matrix" in execute_needs, (
+            "execute job must depend on prepare-matrix"
+        )
+        # verify-isolation must depend on execute
+        verify_needs = jobs["verify-isolation"].get("needs", [])
+        assert "execute" in verify_needs, (
+            "verify-isolation job must depend on execute"
+        )
+
+    def test_execute_job_uploads_artifacts_and_verify_isolation_downloads_them(self):
+        """Execute job uploads artifacts and verify-isolation downloads them.
+        Validates: Requirement 17B.3, 17D.19"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        jobs = workflow.get("jobs", {})
+
+        # Execute job must have an upload-artifact step
+        execute_steps = jobs["execute"].get("steps", [])
+        upload_steps = [
+            s for s in execute_steps
+            if s.get("uses", "").startswith("actions/upload-artifact")
+        ]
+        assert len(upload_steps) >= 1, (
+            "execute job must have at least one upload-artifact step"
+        )
+        # Verify the artifact name pattern includes the matrix index
+        upload_with = upload_steps[0].get("with", {})
+        assert "execution-output" in upload_with.get("name", ""), (
+            "upload-artifact step must use 'execution-output' in the artifact name"
+        )
+
+        # verify-isolation job must have a download-artifact step
+        verify_steps = jobs["verify-isolation"].get("steps", [])
+        download_steps = [
+            s for s in verify_steps
+            if s.get("uses", "").startswith("actions/download-artifact")
+        ]
+        assert len(download_steps) >= 1, (
+            "verify-isolation job must have at least one download-artifact step"
+        )
+        download_with = download_steps[0].get("with", {})
+        assert "execution-output" in download_with.get("pattern", ""), (
+            "download-artifact step must use 'execution-output' in the pattern"
+        )
+
+    def test_verify_isolation_job_invokes_verify_isolation_script(self):
+        """verify-isolation job invokes the verify_isolation.py script.
+        Validates: Requirement 17B.3, 17D.17, 17D.18"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        jobs = workflow.get("jobs", {})
+        verify_steps = jobs["verify-isolation"].get("steps", [])
+        script_invocations = [
+            s for s in verify_steps
+            if "verify_isolation" in s.get("run", "")
+        ]
+        assert len(script_invocations) >= 1, (
+            "verify-isolation job must invoke verify_isolation.py"
+        )
+        # The step should reference GITHUB_STEP_SUMMARY for summary output
+        run_content = script_invocations[0].get("run", "")
+        assert "GITHUB_STEP_SUMMARY" in run_content, (
+            "verify-isolation step must write summary to GITHUB_STEP_SUMMARY"
+        )
+
 
 class TestClientEncryptionEdgeCases:
     """Unit tests for ClientEncryption edge cases."""
