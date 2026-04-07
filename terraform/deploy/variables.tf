@@ -9,9 +9,10 @@ variable "instance_type" {
   default     = "c5.9xlarge"
 }
 
-variable "allowed_http_cidr" {
-  description = "CIDR block allowed to access HTTP API on port 8080"
+variable "allowed_ssh_cidr" {
+  description = "CIDR block allowed to access SSH on port 22, only used when enable_ssh is true"
   type        = string
+  default     = ""
 }
 
 variable "aws_region" {

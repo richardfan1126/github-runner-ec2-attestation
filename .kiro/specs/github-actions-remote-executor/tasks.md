@@ -2126,21 +2126,21 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify that for any request to /attest, the generate_attestation call does NOT include user_data (no `--user-data` flag passed to nitro-tpm-attest)
     - **Validates: Requirements 37.10**
 
-- [ ] 106. Checkpoint - Ensure /attest user_data exclusion tests pass
+- [x] 106. Checkpoint - Ensure /attest user_data exclusion tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 107. Open port 8080 to the world and add allowed_ssh_cidr variable in Terraform
-  - [ ] 107.1 Update terraform/deploy/main.tf security group port 8080 ingress
+- [x] 107. Open port 8080 to the world and add allowed_ssh_cidr variable in Terraform
+  - [x] 107.1 Update terraform/deploy/main.tf security group port 8080 ingress
     - Change the port 8080 ingress `cidr_blocks` from `[var.allowed_http_cidr]` to `["0.0.0.0/0"]`
     - Port 8080 is now open to the world; authentication is handled at the application layer
     - _Requirements: 23.2, 23.4, 23.5_
 
-  - [ ] 107.2 Update terraform/deploy/main.tf SSH dynamic ingress to use allowed_ssh_cidr
+  - [x] 107.2 Update terraform/deploy/main.tf SSH dynamic ingress to use allowed_ssh_cidr
     - Change the dynamic SSH ingress `cidr_blocks` from `[var.allowed_http_cidr]` to `[var.allowed_ssh_cidr]`
     - SSH access (when enabled) is restricted to the deployer's IP, not the HTTP CIDR
     - _Requirements: 32.22, 32.24_
 
-  - [ ] 107.3 Update terraform/deploy/variables.tf to remove allowed_http_cidr and add allowed_ssh_cidr
+  - [x] 107.3 Update terraform/deploy/variables.tf to remove allowed_http_cidr and add allowed_ssh_cidr
     - Remove the `allowed_http_cidr` variable entirely
     - Add a new `allowed_ssh_cidr` variable (type string, default `""`, description: CIDR for SSH access on port 22, only used when enable_ssh is true)
     - _Requirements: 23.6, 24.1, 32.22, 32.27_
