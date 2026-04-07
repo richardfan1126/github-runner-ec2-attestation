@@ -1630,3 +1630,56 @@ class TestRunOrchestrationFlow:
         assert result == 0
         mock_voa.assert_not_called()
         assert "skipped" in caller.summary
+
+
+# ---------------------------------------------------------------------------
+# Isolation verification imports
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".github", "scripts"))
+
+from verify_isolation import (
+    IsolationError,
+    verify_isolation_directory,
+)
+
+
+class TestIsolationVerificationEdgeCases:
+    """Unit tests for isolation verification edge cases."""
+
+    def test_all_executions_pass_isolation(self, tmp_path):
+        """Workflow succeeds when all executions pass and isolation is verified.
+        Validates: Requirement 17D.19"""
+        # Create output files for 3 executions, all passing
+        for i in range(3):
+            output = (
+                f"Starting execution {i}\n"
+                f"MARKER:unique-marker-{i}\n"
+                f"ISOLATION_FILE:PASS\n"
+                f"ISOLATION_PROCESS:PASS\n"
+                f"Done\n"
+            )
+            (tmp_path / f"execution-{i}.txt").write_text(output)
+
+        summary = verify_isolation_directory(str(tmp_path))
+        assert "Isolation Verification Summary" in summary
+        for i in range(3):
+            assert f"unique-marker-{i}" in summary
+            assert f"execution-{i}" in summary
+
+    def test_failed_execution_reports_which_failed(self, tmp_path):
+        """Workflow fails and reports which execution failed.
+        Validates: Requirement 17D.20"""
+        # Execution 0 passes
+        (tmp_path / "execution-0.txt").write_text(
+            "MARKER:marker-0\nISOLATION_FILE:PASS\nISOLATION_PROCESS:PASS\n"
+        )
+        # Execution 1 fails filesystem isolation
+        (tmp_path / "execution-1.txt").write_text(
+            "MARKER:marker-1\nISOLATION_FILE:FAIL\nISOLATION_PROCESS:PASS\n"
+        )
+
+        with pytest.raises(IsolationError) as exc_info:
+            verify_isolation_directory(str(tmp_path))
+        assert "execution-1" in exc_info.value.message.lower()
+        assert "filesystem isolation" in exc_info.value.message.lower() or "ISOLATION_FILE" in exc_info.value.details.get("test", "")

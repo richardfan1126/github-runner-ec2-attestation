@@ -653,11 +653,11 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test each matrix job performs independent HPKE key exchange (Req 17C.14)
     - _Requirements: 1.8, 17A.1, 17A.2, 17B.3, 17C.14_
 
-- [ ] 36. Checkpoint - Ensure workflow structure tests pass
+- [x] 36. Checkpoint - Ensure workflow structure tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 37. Implement isolation verification logic
-  - [ ] 37.1 Create isolation verification script or function
+- [x] 37. Implement isolation verification logic
+  - [x] 37.1 Create isolation verification script or function
     - Implement a Python script (e.g., `.github/scripts/verify_isolation.py`) or inline logic that:
       - Accepts a directory of execution output files as input
       - For each output file: extracts the `MARKER:<value>` line, parses `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines
@@ -667,20 +667,20 @@ Implement the client-side caller for the Remote Executor system: a Python script
       - Generates a summary string with per-execution results (execution index, marker, filesystem isolation result, process isolation result)
     - _Requirements: 17B.4, 17B.5, 17B.6, 17B.7, 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13, 17D.17, 17D.18_
 
-  - [ ] 37.2 Write property test for marker presence verification
+  - [x] 37.2 Write property test for marker presence verification
     - **Property 22: Marker presence verification**
     - Generate random stdout strings, insert a `MARKER:<uuid>` line into some
     - Verify the isolation verification logic accepts when exactly one `MARKER:` line is present and rejects when no `MARKER:` line is found
     - **Validates: Requirements 17B.4, 17B.6**
 
-  - [ ] 37.3 Write property test for marker uniqueness verification
+  - [x] 37.3 Write property test for marker uniqueness verification
     - **Property 23: Marker uniqueness verification**
     - Generate random sets of N (2-5) execution outputs, each containing a `MARKER:<uuid>` line with a unique runtime-generated UUID
     - Verify the isolation verification logic accepts when all markers are unique
     - Duplicate one marker across two outputs and verify it rejects with an isolation violation error
     - **Validates: Requirements 17B.5, 17B.7**
 
-  - [ ] 37.4 Write property test for isolation test result parsing and verification
+  - [x] 37.4 Write property test for isolation test result parsing and verification
     - **Property 24: Isolation test result parsing and verification**
     - Generate random stdout strings containing various combinations of `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines
     - Verify the parsing logic correctly extracts results
@@ -688,19 +688,19 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Verify warning (not failure) when result lines are missing
     - **Validates: Requirements 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13**
 
-  - [ ] 37.5 Write property test for isolation summary contains all results
+  - [x] 37.5 Write property test for isolation summary contains all results
     - **Property 25: Isolation summary contains all results**
     - Generate random sets of execution results with execution IDs, runtime-generated markers extracted from stdout, and isolation test outcomes
     - Call the summary generation logic
     - Verify the output contains all execution IDs, extracted markers, marker uniqueness check results, filesystem isolation results, and process isolation results
     - **Validates: Requirements 17D.17, 17D.18**
 
-  - [ ] 37.6 Write unit tests for isolation verification edge cases
+  - [x] 37.6 Write unit tests for isolation verification edge cases
     - Test workflow succeeds when all executions pass and isolation is verified (Req 17D.19)
     - Test workflow fails and reports which execution failed (Req 17D.20)
     - _Requirements: 17D.19, 17D.20_
 
-- [ ] 38. Checkpoint - Ensure all isolation verification tests pass
+- [x] 38. Checkpoint - Ensure all isolation verification tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 39. Wire isolation verification into workflow and final integration

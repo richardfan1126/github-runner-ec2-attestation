@@ -1461,3 +1461,197 @@ class TestEncryptedEnvelopeStructure:
         assert "repository_url" not in sent_json
         assert "github_token" not in sent_json
         assert "oidc_token" not in sent_json
+
+
+# ---------------------------------------------------------------------------
+# Isolation verification imports
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".github", "scripts"))
+
+from verify_isolation import (
+    IsolationError,
+    extract_marker,
+    parse_isolation_file_result,
+    parse_isolation_process_result,
+    verify_marker_presence,
+    verify_markers_unique,
+    verify_isolation_results,
+    generate_summary,
+)
+
+
+# ---------------------------------------------------------------------------
+# Property 22: Marker presence verification
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 22: Marker presence verification
+# **Validates: Requirements 17B.4, 17B.6**
+class TestMarkerPresenceVerification:
+    """Property 22: Marker presence verification."""
+
+    @given(
+        prefix_lines=st.lists(st.text(min_size=0, max_size=80).filter(lambda s: not s.startswith("MARKER:")), max_size=5),
+        suffix_lines=st.lists(st.text(min_size=0, max_size=80).filter(lambda s: not s.startswith("MARKER:")), max_size=5),
+        marker_value=st.uuids().map(str),
+    )
+    @settings(max_examples=100)
+    def test_accepts_stdout_with_exactly_one_marker(self, prefix_lines, suffix_lines, marker_value):
+        """When stdout contains exactly one MARKER:<value> line, extract_marker returns the value."""
+        stdout = "\n".join(prefix_lines + [f"MARKER:{marker_value}"] + suffix_lines)
+        result = extract_marker(stdout)
+        assert result == marker_value
+
+    @given(
+        lines=st.lists(st.text(min_size=0, max_size=80).filter(lambda s: not s.startswith("MARKER:")), min_size=0, max_size=10),
+    )
+    @settings(max_examples=100)
+    def test_rejects_stdout_without_marker(self, lines):
+        """When stdout contains no MARKER: line, extract_marker returns None
+        and verify_marker_presence raises IsolationError."""
+        stdout = "\n".join(lines)
+        assert extract_marker(stdout) is None
+        with pytest.raises(IsolationError):
+            verify_marker_presence(stdout, "test-exec")
+
+
+# ---------------------------------------------------------------------------
+# Property 23: Marker uniqueness verification
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 23: Marker uniqueness verification
+# **Validates: Requirements 17B.5, 17B.7**
+class TestMarkerUniquenessVerification:
+    """Property 23: Marker uniqueness verification."""
+
+    @given(
+        n=st.integers(min_value=2, max_value=5),
+        data=st.data(),
+    )
+    @settings(max_examples=100)
+    def test_accepts_unique_markers(self, n, data):
+        """When all N execution outputs have unique markers, verification passes."""
+        uuids = [str(data.draw(st.uuids())) for _ in range(n)]
+        # Ensure uniqueness (extremely unlikely to collide, but be safe)
+        assume(len(set(uuids)) == n)
+        markers = {f"exec-{i}": uuids[i] for i in range(n)}
+        # Should not raise
+        verify_markers_unique(markers)
+
+    @given(
+        n=st.integers(min_value=2, max_value=5),
+        marker_value=st.uuids().map(str),
+    )
+    @settings(max_examples=100)
+    def test_rejects_duplicate_markers(self, n, marker_value):
+        """When two executions share the same marker, verification fails with IsolationError."""
+        markers = {f"exec-{i}": str(i) for i in range(n)}
+        # Duplicate the marker between first and last execution
+        markers["exec-0"] = marker_value
+        markers[f"exec-{n - 1}"] = marker_value
+        with pytest.raises(IsolationError) as exc_info:
+            verify_markers_unique(markers)
+        assert "isolation violation" in exc_info.value.message.lower() or "same marker" in exc_info.value.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# Property 24: Isolation test result parsing and verification
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 24: Isolation test result parsing and verification
+# **Validates: Requirements 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13**
+class TestIsolationTestResultParsing:
+    """Property 24: Isolation test result parsing and verification."""
+
+    @given(
+        file_result=st.sampled_from(["PASS", "FAIL"]),
+        process_result=st.sampled_from(["PASS", "FAIL"]),
+        extra_lines=st.lists(st.text(min_size=0, max_size=80).filter(
+            lambda s: not s.startswith("ISOLATION_FILE:") and not s.startswith("ISOLATION_PROCESS:")
+        ), max_size=5),
+    )
+    @settings(max_examples=100)
+    def test_parses_isolation_results_correctly(self, file_result, process_result, extra_lines):
+        """Parsing logic correctly extracts ISOLATION_FILE and ISOLATION_PROCESS results."""
+        stdout = "\n".join(
+            extra_lines + [f"ISOLATION_FILE:{file_result}", f"ISOLATION_PROCESS:{process_result}"]
+        )
+        assert parse_isolation_file_result(stdout) == file_result
+        assert parse_isolation_process_result(stdout) == process_result
+
+    @given(
+        process_result=st.sampled_from(["PASS", "FAIL"]),
+    )
+    @settings(max_examples=100)
+    def test_fails_on_file_isolation_fail(self, process_result):
+        """When ISOLATION_FILE is FAIL, verify_isolation_results raises IsolationError."""
+        with pytest.raises(IsolationError) as exc_info:
+            verify_isolation_results("exec-1", "FAIL", process_result)
+        assert "filesystem isolation" in exc_info.value.message.lower() or "ISOLATION_FILE" in exc_info.value.message
+
+    @given(
+        file_result=st.just("PASS"),
+    )
+    @settings(max_examples=100)
+    def test_fails_on_process_isolation_fail(self, file_result):
+        """When ISOLATION_PROCESS is FAIL, verify_isolation_results raises IsolationError."""
+        with pytest.raises(IsolationError) as exc_info:
+            verify_isolation_results("exec-1", file_result, "FAIL")
+        assert "process isolation" in exc_info.value.message.lower() or "ISOLATION_PROCESS" in exc_info.value.message
+
+    @given(
+        missing_file=st.booleans(),
+        missing_process=st.booleans(),
+    )
+    @settings(max_examples=100)
+    def test_warns_but_does_not_fail_on_missing_results(self, missing_file, missing_process):
+        """When isolation result lines are missing, warnings are logged but no error is raised."""
+        file_result = None if missing_file else "PASS"
+        process_result = None if missing_process else "PASS"
+        # Should not raise
+        warnings = verify_isolation_results("exec-1", file_result, process_result)
+        if missing_file:
+            assert any("ISOLATION_FILE" in w for w in warnings)
+        if missing_process:
+            assert any("ISOLATION_PROCESS" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Property 25: Isolation summary contains all results
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 25: Isolation summary contains all results
+# **Validates: Requirements 17D.17, 17D.18**
+class TestIsolationSummaryContainsAllResults:
+    """Property 25: Isolation summary contains all results."""
+
+    @given(
+        n=st.integers(min_value=1, max_value=5),
+        data=st.data(),
+    )
+    @settings(max_examples=100)
+    def test_summary_contains_all_execution_data(self, n, data):
+        """The generated summary contains all execution IDs, markers, and isolation results."""
+        results = []
+        for i in range(n):
+            exec_id = f"exec-{i}"
+            marker = str(data.draw(st.uuids()))
+            marker_unique = data.draw(st.sampled_from(["PASS", "FAIL"]))
+            file_iso = data.draw(st.sampled_from(["PASS", "FAIL", "N/A"]))
+            process_iso = data.draw(st.sampled_from(["PASS", "FAIL", "N/A"]))
+            results.append({
+                "execution_id": exec_id,
+                "marker": marker,
+                "marker_unique": marker_unique,
+                "file_isolation": file_iso,
+                "process_isolation": process_iso,
+            })
+
+        summary = generate_summary(results)
+
+        for r in results:
+            assert r["execution_id"] in summary
+            assert r["marker"] in summary
+            assert r["marker_unique"] in summary
+            assert r["file_isolation"] in summary
+            assert r["process_isolation"] in summary
