@@ -2177,45 +2177,45 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 110. Checkpoint - Ensure Terraform and script changes are consistent
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 111. Update existing tests for allowed_http_cidr to allowed_ssh_cidr migration
-  - [ ] 111.1 Update tests/property/test_deployment_infrastructure.py test_property_82
+- [x] 111. Update existing tests for allowed_http_cidr to allowed_ssh_cidr migration
+  - [x] 111.1 Update tests/property/test_deployment_infrastructure.py test_property_82
     - Property 82 now validates that port 8080 is open to `0.0.0.0/0` (the world) instead of using `var.allowed_http_cidr`
     - Assert `"0.0.0.0/0"` appears in the port 8080 ingress block
     - Remove assertion for `var.allowed_http_cidr` in the security group
     - Verify SSH dynamic ingress (if present) uses `var.allowed_ssh_cidr` instead of `var.allowed_http_cidr`
     - _Requirements: 23.2, 23.4, 23.5, 32.22_
 
-  - [ ] 111.2 Update tests/property/test_deployment_infrastructure.py test_deployment_variables_configuration
+  - [x] 111.2 Update tests/property/test_deployment_infrastructure.py test_deployment_variables_configuration
     - Remove assertion for `variable "allowed_http_cidr"` existence
     - Remove assertion that `allowed_http_cidr` has no default
     - Add assertion for `variable "allowed_ssh_cidr"` existence
     - Add assertion that `allowed_ssh_cidr` has a default value of `""`
     - _Requirements: 23.6, 24.1, 32.22_
 
-  - [ ] 111.3 Update tests/test_deployment_script_properties.py test_property_85
+  - [x] 111.3 Update tests/test_deployment_script_properties.py test_property_85
     - Property 85 now validates that IP detection only happens when `--enable-ssh` is provided
     - Update test to verify `allowed_ssh_cidr` is constructed as `{ip}/32` (not `allowed_http_cidr`)
     - Verify IP detection is tied to the SSH enable path, not the default deploy path
     - _Requirements: 32.27_
 
-  - [ ] 111.4 Update tests/test_debug_ssh_unit.py for terraform_apply signature change
+  - [x] 111.4 Update tests/test_debug_ssh_unit.py for terraform_apply signature change
     - Update test_without_ssh to expect 3 default vars (`attestable_ami_id`, `instance_type`, `aws_region`) instead of 4 (no `allowed_http_cidr`)
     - Update test_with_ssh to expect 6 vars including `allowed_ssh_cidr` instead of `allowed_http_cidr`
     - Update all `terraform_apply()` call sites to match the new function signature (no `allowed_http_cidr` positional arg)
     - _Requirements: 25.1, 32.26, 32.27_
 
-  - [ ] 111.5 Update tests/test_cleanup_unit.py for terraform destroy command change
+  - [x] 111.5 Update tests/test_cleanup_unit.py for terraform destroy command change
     - Update TestDestroyInfrastructure tests that verify the terraform destroy command
     - Verify the destroy command no longer includes `-var allowed_http_cidr=0.0.0.0/0`
     - Verify the destroy command only passes `-var attestable_ami_id=dummy`
     - _Requirements: 29.5_
 
-  - [ ] 111.6 Update tests/test_cleanup_script_properties.py for terraform destroy command change
+  - [x] 111.6 Update tests/test_cleanup_script_properties.py for terraform destroy command change
     - Update property test 90 (terraform destroy failure) if it verifies the exact destroy command args
     - Ensure mocked subprocess calls match the new destroy command without `allowed_http_cidr`
     - _Requirements: 29.5_
 
-- [ ] 112. Final checkpoint - Ensure all updated tests pass
+- [x] 112. Final checkpoint - Ensure all updated tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

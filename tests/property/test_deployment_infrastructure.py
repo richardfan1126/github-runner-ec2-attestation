@@ -73,24 +73,18 @@ def test_property_81_deployment_vpc_isolation(cidr, subnet_cidr):
 
 
 # Property 82: Security Group HTTP-Only Access
-@given(
-    allowed_cidr=st.one_of(
-        st.just("192.168.1.100/32"),
-        st.just("10.0.0.0/24"),
-        st.just("172.16.0.0/16"),
-        st.just("203.0.113.42/32"),
-    )
-)
 @settings(max_examples=20, deadline=None)
-def test_property_82_security_group_http_only_access(allowed_cidr):
+@given(st.just(None))
+def test_property_82_security_group_http_only_access(_):
     """
     Property 82: Security Group HTTP-Only Access
 
     For any deployment security group configuration, the only allowed inbound
     traffic should be TCP on port 8080 open to the world (0.0.0.0/0) —
     no SSH (port 22) or any other port should be permitted inbound by default.
+    When SSH is enabled via dynamic block, it uses var.allowed_ssh_cidr.
 
-    Validates: Requirements 23.2, 23.4, 23.5
+    Validates: Requirements 23.2, 23.4, 23.5, 32.22
     """
     main_file = TERRAFORM_DIR / "main.tf"
     assert main_file.exists(), "main.tf must exist in terraform/deploy/"
@@ -124,11 +118,16 @@ def test_property_82_security_group_http_only_access(allowed_cidr):
         f"Security group must have exactly 1 static ingress rule (HTTP 8080 only), found {static_ingress_count}"
 
     # If port 22 appears, it must only be inside a dynamic block gated by enable_ssh
+    # and must use var.allowed_ssh_cidr (not var.allowed_http_cidr)
     if "from_port   = 22" in content or "from_port = 22" in content:
         assert 'dynamic "ingress"' in content, \
             "SSH port 22 must only appear inside a dynamic ingress block"
         assert "var.enable_ssh" in content, \
             "SSH port 22 dynamic block must be gated by var.enable_ssh"
+        assert "var.allowed_ssh_cidr" in content, \
+            "SSH dynamic ingress must use var.allowed_ssh_cidr"
+        assert "var.allowed_http_cidr" not in content, \
+            "Security group must not reference var.allowed_http_cidr"
 
     # Verify egress allows all outbound
     assert "egress" in content, \
@@ -204,7 +203,7 @@ def test_deployment_variables_configuration():
     """
     Verify all required deployment variables are defined with correct defaults.
 
-    Validates: Requirements 23.6, 24.1, 24.2, 24.3, 24.9, 24.10
+    Validates: Requirements 23.6, 24.1, 24.2, 24.3, 24.9, 24.10, 32.22
     """
     variables_file = TERRAFORM_DIR / "variables.tf"
     assert variables_file.exists(), "variables.tf must exist in terraform/deploy/"
@@ -218,6 +217,21 @@ def test_deployment_variables_configuration():
         "instance_type variable must be defined"
     assert 'variable "aws_region"' in content, \
         "aws_region variable must be defined"
+
+    # Verify allowed_ssh_cidr variable exists with default ""
+    assert 'variable "allowed_ssh_cidr"' in content, \
+        "allowed_ssh_cidr variable must be defined"
+    ssh_cidr_block_start = content.index('variable "allowed_ssh_cidr"')
+    ssh_cidr_block_end = content.index("}", ssh_cidr_block_start)
+    ssh_cidr_block = content[ssh_cidr_block_start:ssh_cidr_block_end]
+    assert 'default' in ssh_cidr_block, \
+        "allowed_ssh_cidr must have a default value"
+    assert '""' in ssh_cidr_block, \
+        "allowed_ssh_cidr must default to empty string"
+
+    # Verify allowed_http_cidr variable does NOT exist (migrated to allowed_ssh_cidr)
+    assert 'variable "allowed_http_cidr"' not in content, \
+        "allowed_http_cidr variable must not exist (migrated to allowed_ssh_cidr)"
 
     # Verify instance_type default
     assert 'default     = "c5.9xlarge"' in content or \

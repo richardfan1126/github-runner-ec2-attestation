@@ -161,9 +161,10 @@ def test_property_85_deployment_ip_auto_detection(ip_address):
     Property 85: Deployment IP Auto-Detection
 
     For any valid IPv4 address returned by the IP detection service, the
-    deployment script should construct the allowed_http_cidr as {ip}/32.
+    deployment script should construct the allowed_ssh_cidr as {ip}/32.
+    IP detection only happens when --enable-ssh is provided.
 
-    Validates: Requirements 26.7, 26.8
+    Validates: Requirements 32.27
     """
     # Mock the urlopen to return the IP address
     mock_response = MagicMock()
@@ -183,13 +184,13 @@ def test_property_85_deployment_ip_auto_detection(ip_address):
         assert result == ip_address, \
             f"Expected {ip_address}, got {result}"
 
-        # Verify CIDR construction (as done in main())
-        allowed_http_cidr = f"{result}/32"
-        assert allowed_http_cidr == f"{ip_address}/32", \
+        # Verify CIDR construction (as done in main() for SSH access)
+        allowed_ssh_cidr = f"{result}/32"
+        assert allowed_ssh_cidr == f"{ip_address}/32", \
             f"CIDR should be {ip_address}/32"
 
         # Verify CIDR format is valid
-        parts = allowed_http_cidr.split('/')
+        parts = allowed_ssh_cidr.split('/')
         assert len(parts) == 2, "CIDR must have IP and prefix"
         assert parts[1] == "32", "Prefix must be /32"
 

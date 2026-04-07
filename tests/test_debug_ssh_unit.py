@@ -247,7 +247,7 @@ class TestDeploySSHArgumentParsing:
 class TestTerraformVariableConstruction:
     """Test Terraform variable construction with and without SSH."""
 
-    def test_without_ssh_four_vars(self):
+    def test_without_ssh_three_vars(self):
         """Without SSH: 3 base Terraform variables."""
         ami_build_result = {"ami_id": "ami-abc", "region": "us-east-1"}
 
@@ -272,9 +272,10 @@ class TestTerraformVariableConstruction:
             assert "aws_region" in var_keys
             assert "enable_ssh" not in var_keys
             assert "key_pair_name" not in var_keys
+            assert "allowed_ssh_cidr" not in var_keys
 
     def test_with_ssh_six_vars(self):
-        """With SSH: 5 Terraform variables (base 3 + enable_ssh + key_pair_name)."""
+        """With SSH: 6 Terraform variables (base 3 + enable_ssh + key_pair_name + allowed_ssh_cidr)."""
         ami_build_result = {"ami_id": "ami-abc", "region": "us-east-1"}
 
         with patch("subprocess.run") as mock_run:
@@ -289,6 +290,7 @@ class TestTerraformVariableConstruction:
             deploy.terraform_apply(
                 "/tmp/tf", ami_build_result, "c5.9xlarge",
                 enable_ssh=True, key_pair_name="my-key",
+                allowed_ssh_cidr="1.2.3.4/32",
             )
 
             cmd = mock_run.call_args_list[0][0][0]
@@ -298,11 +300,13 @@ class TestTerraformVariableConstruction:
             var_keys = [v.split('=')[0] for v in var_flags]
             assert "enable_ssh" in var_keys
             assert "key_pair_name" in var_keys
+            assert "allowed_ssh_cidr" in var_keys
 
             # Verify values
             var_dict = {v.split('=')[0]: v.split('=', 1)[1] for v in var_flags}
             assert var_dict["enable_ssh"] == "true"
             assert var_dict["key_pair_name"] == "my-key"
+            assert var_dict["allowed_ssh_cidr"] == "1.2.3.4/32"
 
 
 # =============================================================================
