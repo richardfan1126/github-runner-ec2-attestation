@@ -2145,25 +2145,25 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add a new `allowed_ssh_cidr` variable (type string, default `""`, description: CIDR for SSH access on port 22, only used when enable_ssh is true)
     - _Requirements: 23.6, 24.1, 32.22, 32.27_
 
-- [ ] 108. Update deploy script to remove unconditional IP detection and allowed_http_cidr
-  - [ ] 108.1 Update scripts/deploy.py main() function
+- [x] 108. Update deploy script to remove unconditional IP detection and allowed_http_cidr
+  - [x] 108.1 Update scripts/deploy.py main() function
     - Remove the unconditional `get_user_public_ip()` call and `allowed_http_cidr` construction from the default flow
     - Remove `allowed_http_cidr` from the `terraform_apply()` call arguments
     - _Requirements: 25.1, 25.2, 26.7_
 
-  - [ ] 108.2 Update scripts/deploy.py terraform_apply() function signature and body
+  - [x] 108.2 Update scripts/deploy.py terraform_apply() function signature and body
     - Remove the `allowed_http_cidr` parameter from `terraform_apply()`
     - Remove `allowed_http_cidr` from the default `tf_vars` dict
     - Default `tf_vars` should only contain `attestable_ami_id`, `instance_type`, and `aws_region`
     - _Requirements: 25.1, 25.2_
 
-  - [ ] 108.3 Move IP detection into the --enable-ssh block in main()
+  - [x] 108.3 Move IP detection into the --enable-ssh block in main()
     - When `args.enable_ssh` is True, call `get_user_public_ip()` to detect the user's IP
     - Construct `allowed_ssh_cidr` as `{detected_ip}/32`
     - Pass `allowed_ssh_cidr` to `terraform_apply()` via the enable_ssh code path
     - _Requirements: 32.27_
 
-  - [ ] 108.4 Update terraform_apply() to accept and pass allowed_ssh_cidr when SSH is enabled
+  - [x] 108.4 Update terraform_apply() to accept and pass allowed_ssh_cidr when SSH is enabled
     - Add optional `allowed_ssh_cidr` parameter (default `""`)
     - When `enable_ssh` is True, add `allowed_ssh_cidr` to `tf_vars`
     - _Requirements: 32.26, 32.27_

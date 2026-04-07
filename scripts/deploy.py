@@ -82,10 +82,10 @@ def terraform_init(terraform_dir: str) -> None:
 def terraform_apply(
     terraform_dir: str,
     ami_build_result: dict,
-    allowed_http_cidr: str,
     instance_type: str,
     enable_ssh: bool = False,
-    key_pair_name: str = ''
+    key_pair_name: str = '',
+    allowed_ssh_cidr: str = ''
 ) -> dict:
     """
     Apply Terraform configuration to provision infrastructure.
@@ -93,8 +93,10 @@ def terraform_apply(
     Args:
         terraform_dir: Path to Terraform configuration directory
         ami_build_result: AMI build result containing AMI ID
-        allowed_http_cidr: CIDR block for HTTP access
         instance_type: EC2 instance type
+        enable_ssh: Whether to enable SSH debug access
+        key_pair_name: EC2 key pair name for SSH access
+        allowed_ssh_cidr: CIDR block for SSH access (only used when enable_ssh is True)
     
     Returns:
         dict object with deployed resource details
@@ -110,13 +112,13 @@ def terraform_apply(
     tf_vars = {
         'attestable_ami_id': ami_build_result['ami_id'],
         'instance_type': instance_type,
-        'allowed_http_cidr': allowed_http_cidr,
         'aws_region': ami_build_result['region']
     }
     
     if enable_ssh:
         tf_vars['enable_ssh'] = 'true'
         tf_vars['key_pair_name'] = key_pair_name
+        tf_vars['allowed_ssh_cidr'] = allowed_ssh_cidr
     
     logger.info("Terraform variables:")
     for key, value in tf_vars.items():
@@ -286,11 +288,12 @@ def main() -> int:
         logger.info(f"Snapshot ID: {ami_build_result['snapshot_id']}")
         logger.info(f"Region: {ami_build_result['region']}")
         
-        # Get my public IP for whitelisting
-        my_public_ip = get_user_public_ip()
-        allowed_http_cidr = f"{my_public_ip}/32"
-        
-        logger.info(f"Allowed HTTP CIDR: {allowed_http_cidr}")
+        # Detect user IP only when SSH is enabled (for SSH CIDR whitelisting)
+        allowed_ssh_cidr = ''
+        if args.enable_ssh:
+            my_public_ip = get_user_public_ip()
+            allowed_ssh_cidr = f"{my_public_ip}/32"
+            logger.info(f"Allowed SSH CIDR: {allowed_ssh_cidr}")
         
         # Initialize Terraform
         logger.info("")
@@ -309,10 +312,10 @@ def main() -> int:
         raw_terraform_output = terraform_apply(
             terraform_dir,
             ami_build_result,
-            allowed_http_cidr,
             args.instance_type,
             enable_ssh=args.enable_ssh,
-            key_pair_name=args.key_pair_name
+            key_pair_name=args.key_pair_name,
+            allowed_ssh_cidr=allowed_ssh_cidr
         )
 
         # Extract values from terrafrom output
