@@ -8,6 +8,8 @@ The caller communicates with the Remote Executor server using HPKE-based encrypt
 
 The caller validates the server's NitroTPM attestation documents at three points: (1) when the server's public key is retrieved via `/attest`, (2) when the execution request is accepted via `/execute`, and (3) when the output is returned via `/execution/{id}/output`. Each request includes a unique random nonce that is verified in the returned attestation document to ensure freshness and prevent replay attacks.
 
+The workflow also supports concurrent execution isolation testing. When configured with a `concurrency_count` greater than 1, the workflow dispatches multiple independent caller script invocations in parallel — each with its own HPKE session, OIDC token, and attestation validation. Each execution's build script generates its own unique marker at runtime (via `/proc/sys/kernel/random/uuid`), so no marker is passed from the workflow or included in the encrypted payload. After all executions complete, the workflow extracts the `MARKER:<value>` from each execution's stdout and verifies that all markers are unique and that each execution passes filesystem and process isolation tests, demonstrating that the Remote Executor server properly isolates concurrent executions.
+
 ### Key Design Decisions
 
 1. **Single Python script**: All client logic (HTTP calls, HPKE encryption, COSE Sign1 verification, attestation validation, polling) lives in one `.github/scripts/call_remote_executor.py` file to keep the caller self-contained and easy to audit.
@@ -23,8 +25,13 @@ The caller validates the server's NitroTPM attestation documents at three points
 11. **OIDC token in encrypted payload**: The caller acquires a GitHub Actions OIDC token and includes it in the `oidc_token` field of the encrypted request payload for `/execute` and `/execution/{id}/output`. No `Authorization` header is sent on any request. This ensures the token is protected by HPKE encryption in transit.
 12. **Per-session HPKE keypair**: A fresh X25519 keypair is generated for each execution session. The keypair is held in memory only and never persisted to disk. The derived shared key is reused for all `/execution/{id}/output` requests within the same session.
 13. **Mandatory nonces on all attested endpoints**: Every request to `/attest`, `/execute`, and `/execution/{id}/output` includes a unique random nonce. The caller verifies the nonce appears in the returned attestation document to ensure freshness.
+14. **Matrix strategy for concurrent executions**: When `concurrency_count > 1`, the workflow uses a GitHub Actions matrix strategy to dispatch N parallel jobs. Each invocation runs as a fully independent job with its own HPKE session, OIDC token, and attestation validation. A separate `verify-isolation` job collects all outputs, extracts `MARKER:<value>` from each stdout, and performs cross-execution isolation verification.
+15. **Runtime-generated execution markers**: The sample build script generates its own unique marker at runtime using `/proc/sys/kernel/random/uuid`, rather than receiving a marker from the workflow or encrypted payload. This avoids coupling the caller to marker generation and works regardless of whether the server supports passing custom environment variables.
+16. **Sample build script isolation tests**: The sample build script performs filesystem isolation (write/sleep/read at `/tmp/isolation-test.txt`) and process isolation (start a uniquely-named dummy process, verify only one is visible) tests, outputting parseable `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines.
 
 ## Architecture
+
+### Single Execution Flow
 
 ```mermaid
 sequenceDiagram
@@ -80,6 +87,47 @@ sequenceDiagram
     GHA->>GHA: Write $GITHUB_STEP_SUMMARY
 ```
 
+### Concurrent Execution Flow (concurrency_count > 1)
+
+```mermaid
+sequenceDiagram
+    participant GHA as GitHub Actions Workflow
+    participant J1 as Job: execute-1
+    participant J2 as Job: execute-2
+    participant JN as Job: execute-N
+    participant VJ as Job: verify-isolation
+    participant RE as Remote Executor Server
+
+    Note over GHA: Dispatch N parallel jobs (no markers passed)
+    GHA->>J1: Invoke caller (standard arguments only)
+    GHA->>J2: Invoke caller (standard arguments only)
+    GHA->>JN: Invoke caller (standard arguments only)
+
+    par Parallel execution
+        J1->>RE: Full HPKE flow (own session, own OIDC token)
+        RE-->>J1: stdout contains MARKER:<runtime-uuid-1>, ISOLATION_FILE:PASS/FAIL, ISOLATION_PROCESS:PASS/FAIL
+    and
+        J2->>RE: Full HPKE flow (own session, own OIDC token)
+        RE-->>J2: stdout contains MARKER:<runtime-uuid-2>, ISOLATION_FILE:PASS/FAIL, ISOLATION_PROCESS:PASS/FAIL
+    and
+        JN->>RE: Full HPKE flow (own session, own OIDC token)
+        RE-->>JN: stdout contains MARKER:<runtime-uuid-N>, ISOLATION_FILE:PASS/FAIL, ISOLATION_PROCESS:PASS/FAIL
+    end
+
+    J1->>J1: Upload stdout as artifact (execution-output-1)
+    J2->>J2: Upload stdout as artifact (execution-output-2)
+    JN->>JN: Upload stdout as artifact (execution-output-N)
+
+    Note over VJ: Runs after all execute jobs complete
+    VJ->>VJ: Download all execution-output-* artifacts
+    VJ->>VJ: For each execution: extract MARKER:<value> from stdout
+    VJ->>VJ: Verify all extracted markers are unique
+    VJ->>VJ: For each execution: parse ISOLATION_FILE:PASS/FAIL
+    VJ->>VJ: For each execution: parse ISOLATION_PROCESS:PASS/FAIL
+    VJ->>VJ: Fail if any isolation violation detected
+    VJ->>GHA: Write isolation verification summary to $GITHUB_STEP_SUMMARY
+```
+
 ### Component Layout
 
 ```
@@ -97,7 +145,7 @@ sequenceDiagram
 ### 1. GitHub Actions Workflow (`call-remote-executor.yml`)
 
 Responsibilities:
-- Define `workflow_dispatch` inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`), `audience` (optional, specifies the OIDC audience value)
+- Define `workflow_dispatch` inputs: `server_url` (required), `script_path` (optional, default `.github/scripts/sample-build.sh`), `commit_hash` (optional, default `${{ github.sha }}`), `audience` (optional, specifies the OIDC audience value), `concurrency_count` (optional, default `1`, number of parallel executions)
 - Declare `id-token: write` in the `permissions` block to enable OIDC token requests
 - Hardcode the NitroTPM attestation root CA certificate PEM inline in the workflow YAML as an environment variable, and pass it to the caller script via `--root-cert-pem`
 - Hardcode the expected PCR4 and PCR7 values as a JSON map inline in the workflow YAML, and pass it to the caller script via `--expected-pcrs`
@@ -105,8 +153,32 @@ Responsibilities:
 - Validate that `server_url` is not empty
 - Check out the repository
 - Install Python dependencies from `.github/scripts/pyproject.toml`
-- Invoke `.github/scripts/call_remote_executor.py` with the appropriate arguments and `GITHUB_TOKEN`
-- Write a job summary to `$GITHUB_STEP_SUMMARY`
+- When `concurrency_count == 1`: invoke the caller script directly in a single job (existing behavior)
+- When `concurrency_count > 1`: use a matrix strategy to dispatch N parallel `execute` jobs, followed by a `verify-isolation` job that collects and verifies all outputs
+
+#### Concurrent Execution Workflow Structure
+
+When `concurrency_count > 1`, the workflow uses a two-phase job structure:
+
+**Phase 1: `execute` job (matrix strategy)**
+- Matrix dimension: `index: [1, 2, ..., concurrency_count]`
+- Each matrix job:
+  1. Checks out the repository
+  2. Installs Python dependencies
+  3. Invokes the caller script with all standard arguments (no `--execution-marker`)
+  4. Saves the stdout output to a file
+  5. Uploads the output file as a GitHub Actions artifact (`execution-output-{index}`)
+
+**Phase 2: `verify-isolation` job (depends on all `execute` jobs)**
+- Downloads all `execution-output-*` artifacts
+- For each execution output:
+  1. Extracts the `MARKER:<value>` line from stdout
+  2. Parses `ISOLATION_FILE:PASS` or `ISOLATION_FILE:FAIL` line
+  3. Parses `ISOLATION_PROCESS:PASS` or `ISOLATION_PROCESS:FAIL` line
+- Verifies all extracted markers are unique across all executions (duplicate markers indicate broken isolation since each build script generates its own UUID independently)
+- Fails the workflow if any isolation violation is detected (duplicate markers, `ISOLATION_FILE:FAIL`, or `ISOLATION_PROCESS:FAIL`)
+- Logs a warning if any isolation test result line is missing from the output
+- Writes a comprehensive isolation verification summary to `$GITHUB_STEP_SUMMARY` including per-execution results
 
 ### 2. Caller Script (`.github/scripts/call_remote_executor.py`)
 
@@ -353,6 +425,40 @@ echo "Date: $(date -u)"
 echo "Kernel: $(uname -r)"
 echo "User: $(whoami)"
 echo "Working directory: $(pwd)"
+
+# --- Execution Marker (generated at runtime) ---
+EXECUTION_MARKER=$(cat /proc/sys/kernel/random/uuid)
+echo "MARKER:${EXECUTION_MARKER}"
+
+# --- Filesystem Isolation Test ---
+ISOLATION_FILE="/tmp/isolation-test.txt"
+RANDOM_VALUE=$(cat /proc/sys/kernel/random/uuid)
+echo "$RANDOM_VALUE" > "$ISOLATION_FILE"
+sleep 2
+READ_VALUE=$(cat "$ISOLATION_FILE")
+if [ "$READ_VALUE" = "$RANDOM_VALUE" ]; then
+    echo "ISOLATION_FILE:PASS"
+else
+    echo "ISOLATION_FILE:FAIL"
+fi
+
+# --- Process Isolation Test ---
+PROC_NAME="isolation-probe-${EXECUTION_MARKER}"
+# Start a uniquely-named dummy background process
+bash -c "exec -a $PROC_NAME sleep 300" &
+DUMMY_PID=$!
+sleep 1
+# Count how many processes with this unique name are visible
+PROC_COUNT=$(pgrep -c -f "$PROC_NAME" || true)
+if [ "$PROC_COUNT" -eq 1 ]; then
+    echo "ISOLATION_PROCESS:PASS"
+else
+    echo "ISOLATION_PROCESS:FAIL"
+fi
+# Cleanup dummy process
+kill "$DUMMY_PID" 2>/dev/null || true
+wait "$DUMMY_PID" 2>/dev/null || true
+
 echo "=== Build Complete ==="
 ```
 
@@ -486,6 +592,7 @@ Validation steps for output integrity attestation (`validate_output_attestation`
 | `script_path` | string | no | `.github/scripts/sample-build.sh` | Path to script in the repository |
 | `commit_hash` | string | no | `${{ github.sha }}` | Git commit SHA to execute |
 | `audience` | string | no | — | Audience value for OIDC token request, must match server's expected audience |
+| `concurrency_count` | string | no | `1` | Number of parallel execution requests to dispatch for isolation testing |
 
 ### Workflow Permissions
 
@@ -794,6 +901,30 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 
 **Validates: Requirements 15.6**
 
+### Property 22: Marker presence verification
+
+*For any* execution output (stdout string), the isolation verification logic should accept if and only if the stdout contains exactly one line matching `MARKER:<value>` (where `<value>` is a non-empty string). If no `MARKER:` line is present in the stdout, the verification should fail with an error indicating the marker was not found.
+
+**Validates: Requirements 17B.4, 17B.6**
+
+### Property 23: Marker uniqueness verification
+
+*For any* set of N execution outputs (each containing a `MARKER:<value>` line with a runtime-generated UUID), the isolation verification logic should accept if and only if all extracted marker values are unique across all executions. If any two executions produced the same marker value, the verification should fail with an isolation violation error identifying the affected executions.
+
+**Validates: Requirements 17B.5, 17B.7**
+
+### Property 24: Isolation test result parsing and verification
+
+*For any* execution stdout string, the isolation verification logic should correctly parse `ISOLATION_FILE:PASS`, `ISOLATION_FILE:FAIL`, `ISOLATION_PROCESS:PASS`, and `ISOLATION_PROCESS:FAIL` lines. The verification should fail if any execution reports `ISOLATION_FILE:FAIL` or `ISOLATION_PROCESS:FAIL`. If an isolation test result line is missing, the verification should log a warning but not fail on that basis alone.
+
+**Validates: Requirements 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13**
+
+### Property 25: Isolation summary contains all results
+
+*For any* set of concurrent execution results (each with an execution ID, a runtime-generated execution marker extracted from stdout, marker uniqueness check result, filesystem isolation result, and process isolation result), the generated isolation verification job summary should contain the execution ID, extracted marker, and all isolation test results for every execution.
+
+**Validates: Requirements 17D.17, 17D.18**
+
 ## Error Handling
 
 ### Error Categories and Responses
@@ -841,6 +972,13 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 | Output Attestation | PCR value missing or mismatch | Raise `CallerError(phase="output_attestation")` identifying the PCR index |
 | Output Attestation | Nonce missing or mismatch | Raise `CallerError(phase="output_attestation")` with expected vs actual nonce |
 | Output Attestation | Digest mismatch | Raise `CallerError(phase="output_attestation")` with both digests |
+| Isolation Verification | Execution stdout missing `MARKER:` line | Fail workflow with error identifying the execution and missing marker |
+| Isolation Verification | Duplicate marker values across executions | Fail workflow with isolation violation error identifying the affected executions |
+| Isolation Verification | Execution stdout contains `ISOLATION_FILE:FAIL` | Fail workflow with filesystem isolation violation error identifying the execution |
+| Isolation Verification | Execution stdout contains `ISOLATION_PROCESS:FAIL` | Fail workflow with process isolation violation error identifying the execution |
+| Isolation Verification | Execution stdout missing `ISOLATION_FILE` result line | Log warning, do not fail on this basis alone |
+| Isolation Verification | Execution stdout missing `ISOLATION_PROCESS` result line | Log warning, do not fail on this basis alone |
+| Concurrent Execution | Any matrix job fails (non-zero exit, attestation failure, timeout) | `verify-isolation` job reports which execution failed, workflow marked as failed |
 
 ### Error Propagation Strategy
 
@@ -945,6 +1083,20 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 20. **AES-256-GCM decryption rejects tampered ciphertext**: Generate random dicts, encrypt via `ClientEncryption.encrypt_payload`. Modify a random byte in the base64-decoded wire format. Verify `ClientEncryption.decrypt_response` raises a `CallerError`.
     `# Feature: gha-remote-executor-caller, Property 20: AES-256-GCM decryption rejects tampered ciphertext`
 
+21. (Removed — execution marker is no longer included in the encrypted payload. Markers are generated at runtime by the build script.)
+
+22. **Marker presence verification**: Generate random stdout strings. Insert a `MARKER:<uuid>` line into some. Verify the isolation verification logic accepts when exactly one `MARKER:` line is present and rejects when no `MARKER:` line is found.
+    `# Feature: gha-remote-executor-caller, Property 22: Marker presence verification`
+
+23. **Marker uniqueness verification**: Generate random sets of N (2-5) execution outputs, each containing a `MARKER:<uuid>` line with a unique runtime-generated UUID. Verify the isolation verification logic accepts when all markers are unique. Then duplicate one marker across two outputs and verify it rejects with an isolation violation error.
+    `# Feature: gha-remote-executor-caller, Property 23: Marker uniqueness verification`
+
+24. **Isolation test result parsing and verification**: Generate random stdout strings containing various combinations of `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines. Verify the parsing logic correctly extracts results. Verify failure when any result is FAIL. Verify warning (not failure) when result lines are missing.
+    `# Feature: gha-remote-executor-caller, Property 24: Isolation test result parsing and verification`
+
+25. **Isolation summary contains all results**: Generate random sets of execution results with execution IDs, runtime-generated markers extracted from stdout, and isolation test outcomes. Call the summary generation logic. Verify the output contains all execution IDs, extracted markers, marker uniqueness check results, filesystem isolation results, and process isolation results.
+    `# Feature: gha-remote-executor-caller, Property 25: Isolation summary contains all results`
+
 **Unit tests** (specific examples and edge cases):
 
 - Empty `server_url` raises error (Req 1.5)
@@ -983,3 +1135,17 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - Decrypted response that is not valid JSON raises `CallerError` (Req 15.7)
 - Attest failure prevents encrypted requests from being sent (Req 16.6)
 - /health and /attest requests have no request body (Req 16.4, 16.5)
+- Workflow YAML contains `concurrency_count` input with default value of 1 (Req 1.8)
+- Workflow YAML contains matrix strategy for concurrent execution (Req 17A.1)
+- Workflow YAML dispatches single invocation when concurrency_count is 1 (Req 17A.2)
+- Workflow YAML has `verify-isolation` job that depends on execute jobs (Req 17B.3)
+- Sample build script generates its own marker via `/proc/sys/kernel/random/uuid` (Req 2.5)
+- Sample build script echoes `MARKER:<value>` unconditionally (Req 2.6)
+- Sample build script contains filesystem isolation test logic (write/sleep/read at /tmp/isolation-test.txt) (Req 2.7)
+- Sample build script outputs `ISOLATION_FILE:PASS` and `ISOLATION_FILE:FAIL` (Req 2.8, 2.9)
+- Sample build script contains process isolation test logic with uniquely-named dummy process (Req 2.10)
+- Sample build script outputs `ISOLATION_PROCESS:PASS` and `ISOLATION_PROCESS:FAIL` (Req 2.11, 2.12)
+- Sample build script cleans up dummy background process (Req 2.13)
+- Each matrix job performs independent HPKE key exchange (Req 17C.12)
+- Workflow succeeds when all executions pass and isolation is verified (Req 17D.17)
+- Workflow fails and reports which execution failed (Req 17D.18)

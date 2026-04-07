@@ -588,6 +588,137 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 32. Final checkpoint - Ensure all HPKE and nonce tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 33. Update sample build script with execution marker and isolation tests
+  - [ ] 33.1 Add execution marker generation to `.github/scripts/sample-build.sh`
+    - Generate a unique marker at runtime via `cat /proc/sys/kernel/random/uuid`
+    - Echo `MARKER:${EXECUTION_MARKER}` on a dedicated stdout line
+    - _Requirements: 2.5, 2.6_
+
+  - [ ] 33.2 Add filesystem isolation test to `.github/scripts/sample-build.sh`
+    - Generate a unique random string via `cat /proc/sys/kernel/random/uuid`
+    - Write the random string to `/tmp/isolation-test.txt`
+    - Sleep for 2 seconds
+    - Read the file back and compare against the written value
+    - Output `ISOLATION_FILE:PASS` if values match, `ISOLATION_FILE:FAIL` if they differ
+    - _Requirements: 2.7, 2.8, 2.9, 2.14_
+
+  - [ ] 33.3 Add process isolation test to `.github/scripts/sample-build.sh`
+    - Start a dummy long-running background process with a unique name derived from the execution marker (e.g., `isolation-probe-${EXECUTION_MARKER}`)
+    - Use `exec -a` to set the process name, then `pgrep -c -f` to count matching processes
+    - Output `ISOLATION_PROCESS:PASS` if exactly one matching process is visible, `ISOLATION_PROCESS:FAIL` otherwise
+    - Clean up the dummy background process after the test
+    - _Requirements: 2.10, 2.11, 2.12, 2.13, 2.14_
+
+  - [ ] 33.4 Write unit tests for updated sample build script content
+    - Test sample build script generates its own marker via `/proc/sys/kernel/random/uuid` (Req 2.5)
+    - Test sample build script echoes `MARKER:<value>` unconditionally (Req 2.6)
+    - Test sample build script contains filesystem isolation test logic (write/sleep/read at /tmp/isolation-test.txt) (Req 2.7)
+    - Test sample build script outputs `ISOLATION_FILE:PASS` and `ISOLATION_FILE:FAIL` (Req 2.8, 2.9)
+    - Test sample build script contains process isolation test logic with uniquely-named dummy process (Req 2.10)
+    - Test sample build script outputs `ISOLATION_PROCESS:PASS` and `ISOLATION_PROCESS:FAIL` (Req 2.11, 2.12)
+    - Test sample build script cleans up dummy background process (Req 2.13)
+    - _Requirements: 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13_
+
+- [ ] 34. Checkpoint - Ensure sample build script tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 35. Update GitHub Actions workflow for concurrent execution support
+  - [ ] 35.1 Add `concurrency_count` input to workflow dispatch
+    - Add optional `concurrency_count` input with default value `1` and type `string`
+    - _Requirements: 1.8_
+
+  - [ ] 35.2 Add matrix strategy for parallel execution jobs
+    - When `concurrency_count > 1`, use a matrix strategy with `index: [1, 2, ..., concurrency_count]` to dispatch N parallel `execute` jobs
+    - Each matrix job: checks out the repository, installs Python dependencies, invokes the caller script with all standard arguments (no `--execution-marker`), saves stdout output to a file, uploads the output file as a GitHub Actions artifact (`execution-output-{index}`)
+    - When `concurrency_count == 1`, dispatch a single invocation (preserve existing behavior in the `call-remote-executor` job)
+    - Each matrix job performs its own independent HPKE key exchange, OIDC token acquisition, and attestation validation
+    - _Requirements: 17A.1, 17A.2, 17C.14, 17C.15, 17C.16_
+
+  - [ ] 35.3 Add `verify-isolation` job to workflow
+    - Add a `verify-isolation` job that depends on all `execute` matrix jobs (`needs: [execute]`)
+    - Download all `execution-output-*` artifacts
+    - For each execution output: extract `MARKER:<value>` line from stdout, parse `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines
+    - Verify all extracted markers are unique across all executions
+    - Fail the workflow if any isolation violation is detected (duplicate markers, `ISOLATION_FILE:FAIL`, or `ISOLATION_PROCESS:FAIL`)
+    - Log a warning if any isolation test result line is missing from the output
+    - Write a comprehensive isolation verification summary to `$GITHUB_STEP_SUMMARY` including per-execution results
+    - The isolation verification logic can be implemented as inline shell/Python in the workflow step or as a separate Python script
+    - _Requirements: 17B.3, 17B.4, 17B.5, 17B.6, 17B.7, 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13, 17D.17, 17D.18, 17D.19, 17D.20_
+
+  - [ ] 35.4 Write unit tests for workflow concurrent execution structure
+    - Test workflow YAML contains `concurrency_count` input with default value of 1 (Req 1.8)
+    - Test workflow YAML contains matrix strategy for concurrent execution (Req 17A.1)
+    - Test workflow YAML dispatches single invocation when concurrency_count is 1 (Req 17A.2)
+    - Test workflow YAML has `verify-isolation` job that depends on execute jobs (Req 17B.3)
+    - Test each matrix job performs independent HPKE key exchange (Req 17C.14)
+    - _Requirements: 1.8, 17A.1, 17A.2, 17B.3, 17C.14_
+
+- [ ] 36. Checkpoint - Ensure workflow structure tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 37. Implement isolation verification logic
+  - [ ] 37.1 Create isolation verification script or function
+    - Implement a Python script (e.g., `.github/scripts/verify_isolation.py`) or inline logic that:
+      - Accepts a directory of execution output files as input
+      - For each output file: extracts the `MARKER:<value>` line, parses `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines
+      - Verifies all extracted markers are unique
+      - Fails if any marker is missing, any markers are duplicated, or any isolation test reports FAIL
+      - Logs a warning if any isolation test result line is missing
+      - Generates a summary string with per-execution results (execution index, marker, filesystem isolation result, process isolation result)
+    - _Requirements: 17B.4, 17B.5, 17B.6, 17B.7, 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13, 17D.17, 17D.18_
+
+  - [ ] 37.2 Write property test for marker presence verification
+    - **Property 22: Marker presence verification**
+    - Generate random stdout strings, insert a `MARKER:<uuid>` line into some
+    - Verify the isolation verification logic accepts when exactly one `MARKER:` line is present and rejects when no `MARKER:` line is found
+    - **Validates: Requirements 17B.4, 17B.6**
+
+  - [ ] 37.3 Write property test for marker uniqueness verification
+    - **Property 23: Marker uniqueness verification**
+    - Generate random sets of N (2-5) execution outputs, each containing a `MARKER:<uuid>` line with a unique runtime-generated UUID
+    - Verify the isolation verification logic accepts when all markers are unique
+    - Duplicate one marker across two outputs and verify it rejects with an isolation violation error
+    - **Validates: Requirements 17B.5, 17B.7**
+
+  - [ ] 37.4 Write property test for isolation test result parsing and verification
+    - **Property 24: Isolation test result parsing and verification**
+    - Generate random stdout strings containing various combinations of `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines
+    - Verify the parsing logic correctly extracts results
+    - Verify failure when any result is FAIL
+    - Verify warning (not failure) when result lines are missing
+    - **Validates: Requirements 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13**
+
+  - [ ] 37.5 Write property test for isolation summary contains all results
+    - **Property 25: Isolation summary contains all results**
+    - Generate random sets of execution results with execution IDs, runtime-generated markers extracted from stdout, and isolation test outcomes
+    - Call the summary generation logic
+    - Verify the output contains all execution IDs, extracted markers, marker uniqueness check results, filesystem isolation results, and process isolation results
+    - **Validates: Requirements 17D.17, 17D.18**
+
+  - [ ] 37.6 Write unit tests for isolation verification edge cases
+    - Test workflow succeeds when all executions pass and isolation is verified (Req 17D.19)
+    - Test workflow fails and reports which execution failed (Req 17D.20)
+    - _Requirements: 17D.19, 17D.20_
+
+- [ ] 38. Checkpoint - Ensure all isolation verification tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 39. Wire isolation verification into workflow and final integration
+  - [ ] 39.1 Wire the isolation verification logic into the `verify-isolation` workflow job
+    - Ensure the `verify-isolation` job invokes the isolation verification script/logic with the downloaded artifacts
+    - Ensure the job writes the isolation summary to `$GITHUB_STEP_SUMMARY`
+    - Ensure the job exits with non-zero code if any isolation check fails
+    - _Requirements: 17B.3, 17D.17, 17D.18, 17D.19, 17D.20_
+
+  - [ ] 39.2 Write integration-level unit tests for end-to-end workflow structure
+    - Test that the workflow YAML is valid and all jobs are properly connected
+    - Test that the `verify-isolation` job depends on the `execute` matrix jobs
+    - Test that the `execute` job uploads artifacts and `verify-isolation` downloads them
+    - _Requirements: 17A.1, 17B.3, 17D.19_
+
+- [ ] 40. Final checkpoint - Ensure all concurrent execution isolation tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -600,3 +731,4 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - Tasks 1-11 cover the original caller implementation (all completed)
 - Tasks 12-19 cover OIDC authentication support (Requirements 9, 10; Properties 13-15)
 - Tasks 20-32 cover HPKE encrypted communication, mandatory nonces, and related updates (Requirements 11-16; Properties 16-20)
+- Tasks 33-40 cover concurrent execution isolation support (Requirements 1.8, 2.5-2.14, 17; Properties 22-25)

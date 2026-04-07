@@ -6,10 +6,12 @@ This document specifies the requirements for the GitHub Actions Remote Executor 
 
 All communication with the Remote Executor server's `/execute` and `/execution/{id}/output` endpoints uses HPKE-based encryption. The caller first obtains the server's public key via the unauthenticated `/attest` endpoint, generates a client-side X25519 keypair, derives a shared AES-256-GCM key via ECDH + HKDF-SHA256, and encrypts all request payloads (including the OIDC token) before transmission. Responses from these endpoints are also encrypted and must be decrypted by the caller using the same shared key.
 
+The workflow also demonstrates that concurrent server executions are isolated from each other. When configured with a concurrency count greater than 1, the workflow dispatches multiple independent execution requests in parallel — each with its own HPKE session, attestation validation, and output polling — and verifies that each execution produces the expected output without interference from other concurrent executions on the same server.
+
 The caller includes:
 
-1. **GitHub Actions Workflow**: A `workflow_dispatch`-triggered workflow that orchestrates the entire attest-encrypt-execute-poll-verify cycle against the Remote Executor server.
-2. **Sample Build Script**: A sample script included in the repository that the Remote Executor server will fetch and execute.
+1. **GitHub Actions Workflow**: A `workflow_dispatch`-triggered workflow that orchestrates the entire attest-encrypt-execute-poll-verify cycle against the Remote Executor server, with support for dispatching multiple concurrent executions to demonstrate isolation.
+2. **Sample Build Script**: A sample script included in the repository that the Remote Executor server will fetch and execute. The script generates a unique execution marker at runtime and performs filesystem and process isolation tests to enable isolation verification.
 3. **Attestation Validation Logic**: Client-side logic to decode, cryptographically verify, and validate COSE Sign1-encoded NitroTPM attestation documents returned by the server, including certificate chain (PKI) validation, COSE signature verification, PCR value validation, and output integrity verification.
 4. **HPKE Encryption Logic**: Client-side X25519 key generation, ECDH key agreement, HKDF-SHA256 key derivation, and AES-256-GCM encryption/decryption for all request and response payloads on encrypted endpoints.
 
@@ -43,6 +45,11 @@ The caller includes:
 - **HPKE**: Hybrid Public Key Encryption — the encryption scheme used for securing communication between the Caller_Script and the Remote_Executor_Server, combining X25519 key agreement with AES-256-GCM symmetric encryption
 - **Encrypted_Envelope**: The JSON structure sent to encrypted endpoints, containing `encrypted_payload` (base64-encoded `nonce || ciphertext`) and `client_public_key` (base64-encoded raw X25519 public key)
 - **Nonce**: A random value included in all attestation requests and encrypted payloads to verify freshness of attestation documents and prevent replay attacks. The caller generates a unique nonce for every request to an endpoint that supports it (/attest, /execute, /execution/{id}/output)
+- **Concurrency_Count**: A positive integer (default 1) specifying how many independent execution requests the Caller_Workflow dispatches in parallel to demonstrate that the Remote_Executor_Server isolates concurrent executions
+- **Execution_Marker**: A unique identifier generated at runtime by the Sample_Build_Script (e.g., using `uuidgen` or `/proc/sys/kernel/random/uuid`), echoed in the script output as `MARKER:<value>`, and used to verify that each execution produces its own unique output. Since the server does not support passing custom environment variables from the caller, the marker is generated inside the execution environment rather than being passed from the workflow.
+- **Isolation_Verification**: The process of verifying that each concurrent execution's output passes its own filesystem and process isolation tests (`ISOLATION_FILE:PASS`, `ISOLATION_PROCESS:PASS`), contains exactly one `MARKER:<value>` line, and that each execution's marker is unique across all concurrent executions
+- **Isolation_Test_File_Path**: A well-known file path (`/tmp/isolation-test.txt`) used by the Sample_Build_Script to test filesystem isolation between concurrent executions
+- **Isolation_Test_Result**: A parseable line in the script stdout output reporting the result of an isolation test, formatted as `ISOLATION_<TEST_NAME>:<PASS|FAIL>` (e.g., `ISOLATION_FILE:PASS`, `ISOLATION_PROCESS:PASS`)
 
 ## Requirements
 
@@ -59,10 +66,11 @@ The caller includes:
 5. IF the `server_url` input is empty, THEN THE Caller_Workflow SHALL fail with a clear error message
 6. THE Caller_Workflow SHALL hardcode the NitroTPM attestation Root_CA_Certificate PEM inline in the workflow definition and pass it to the Caller_Script
 7. THE Caller_Workflow SHALL hardcode the Expected_PCRs for PCR4 and PCR7 as a JSON-encoded map inline in the workflow definition and pass it to the Caller_Script
+8. THE Caller_Workflow SHALL accept an optional input `concurrency_count` with a default value of 1, specifying the number of parallel execution requests to dispatch
 
 ### Requirement 2: Sample Build Script
 
-**User Story:** As a developer, I want a sample build script in the repository, so that I have a ready-to-use payload for testing remote execution.
+**User Story:** As a developer, I want a sample build script in the repository, so that I have a ready-to-use payload for testing remote execution and verifying that concurrent executions are isolated at the filesystem and process level.
 
 #### Acceptance Criteria
 
@@ -70,6 +78,16 @@ The caller includes:
 2. THE Sample_Build_Script SHALL produce output on stdout demonstrating successful execution
 3. THE Sample_Build_Script SHALL exit with code 0 on successful completion
 4. THE Sample_Build_Script SHALL include basic system information in its output to verify the execution environment
+5. THE Sample_Build_Script SHALL generate a unique Execution_Marker at runtime (e.g., using `uuidgen` or reading `/proc/sys/kernel/random/uuid`) without depending on any environment variable set by the caller or server
+6. THE Sample_Build_Script SHALL output the runtime-generated marker as `MARKER:<value>` on a dedicated stdout line so that the Caller_Workflow can reliably parse the marker from the output
+7. THE Sample_Build_Script SHALL perform a filesystem isolation test by generating a unique random string, writing the random string to the Isolation_Test_File_Path (`/tmp/isolation-test.txt`), sleeping for 2 seconds, reading the file back, and comparing the read value against the written value
+8. WHEN the filesystem isolation test read value matches the written value, THE Sample_Build_Script SHALL output `ISOLATION_FILE:PASS` on a dedicated stdout line
+9. WHEN the filesystem isolation test read value does not match the written value, THE Sample_Build_Script SHALL output `ISOLATION_FILE:FAIL` on a dedicated stdout line
+10. THE Sample_Build_Script SHALL perform a process isolation test by starting a dummy long-running background process with a unique name derived from the runtime-generated Execution_Marker (e.g., `sleep 300` launched via a wrapper with a unique process name), then counting the number of running processes matching that unique name, and verifying that exactly one matching process is visible
+11. WHEN exactly one matching process is visible for the process isolation test, THE Sample_Build_Script SHALL output `ISOLATION_PROCESS:PASS` on a dedicated stdout line
+12. WHEN more than one or zero matching processes are visible for the process isolation test, THE Sample_Build_Script SHALL output `ISOLATION_PROCESS:FAIL` on a dedicated stdout line
+13. THE Sample_Build_Script SHALL clean up the dummy long-running background process after the process isolation test completes
+14. THE Sample_Build_Script SHALL output all Isolation_Test_Result lines in a parseable format so that the Caller_Workflow can extract and verify the results
 
 ### Requirement 3: Execution Request Submission
 
@@ -321,3 +339,41 @@ The caller includes:
 4. THE `/health` endpoint SHALL remain unencrypted (plain HTTP GET with no request body)
 5. THE `/attest` endpoint SHALL remain unencrypted (plain HTTP GET with no request body)
 6. IF the attest step fails (attestation validation failure, missing public key, or connection error), THEN THE Caller_Script SHALL fail the workflow step before attempting to send any encrypted requests
+
+### Requirement 17: Concurrent Execution Isolation
+
+**User Story:** As a developer, I want the workflow to demonstrate that concurrent server executions are isolated from each other, so that I can verify the Remote Executor server does not leak state or output between simultaneous execution requests.
+
+#### Acceptance Criteria
+
+##### 17A: Concurrent Dispatch
+
+1. WHEN the `concurrency_count` input is greater than 1, THE Caller_Workflow SHALL dispatch that many independent Caller_Script invocations in parallel
+2. WHEN the `concurrency_count` input is 1, THE Caller_Workflow SHALL dispatch a single Caller_Script invocation (existing behavior)
+
+##### 17B: Isolation Verification
+
+3. WHEN all concurrent executions complete, THE Caller_Workflow SHALL collect the stdout from each execution
+4. THE Caller_Workflow SHALL verify that each execution's stdout contains exactly one `MARKER:<value>` line
+5. THE Caller_Workflow SHALL extract the marker value from each execution's `MARKER:<value>` line and verify that all extracted markers are unique across all concurrent executions (no two executions produced the same marker)
+6. IF any execution's stdout does not contain a `MARKER:<value>` line, THEN THE Caller_Workflow SHALL fail with an error indicating the marker was not found in the output
+7. IF any two executions produced the same marker value, THEN THE Caller_Workflow SHALL fail with an isolation violation error identifying the affected executions (this would indicate filesystem isolation is broken since markers are generated independently at runtime)
+8. THE Caller_Workflow SHALL parse each execution's stdout for `ISOLATION_FILE:PASS` or `ISOLATION_FILE:FAIL` lines to determine the filesystem isolation test result
+9. THE Caller_Workflow SHALL parse each execution's stdout for `ISOLATION_PROCESS:PASS` or `ISOLATION_PROCESS:FAIL` lines to determine the process isolation test result
+10. IF any execution's stdout contains `ISOLATION_FILE:FAIL`, THEN THE Caller_Workflow SHALL fail with a filesystem isolation violation error identifying the affected execution
+11. IF any execution's stdout contains `ISOLATION_PROCESS:FAIL`, THEN THE Caller_Workflow SHALL fail with a process isolation violation error identifying the affected execution
+12. IF any execution's stdout does not contain an `ISOLATION_FILE:PASS` or `ISOLATION_FILE:FAIL` line, THEN THE Caller_Workflow SHALL log a warning indicating the filesystem isolation test result was not found
+13. IF any execution's stdout does not contain an `ISOLATION_PROCESS:PASS` or `ISOLATION_PROCESS:FAIL` line, THEN THE Caller_Workflow SHALL log a warning indicating the process isolation test result was not found
+
+##### 17C: Independent Sessions
+
+14. THE Caller_Workflow SHALL ensure each concurrent Caller_Script invocation performs its own independent HPKE key exchange (separate Client_Keypair and Shared_Key per invocation)
+15. THE Caller_Workflow SHALL ensure each concurrent Caller_Script invocation acquires its own OIDC_Token
+16. THE Caller_Workflow SHALL ensure each concurrent Caller_Script invocation performs its own attestation validation
+
+##### 17D: Result Reporting
+
+17. THE Caller_Workflow SHALL include the isolation verification result (pass or fail) in the GitHub Actions job summary, including the results of the marker uniqueness check, filesystem isolation test, and process isolation test for each execution
+18. THE Caller_Workflow SHALL report the Execution_ID and the runtime-generated Execution_Marker extracted from each execution's output in the job summary
+19. WHEN all concurrent executions succeed and isolation verification passes, THE Caller_Workflow SHALL mark the workflow as successful
+20. IF any concurrent execution fails (non-zero exit code, attestation failure, or timeout), THEN THE Caller_Workflow SHALL mark the workflow as failed and report which execution failed
