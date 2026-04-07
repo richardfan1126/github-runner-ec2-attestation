@@ -195,7 +195,9 @@ def attestation_doc_strategy():
             ),
             "certificate": st.binary(min_size=1, max_size=200),
             "cabundle": st.lists(st.binary(min_size=1, max_size=200), min_size=1, max_size=3),
-            "nonce": st.binary(min_size=1, max_size=64),
+            "nonce": st.text(
+                alphabet="0123456789abcdef", min_size=1, max_size=64
+            ).map(lambda s: s.encode("utf-8")),
             "public_key": st.binary(min_size=32, max_size=32),
         }
     )
