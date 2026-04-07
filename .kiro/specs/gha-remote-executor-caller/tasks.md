@@ -619,22 +619,22 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test sample build script cleans up dummy background process (Req 2.13)
     - _Requirements: 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13_
 
-- [ ] 34. Checkpoint - Ensure sample build script tests pass
+- [x] 34. Checkpoint - Ensure sample build script tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 35. Update GitHub Actions workflow for concurrent execution support
-  - [ ] 35.1 Add `concurrency_count` input to workflow dispatch
+- [x] 35. Update GitHub Actions workflow for concurrent execution support
+  - [x] 35.1 Add `concurrency_count` input to workflow dispatch
     - Add optional `concurrency_count` input with default value `1` and type `string`
     - _Requirements: 1.8_
 
-  - [ ] 35.2 Add matrix strategy for parallel execution jobs
+  - [x] 35.2 Add matrix strategy for parallel execution jobs
     - When `concurrency_count > 1`, use a matrix strategy with `index: [1, 2, ..., concurrency_count]` to dispatch N parallel `execute` jobs
     - Each matrix job: checks out the repository, installs Python dependencies, invokes the caller script with all standard arguments (no `--execution-marker`), saves stdout output to a file, uploads the output file as a GitHub Actions artifact (`execution-output-{index}`)
     - When `concurrency_count == 1`, dispatch a single invocation (preserve existing behavior in the `call-remote-executor` job)
     - Each matrix job performs its own independent HPKE key exchange, OIDC token acquisition, and attestation validation
     - _Requirements: 17A.1, 17A.2, 17C.14, 17C.15, 17C.16_
 
-  - [ ] 35.3 Add `verify-isolation` job to workflow
+  - [x] 35.3 Add `verify-isolation` job to workflow
     - Add a `verify-isolation` job that depends on all `execute` matrix jobs (`needs: [execute]`)
     - Download all `execution-output-*` artifacts
     - For each execution output: extract `MARKER:<value>` line from stdout, parse `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines
@@ -645,7 +645,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - The isolation verification logic can be implemented as inline shell/Python in the workflow step or as a separate Python script
     - _Requirements: 17B.3, 17B.4, 17B.5, 17B.6, 17B.7, 17B.8, 17B.9, 17B.10, 17B.11, 17B.12, 17B.13, 17D.17, 17D.18, 17D.19, 17D.20_
 
-  - [ ] 35.4 Write unit tests for workflow concurrent execution structure
+  - [x] 35.4 Write unit tests for workflow concurrent execution structure
     - Test workflow YAML contains `concurrency_count` input with default value of 1 (Req 1.8)
     - Test workflow YAML contains matrix strategy for concurrent execution (Req 17A.1)
     - Test workflow YAML dispatches single invocation when concurrency_count is 1 (Req 17A.2)

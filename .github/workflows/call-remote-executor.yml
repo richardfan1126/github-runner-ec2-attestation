@@ -27,6 +27,11 @@ on:
         required: false
         default: ""
         type: string
+      concurrency_count:
+        description: "Number of parallel execution requests to dispatch"
+        required: false
+        default: "1"
+        type: string
 
 permissions:
   id-token: write
@@ -60,6 +65,7 @@ env:
 
 jobs:
   call-remote-executor:
+    if: ${{ inputs.concurrency_count == '1' || inputs.concurrency_count == '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Validate inputs
@@ -95,3 +101,180 @@ jobs:
             --root-cert-pem "$ROOT_CERT_PEM" \
             --expected-pcrs "$EXPECTED_PCRS" \
             --audience "${{ inputs.audience }}"
+
+  prepare-matrix:
+    if: ${{ inputs.concurrency_count != '1' && inputs.concurrency_count != '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate matrix indices
+        id: generate
+        run: |
+          count=${{ inputs.concurrency_count }}
+          indices=$(python3 -c "import json; print(json.dumps(list(range(1, int('$count') + 1))))")
+          echo "matrix={\"index\":$indices}" >> "$GITHUB_OUTPUT"
+
+  execute:
+    if: ${{ inputs.concurrency_count != '1' && inputs.concurrency_count != '' }}
+    needs: [prepare-matrix]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+    steps:
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ inputs.server_url }}" ]; then
+            echo "::error::server_url input is required and cannot be empty"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_hash || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".github/scripts/[dev]"
+
+      - name: Run Remote Executor Caller
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/scripts/call_remote_executor.py \
+            --server-url "${{ inputs.server_url }}" \
+            --script-path "${{ inputs.script_path || '.github/scripts/sample-build.sh' }}" \
+            --commit-hash "${{ inputs.commit_hash || github.sha }}" \
+            --repository-url "${{ inputs.repository_url || format('https://github.com/{0}', github.repository) }}" \
+            --github-token "$GITHUB_TOKEN" \
+            --root-cert-pem "$ROOT_CERT_PEM" \
+            --expected-pcrs "$EXPECTED_PCRS" \
+            --audience "${{ inputs.audience }}" \
+            2>&1 | tee execution-output.txt
+
+      - name: Upload execution output
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-output-${{ matrix.index }}
+          path: execution-output.txt
+
+  verify-isolation:
+    if: ${{ inputs.concurrency_count != '1' && inputs.concurrency_count != '' }}
+    needs: [execute]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all execution outputs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: execution-output-*
+          path: outputs
+
+      - name: Verify isolation
+        shell: python
+        run: |
+          import os
+          import re
+          import sys
+
+          outputs_dir = "outputs"
+          markers = {}
+          results = []
+          has_failure = False
+          has_warning = False
+
+          # Iterate over each execution output artifact directory
+          for artifact_name in sorted(os.listdir(outputs_dir)):
+              artifact_dir = os.path.join(outputs_dir, artifact_name)
+              if not os.path.isdir(artifact_dir):
+                  continue
+
+              # Extract index from artifact name (execution-output-N)
+              match = re.match(r"execution-output-(\d+)", artifact_name)
+              if not match:
+                  continue
+              index = match.group(1)
+
+              output_file = os.path.join(artifact_dir, "execution-output.txt")
+              if not os.path.exists(output_file):
+                  print(f"::error::Output file missing for execution {index}")
+                  has_failure = True
+                  continue
+
+              with open(output_file) as f:
+                  content = f.read()
+
+              # Extract MARKER:<value>
+              marker_matches = re.findall(r"^MARKER:(.+)$", content, re.MULTILINE)
+              if len(marker_matches) == 0:
+                  print(f"::error::Execution {index}: MARKER line not found in output")
+                  has_failure = True
+                  marker_value = None
+              elif len(marker_matches) > 1:
+                  print(f"::error::Execution {index}: Multiple MARKER lines found in output")
+                  has_failure = True
+                  marker_value = marker_matches[0]
+              else:
+                  marker_value = marker_matches[0]
+
+              # Check for duplicate markers
+              if marker_value is not None:
+                  if marker_value in markers:
+                      print(f"::error::Isolation violation: Execution {index} and execution {markers[marker_value]} produced the same marker '{marker_value}'")
+                      has_failure = True
+                  markers[marker_value] = index
+
+              # Parse ISOLATION_FILE result
+              file_iso_matches = re.findall(r"^ISOLATION_FILE:(PASS|FAIL)$", content, re.MULTILINE)
+              if not file_iso_matches:
+                  print(f"::warning::Execution {index}: ISOLATION_FILE result not found in output")
+                  has_warning = True
+                  file_iso = "MISSING"
+              else:
+                  file_iso = file_iso_matches[0]
+                  if file_iso == "FAIL":
+                      print(f"::error::Execution {index}: Filesystem isolation violation (ISOLATION_FILE:FAIL)")
+                      has_failure = True
+
+              # Parse ISOLATION_PROCESS result
+              proc_iso_matches = re.findall(r"^ISOLATION_PROCESS:(PASS|FAIL)$", content, re.MULTILINE)
+              if not proc_iso_matches:
+                  print(f"::warning::Execution {index}: ISOLATION_PROCESS result not found in output")
+                  has_warning = True
+                  proc_iso = "MISSING"
+              else:
+                  proc_iso = proc_iso_matches[0]
+                  if proc_iso == "FAIL":
+                      print(f"::error::Execution {index}: Process isolation violation (ISOLATION_PROCESS:FAIL)")
+                      has_failure = True
+
+              results.append({
+                  "index": index,
+                  "marker": marker_value or "N/A",
+                  "file_isolation": file_iso,
+                  "process_isolation": proc_iso,
+              })
+
+          # Write summary to GITHUB_STEP_SUMMARY
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_path:
+              with open(summary_path, "a") as summary:
+                  summary.write("## Isolation Verification Summary\n\n")
+                  summary.write("| Execution | Marker | Filesystem Isolation | Process Isolation |\n")
+                  summary.write("|-----------|--------|---------------------|------------------|\n")
+                  for r in results:
+                      file_icon = "✅" if r["file_isolation"] == "PASS" else ("❌" if r["file_isolation"] == "FAIL" else "⚠️")
+                      proc_icon = "✅" if r["process_isolation"] == "PASS" else ("❌" if r["process_isolation"] == "FAIL" else "⚠️")
+                      summary.write(f"| {r['index']} | `{r['marker']}` | {file_icon} {r['file_isolation']} | {proc_icon} {r['process_isolation']} |\n")
+                  summary.write(f"\n**Marker uniqueness**: {'✅ All markers unique' if not has_failure else '❌ Isolation violation detected'}\n")
+                  summary.write(f"**Overall result**: {'✅ PASS' if not has_failure else '❌ FAIL'}\n")
+
+          if has_failure:
+              print("::error::Isolation verification failed")
+              sys.exit(1)
+          else:
+              print("Isolation verification passed")

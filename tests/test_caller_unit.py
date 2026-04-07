@@ -670,6 +670,94 @@ class TestWorkflowValidation:
             "Workflow must define an 'audience' input under workflow_dispatch"
         )
 
+    def test_workflow_contains_concurrency_count_input_with_default_1(self):
+        """Workflow YAML must accept a 'concurrency_count' input with default '1'.
+        Validates: Requirement 1.8"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        on_block = workflow.get("on") or workflow.get(True, {})
+        inputs = on_block.get("workflow_dispatch", {}).get("inputs", {})
+        assert "concurrency_count" in inputs, (
+            "Workflow must define a 'concurrency_count' input under workflow_dispatch"
+        )
+        cc_input = inputs["concurrency_count"]
+        assert cc_input.get("default") == "1", (
+            "concurrency_count input must have default value '1'"
+        )
+        assert cc_input.get("required") is False, (
+            "concurrency_count input must be optional (required: false)"
+        )
+
+    def test_workflow_contains_matrix_strategy_for_concurrent_execution(self):
+        """Workflow YAML must contain an 'execute' job with matrix strategy.
+        Validates: Requirement 17A.1"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        jobs = workflow.get("jobs", {})
+        assert "execute" in jobs, (
+            "Workflow must define an 'execute' job for concurrent execution"
+        )
+        execute_job = jobs["execute"]
+        assert "strategy" in execute_job, (
+            "execute job must have a strategy section"
+        )
+        assert "matrix" in execute_job["strategy"], (
+            "execute job strategy must use matrix"
+        )
+
+    def test_workflow_single_invocation_when_concurrency_count_is_1(self):
+        """Workflow YAML must dispatch single invocation when concurrency_count is 1.
+        Validates: Requirement 17A.2"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        jobs = workflow.get("jobs", {})
+        # The call-remote-executor job should run when concurrency_count == 1
+        single_job = jobs.get("call-remote-executor", {})
+        single_if = single_job.get("if", "")
+        assert "concurrency_count" in single_if, (
+            "call-remote-executor job must have an if condition referencing concurrency_count"
+        )
+        # The execute job should NOT run when concurrency_count == 1
+        execute_job = jobs.get("execute", {})
+        execute_if = execute_job.get("if", "")
+        assert "concurrency_count" in execute_if, (
+            "execute job must have an if condition referencing concurrency_count"
+        )
+
+    def test_workflow_has_verify_isolation_job_depending_on_execute(self):
+        """Workflow YAML must have a 'verify-isolation' job that depends on 'execute'.
+        Validates: Requirement 17B.3"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        jobs = workflow.get("jobs", {})
+        assert "verify-isolation" in jobs, (
+            "Workflow must define a 'verify-isolation' job"
+        )
+        verify_job = jobs["verify-isolation"]
+        needs = verify_job.get("needs", [])
+        assert "execute" in needs, (
+            "verify-isolation job must depend on 'execute' job"
+        )
+
+    def test_each_matrix_job_performs_independent_hpke_key_exchange(self):
+        """Each matrix job invokes the caller script independently (own HPKE session).
+        Validates: Requirement 17C.14"""
+        with open(self.WORKFLOW_PATH) as f:
+            workflow = yaml.safe_load(f)
+        jobs = workflow.get("jobs", {})
+        execute_job = jobs.get("execute", {})
+        steps = execute_job.get("steps", [])
+        # Each matrix job runs the full caller script which performs its own
+        # HPKE key exchange. Verify the caller script invocation is present.
+        caller_invocations = [
+            s for s in steps
+            if "call_remote_executor.py" in s.get("run", "")
+        ]
+        assert len(caller_invocations) == 1, (
+            "Each matrix job must invoke call_remote_executor.py exactly once "
+            "(each invocation performs its own independent HPKE key exchange)"
+        )
+
 
 class TestClientEncryptionEdgeCases:
     """Unit tests for ClientEncryption edge cases."""
