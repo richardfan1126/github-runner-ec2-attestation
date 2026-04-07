@@ -12,7 +12,7 @@ This specification covers three major aspects:
 
 2. **Build Requirements (Requirements 11-21)**: How the attestable AMI containing the Remote Executor is built - using a GitHub Actions workflow to build a KIWI image in a reproducible environment, attesting build artifacts, pushing them to GitHub Container Registry with PCR measurements, and converting the KIWI image into an AWS AMI using a separate EC2 instance that verifies signatures.
 
-3. **Deployment Requirements (Requirements 22-27)**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups for HTTP-only access, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
+3. **Deployment Requirements (Requirements 22-27)**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups with port 8080 open to the world, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
 
 4. **Cleanup Requirements (Requirements 28-31)**: How all AWS resources created during the build and deployment process are removed - loading resource identifiers from the AMI build result file, destroying Terraform-managed infrastructure, deregistering the AMI and associated EBS snapshot, and verifying all resources have been cleaned up.
 
@@ -57,7 +57,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 ### Deployment Components
 - **Deploy_Terraform**: Terraform configuration in terraform/deploy/ that provisions the target EC2 instance and supporting network infrastructure
-- **Deploy_Script**: Python script (scripts/deploy.py) that orchestrates the deployment by loading AMI build results, detecting user IP, running Terraform, and saving infrastructure state
+- **Deploy_Script**: Python script (scripts/deploy.py) that orchestrates the deployment by loading AMI build results, running Terraform, and saving infrastructure state
 - **Target_Instance**: EC2 instance launched from the attestable AMI that runs the Remote Executor service
 - **Infrastructure_State**: JSON file containing deployed resource identifiers and attestation API URL
 
@@ -637,16 +637,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 ### Requirement 23: Deployment Security Group Configuration
 
-**User Story:** As a security engineer, I want the target instance's network access restricted to HTTP on port 8080 from a specific CIDR, so that only authorized clients can reach the attestation API
+**User Story:** As a security engineer, I want the target instance's network access configured with HTTP on port 8080 open to the world, so that any authorized GitHub Actions workflow can reach the attestation API
 
 #### Acceptance Criteria
 
 1. THE Deploy_Terraform SHALL create a security group in the deployment VPC
-2. THE security group SHALL allow inbound TCP traffic on port 8080 only from the allowed_http_cidr variable
+2. THE security group SHALL allow inbound TCP traffic on port 8080 from 0.0.0.0/0
 3. THE security group SHALL allow all outbound traffic
-4. THE security group SHALL NOT allow inbound SSH access on port 22
-5. THE security group SHALL NOT allow inbound traffic on any port other than 8080
-6. THE Deploy_Terraform SHALL require the allowed_http_cidr variable as a mandatory input with no default value
+4. THE security group SHALL NOT allow inbound SSH access on port 22 by default
+5. THE security group SHALL NOT allow inbound traffic on any port other than 8080 by default
 
 ### Requirement 24: Target EC2 Instance Provisioning
 
@@ -678,9 +677,9 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 5. THE Deploy_Terraform SHALL output the instance_public_ip of the launched EC2 instance
 6. THE Deploy_Terraform SHALL output the attestation_api_url constructed as http://{instance_public_ip}:8080
 
-### Requirement 26: Deployment Script AMI Loading and IP Detection
+### Requirement 26: Deployment Script AMI Loading
 
-**User Story:** As a DevOps engineer, I want the deployment script to load AMI build results from a JSON file and detect my public IP for CIDR whitelisting, so that deployment is automated and secure by default
+**User Story:** As a DevOps engineer, I want the deployment script to load AMI build results from a JSON file, so that deployment is automated
 
 #### Acceptance Criteria
 
@@ -690,8 +689,6 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 4. IF the AMI build result file does not exist, THEN THE Deploy_Script SHALL fail with a FileNotFoundError
 5. THE Deploy_Script SHALL parse the AMI build result file as JSON and extract ami_id, snapshot_id, and region fields
 6. IF the AMI build result file cannot be parsed, THEN THE Deploy_Script SHALL fail with a RuntimeError
-7. THE Deploy_Script SHALL detect the user's public IP address by querying https://checkip.amazonaws.com with a 5 second timeout
-8. THE Deploy_Script SHALL construct the allowed_http_cidr as {detected_ip}/32
 
 ### Requirement 27: Deployment Script Terraform Orchestration and State Persistence
 
@@ -702,7 +699,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE Deploy_Script SHALL run terraform init in the terraform/deploy directory
 2. IF the terraform/deploy directory does not exist, THEN THE Deploy_Script SHALL fail with a FileNotFoundError
 3. IF terraform init fails with a non-zero exit code, THEN THE Deploy_Script SHALL fail with a RuntimeError
-4. THE Deploy_Script SHALL run terraform apply -auto-approve with variables attestable_ami_id, instance_type, allowed_http_cidr, and aws_region passed via -var flags
+4. THE Deploy_Script SHALL run terraform apply -auto-approve with variables attestable_ami_id, instance_type, and aws_region passed via -var flags
 5. IF terraform apply fails with a non-zero exit code, THEN THE Deploy_Script SHALL fail with a RuntimeError
 6. WHEN terraform apply succeeds, THE Deploy_Script SHALL retrieve outputs by running terraform output -json
 7. THE Deploy_Script SHALL extract the value field from each raw Terraform output entry
@@ -817,10 +814,11 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 19. IF --enable-ssh is not provided, THEN THE Deploy_Terraform SHALL NOT allow inbound SSH traffic in the security group
 20. WHEN --enable-ssh is provided, THE Deploy_Terraform SHALL accept an enable_ssh variable with default value false
 21. WHEN --enable-ssh is provided, THE Deploy_Terraform SHALL accept a key_pair_name variable with default value ""
-22. WHEN enable_ssh is true, THE Deploy_Terraform SHALL add an inbound security group rule allowing TCP port 22 from the allowed_http_cidr variable
+22. WHEN enable_ssh is true, THE Deploy_Terraform SHALL add an inbound security group rule allowing TCP port 22 from the allowed_ssh_cidr variable
 23. WHEN enable_ssh is true, THE Deploy_Terraform SHALL attach the EC2 key pair specified by key_pair_name to the Target_Instance
 24. WHEN enable_ssh is false, THE security group SHALL NOT contain any inbound rule for port 22
 25. WHEN enable_ssh is false, THE Target_Instance SHALL NOT have a key_name attribute set
 26. THE Deploy_Script SHALL pass enable_ssh and key_pair_name as Terraform variables via -var flags when --enable-ssh is provided
-27. WHEN --enable-ssh is provided, THE Deploy_Script SHALL log a warning that SSH debug access is enabled and the instance is accessible on port 22
-28. THE Deploy_Script SHALL include the ssh_enabled status in the Infrastructure_State JSON output
+27. WHEN --enable-ssh is provided, THE Deploy_Script SHALL detect the user's public IP address by querying https://checkip.amazonaws.com with a 5 second timeout and pass allowed_ssh_cidr as {detected_ip}/32 via -var flag
+28. WHEN --enable-ssh is provided, THE Deploy_Script SHALL log a warning that SSH debug access is enabled and the instance is accessible on port 22
+29. THE Deploy_Script SHALL include the ssh_enabled status in the Infrastructure_State JSON output

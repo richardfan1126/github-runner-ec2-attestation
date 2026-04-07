@@ -2129,6 +2129,95 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [ ] 106. Checkpoint - Ensure /attest user_data exclusion tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 107. Open port 8080 to the world and add allowed_ssh_cidr variable in Terraform
+  - [ ] 107.1 Update terraform/deploy/main.tf security group port 8080 ingress
+    - Change the port 8080 ingress `cidr_blocks` from `[var.allowed_http_cidr]` to `["0.0.0.0/0"]`
+    - Port 8080 is now open to the world; authentication is handled at the application layer
+    - _Requirements: 23.2, 23.4, 23.5_
+
+  - [ ] 107.2 Update terraform/deploy/main.tf SSH dynamic ingress to use allowed_ssh_cidr
+    - Change the dynamic SSH ingress `cidr_blocks` from `[var.allowed_http_cidr]` to `[var.allowed_ssh_cidr]`
+    - SSH access (when enabled) is restricted to the deployer's IP, not the HTTP CIDR
+    - _Requirements: 32.22, 32.24_
+
+  - [ ] 107.3 Update terraform/deploy/variables.tf to remove allowed_http_cidr and add allowed_ssh_cidr
+    - Remove the `allowed_http_cidr` variable entirely
+    - Add a new `allowed_ssh_cidr` variable (type string, default `""`, description: CIDR for SSH access on port 22, only used when enable_ssh is true)
+    - _Requirements: 23.6, 24.1, 32.22, 32.27_
+
+- [ ] 108. Update deploy script to remove unconditional IP detection and allowed_http_cidr
+  - [ ] 108.1 Update scripts/deploy.py main() function
+    - Remove the unconditional `get_user_public_ip()` call and `allowed_http_cidr` construction from the default flow
+    - Remove `allowed_http_cidr` from the `terraform_apply()` call arguments
+    - _Requirements: 25.1, 25.2, 26.7_
+
+  - [ ] 108.2 Update scripts/deploy.py terraform_apply() function signature and body
+    - Remove the `allowed_http_cidr` parameter from `terraform_apply()`
+    - Remove `allowed_http_cidr` from the default `tf_vars` dict
+    - Default `tf_vars` should only contain `attestable_ami_id`, `instance_type`, and `aws_region`
+    - _Requirements: 25.1, 25.2_
+
+  - [ ] 108.3 Move IP detection into the --enable-ssh block in main()
+    - When `args.enable_ssh` is True, call `get_user_public_ip()` to detect the user's IP
+    - Construct `allowed_ssh_cidr` as `{detected_ip}/32`
+    - Pass `allowed_ssh_cidr` to `terraform_apply()` via the enable_ssh code path
+    - _Requirements: 32.27_
+
+  - [ ] 108.4 Update terraform_apply() to accept and pass allowed_ssh_cidr when SSH is enabled
+    - Add optional `allowed_ssh_cidr` parameter (default `""`)
+    - When `enable_ssh` is True, add `allowed_ssh_cidr` to `tf_vars`
+    - _Requirements: 32.26, 32.27_
+
+- [ ] 109. Update cleanup script to remove allowed_http_cidr from terraform destroy
+  - [ ] 109.1 Update scripts/cleanup.py destroy_infrastructure() function
+    - Remove `-var allowed_http_cidr=0.0.0.0/0` from the `terraform destroy` command
+    - The destroy command should only pass `-var attestable_ami_id=dummy`
+    - _Requirements: 29.5_
+
+- [ ] 110. Checkpoint - Ensure Terraform and script changes are consistent
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 111. Update existing tests for allowed_http_cidr to allowed_ssh_cidr migration
+  - [ ] 111.1 Update tests/property/test_deployment_infrastructure.py test_property_82
+    - Property 82 now validates that port 8080 is open to `0.0.0.0/0` (the world) instead of using `var.allowed_http_cidr`
+    - Assert `"0.0.0.0/0"` appears in the port 8080 ingress block
+    - Remove assertion for `var.allowed_http_cidr` in the security group
+    - Verify SSH dynamic ingress (if present) uses `var.allowed_ssh_cidr` instead of `var.allowed_http_cidr`
+    - _Requirements: 23.2, 23.4, 23.5, 32.22_
+
+  - [ ] 111.2 Update tests/property/test_deployment_infrastructure.py test_deployment_variables_configuration
+    - Remove assertion for `variable "allowed_http_cidr"` existence
+    - Remove assertion that `allowed_http_cidr` has no default
+    - Add assertion for `variable "allowed_ssh_cidr"` existence
+    - Add assertion that `allowed_ssh_cidr` has a default value of `""`
+    - _Requirements: 23.6, 24.1, 32.22_
+
+  - [ ] 111.3 Update tests/test_deployment_script_properties.py test_property_85
+    - Property 85 now validates that IP detection only happens when `--enable-ssh` is provided
+    - Update test to verify `allowed_ssh_cidr` is constructed as `{ip}/32` (not `allowed_http_cidr`)
+    - Verify IP detection is tied to the SSH enable path, not the default deploy path
+    - _Requirements: 32.27_
+
+  - [ ] 111.4 Update tests/test_debug_ssh_unit.py for terraform_apply signature change
+    - Update test_without_ssh to expect 3 default vars (`attestable_ami_id`, `instance_type`, `aws_region`) instead of 4 (no `allowed_http_cidr`)
+    - Update test_with_ssh to expect 6 vars including `allowed_ssh_cidr` instead of `allowed_http_cidr`
+    - Update all `terraform_apply()` call sites to match the new function signature (no `allowed_http_cidr` positional arg)
+    - _Requirements: 25.1, 32.26, 32.27_
+
+  - [ ] 111.5 Update tests/test_cleanup_unit.py for terraform destroy command change
+    - Update TestDestroyInfrastructure tests that verify the terraform destroy command
+    - Verify the destroy command no longer includes `-var allowed_http_cidr=0.0.0.0/0`
+    - Verify the destroy command only passes `-var attestable_ami_id=dummy`
+    - _Requirements: 29.5_
+
+  - [ ] 111.6 Update tests/test_cleanup_script_properties.py for terraform destroy command change
+    - Update property test 90 (terraform destroy failure) if it verifies the exact destroy command args
+    - Ensure mocked subprocess calls match the new destroy command without `allowed_http_cidr`
+    - _Requirements: 29.5_
+
+- [ ] 112. Final checkpoint - Ensure all updated tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -2176,10 +2265,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Terraform state isolated per build for concurrent build support
 - Deployment Terraform (terraform/deploy/) creates persistent infrastructure unlike build Terraform which is temporary
 - Deployment VPC uses CIDR 10.0.0.0/16 (distinct from build VPC 10.2.0.0/16)
-- Target instance has HTTP-only access on port 8080 (no SSH) — reduced attack surface compared to build instance
+- Target instance has port 8080 open to the world (0.0.0.0/0); authentication is handled at the application layer via HPKE + OIDC
+- When SSH debug is enabled, port 22 is restricted to the deployer's IP via `allowed_ssh_cidr`
 - IMDSv2 enforced on target instance with http_tokens = "required" and hop limit = 1
 - NitroTPM automatically enabled via AMI registration settings (TpmSupport = v2.0, BootMode = uefi)
-- Deployment script auto-detects user IP via checkip.amazonaws.com for /32 CIDR whitelisting
+- Deploy script only detects user IP when `--enable-ssh` is provided (for SSH CIDR whitelisting); HTTP access does not use IP whitelisting
+- The `allowed_http_cidr` Terraform variable has been removed from terraform/deploy/; replaced by `allowed_ssh_cidr` (only used when `enable_ssh = true`)
+- Cleanup script's terraform destroy no longer passes `allowed_http_cidr` as a dummy variable
 - On deployment failure, user must manually run terraform destroy (no automated cleanup — infrastructure is meant to persist)
 - Cleanup script (scripts/cleanup.py) is already fully implemented; tasks 37-38 focus exclusively on writing property and unit tests for the existing code
 - Cleanup script supports --keep-ami flag to skip AMI deregistration and snapshot deletion while still destroying Terraform infrastructure (tasks 38a-38b)

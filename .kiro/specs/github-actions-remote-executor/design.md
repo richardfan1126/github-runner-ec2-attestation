@@ -10,7 +10,7 @@ This design document covers five major aspects of the system:
 
 2. **Build Design**: How the attestable AMI containing the Remote Executor is built - the GitHub Actions workflow that builds a KIWI image in a reproducible Docker environment, attests build artifacts using GitHub's attestation service, publishes them to GitHub Container Registry with PCR measurements, and converts the KIWI image to an AWS AMI using a temporary EC2 instance that verifies signatures before AMI creation.
 
-3. **Deployment Design**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups for HTTP-only access, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
+3. **Deployment Design**: How the built attestable AMI is deployed as a running target EC2 instance - provisioning an isolated VPC with network infrastructure, configuring security groups with port 8080 open to the world, launching the instance with NitroTPM and IMDSv2, and automating the deployment via a Python script that orchestrates Terraform and persists infrastructure state.
 
 4. **Cleanup Design**: How all AWS resources created during the build and deployment process are removed - loading resource identifiers from the AMI build result file, destroying Terraform-managed infrastructure, deregistering the AMI and associated EBS snapshot, and verifying all resources have been cleaned up.
 
@@ -4319,9 +4319,9 @@ The build system requires both unit testing and property-based testing:
 
 ## Deployment Overview
 
-The deployment phase takes the attestable AMI produced by the build process and launches it as a running target EC2 instance within an isolated VPC. A Python deployment script (`scripts/deploy.py`) orchestrates the process by loading AMI build results, detecting the user's public IP for access whitelisting, running Terraform to provision infrastructure, and persisting the resulting infrastructure state to a JSON file.
+The deployment phase takes the attestable AMI produced by the build process and launches it as a running target EC2 instance within an isolated VPC. A Python deployment script (`scripts/deploy.py`) orchestrates the process by loading AMI build results, running Terraform to provision infrastructure, and persisting the resulting infrastructure state to a JSON file.
 
-Unlike the build phase which uses a temporary EC2 instance with SSH access for tool installation, the deployment creates a persistent instance accessible only via HTTP on port 8080 — no SSH access is provided.
+Unlike the build phase which uses a temporary EC2 instance with SSH access for tool installation, the deployment creates a persistent instance with port 8080 open to the world (0.0.0.0/0) — no SSH access is provided by default.
 
 ## Deployment Architecture
 
@@ -4360,7 +4360,7 @@ Unlike the build phase which uses a temporary EC2 instance with SSH access for t
 │  │                                                           │  │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │  │
 │  │  │     IGW      │  │ Route Table  │  │ Security Grp │    │  │
-│  │  │              │  │ 0.0.0.0/0→IGW│  │ IN: 8080/tcp │    │  │
+│  │  │              │  │ 0.0.0.0/0→IGW│  │IN:8080 0.0.0.0/0│  │
 │  │  │              │  │              │  │ OUT: all      │    │  │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘    │  │
 │  └───────────────────────────────────────────────────────────┘  │
@@ -4381,14 +4381,14 @@ The deployment provisions a dedicated VPC with internet connectivity:
 
 ### Security Group
 
-The security group enforces HTTP-only access by default — no SSH:
+The security group allows HTTP access from anywhere by default — no SSH:
 
 | Direction | Protocol | Port  | Source/Destination     |
 |-----------|----------|-------|------------------------|
-| Ingress   | TCP      | 8080  | `var.allowed_http_cidr`|
+| Ingress   | TCP      | 8080  | `0.0.0.0/0`           |
 | Egress    | All      | All   | `0.0.0.0/0`           |
 
-By default, there is no ingress rule for port 22 (SSH). The target instance is managed exclusively through the attestation HTTP API. When debug SSH access is enabled (`var.enable_ssh = true`), an additional ingress rule for TCP port 22 is added — see [PART 5: DEBUG DESIGN](#part-5-debug-design).
+By default, there is no ingress rule for port 22 (SSH). The target instance is managed exclusively through the attestation HTTP API. When debug SSH access is enabled (`var.enable_ssh = true`), an additional ingress rule for TCP port 22 is added from `var.allowed_ssh_cidr` — see [PART 5: DEBUG DESIGN](#part-5-debug-design).
 
 ### EC2 Instance
 
@@ -4397,7 +4397,7 @@ The target instance is launched from the attestable AMI:
 - **AMI**: `var.attestable_ami_id` (required, no default)
 - **Instance Type**: `var.instance_type` (default `c5.9xlarge`)
 - **Subnet**: Placed in the public subnet with `associate_public_ip_address = true`
-- **Security Group**: Attached deployment security group (HTTP 8080 only)
+- **Security Group**: Attached deployment security group (HTTP 8080 open to 0.0.0.0/0)
 - **Monitoring**: `monitoring = true` (detailed CloudWatch monitoring)
 - **IMDSv2**: `http_tokens = "required"`, `http_put_response_hop_limit = 1`
 - **NitroTPM**: Automatically enabled — the attestable AMI has UEFI boot mode and TPM 2.0 support baked in, so NitroTPM is auto-enabled on launch without explicit Terraform configuration
@@ -4408,10 +4408,10 @@ The target instance is launched from the attestable AMI:
 |----------------------|--------|----------|--------------|------------------------------------------|
 | `attestable_ami_id`  | string | Yes      | —            | AMI ID from the build process            |
 | `instance_type`      | string | No       | `c5.9xlarge` | EC2 instance type (NitroTPM-compatible)  |
-| `allowed_http_cidr`  | string | Yes      | —            | CIDR for HTTP access on port 8080        |
 | `aws_region`         | string | No       | `us-east-1`  | AWS region for deployment                |
 | `enable_ssh`         | bool   | No       | `false`      | Enable SSH debug access (see [PART 5](#part-5-debug-design)) |
 | `key_pair_name`      | string | No       | `""`         | EC2 key pair name for SSH access         |
+| `allowed_ssh_cidr`   | string | No       | `""`         | CIDR for SSH access on port 22 (only used when `enable_ssh = true`) |
 
 ### Terraform Outputs
 
@@ -4448,11 +4448,6 @@ Load AMI Build Result (ami_build_result.json)
     ├── Extract: ami_id, snapshot_id, region
     │
     ▼
-Detect Public IP (checkip.amazonaws.com)
-    │
-    ├── Construct: {ip}/32 → allowed_http_cidr
-    │
-    ▼
 terraform init (terraform/deploy/)
     │
     ▼
@@ -4460,10 +4455,10 @@ terraform apply -auto-approve
     │
     ├── -var attestable_ami_id=...
     ├── -var instance_type=...
-    ├── -var allowed_http_cidr=...
     ├── -var aws_region=...
     ├── -var enable_ssh=...        (if --enable-ssh)
     ├── -var key_pair_name=...     (if --enable-ssh)
+    ├── -var allowed_ssh_cidr=...  (if --enable-ssh, detected IP/32)
     │
     ▼
 terraform output -json
@@ -4480,7 +4475,6 @@ Save Infrastructure State (infrastructure_state.json)
 
 | Function                | Purpose                                                    |
 |-------------------------|------------------------------------------------------------|
-| `get_user_public_ip()`  | Queries `checkip.amazonaws.com` to detect public IP        |
 | `terraform_init()`      | Runs `terraform init` in the deploy directory              |
 | `terraform_apply()`     | Runs `terraform apply` with variables, returns raw outputs |
 | `load_terraform_output()`| Extracts `value` field from each raw Terraform output     |
@@ -4511,7 +4505,7 @@ Save Infrastructure State (infrastructure_state.json)
 
 ### HTTP-Only Access (Default)
 
-By default, the target instance has no SSH access. Unlike the build instance (which requires SSH for tool installation and AMI conversion), the deployed instance is accessed exclusively through the Remote Executor HTTP API on port 8080. This reduces the attack surface significantly. When debug SSH access is enabled, port 22 is additionally opened — see [PART 5: DEBUG DESIGN](#part-5-debug-design) for details.
+By default, the target instance has no SSH access. Unlike the build instance (which requires SSH for tool installation and AMI conversion), the deployed instance is accessed exclusively through the Remote Executor HTTP API on port 8080, which is open to the world (0.0.0.0/0). Authentication is handled at the application layer via OIDC tokens and HPKE encryption. When debug SSH access is enabled, port 22 is additionally opened from the deployer's IP — see [PART 5: DEBUG DESIGN](#part-5-debug-design) for details.
 
 ### IMDSv2 Enforcement
 
@@ -4521,7 +4515,7 @@ Instance metadata access requires token-based authentication:
 
 ### IP Whitelisting
 
-The deployment script auto-detects the user's public IP via `checkip.amazonaws.com` and constructs a `/32` CIDR block. This ensures only the deployer's IP can reach the attestation API.
+SSH debug access (when enabled) uses IP whitelisting: the deploy script auto-detects the user's public IP via `checkip.amazonaws.com` and passes `allowed_ssh_cidr` as `{ip}/32` to Terraform. HTTP access on port 8080 is open to the world (0.0.0.0/0) and does not use IP whitelisting — authentication is handled at the application layer.
 
 ### NitroTPM
 
@@ -4532,7 +4526,7 @@ NitroTPM is automatically enabled when launching from the attestable AMI because
 | Aspect                  | Build (`terraform/build-ami/`)         | Deploy (`terraform/deploy/`)           |
 |-------------------------|----------------------------------------|----------------------------------------|
 | VPC CIDR                | `10.2.0.0/16`                          | `10.0.0.0/16`                          |
-| Inbound Access          | SSH on port 22 (user IP only)          | HTTP on port 8080 (user IP only)       |
+| Inbound Access          | SSH on port 22 (user IP only)          | HTTP on port 8080 (0.0.0.0/0)         |
 | SSH Access              | Yes (RSA 4096-bit key pair)            | No (unless debug SSH enabled — see [PART 5](#part-5-debug-design)) |
 | IAM Instance Profile    | Yes (EC2/EBS permissions)              | No                                     |
 | SSH Key Pair            | Generated via `tls_private_key`        | None (unless debug SSH enabled)        |
@@ -4552,7 +4546,7 @@ NitroTPM is automatically enabled when launching from the attestable AMI because
 
 ### Property 82: Security Group HTTP-Only Access
 
-*For any* deployment security group configuration, the only allowed inbound traffic should be TCP on port 8080 from the `allowed_http_cidr` variable — no SSH (port 22) or any other port should be permitted inbound.
+*For any* deployment security group configuration, port 8080 should be open to `0.0.0.0/0` (the world), and by default no SSH (port 22) or any other port should be permitted inbound.
 
 **Validates: Requirements 23.2, 23.4, 23.5**
 
@@ -4570,9 +4564,9 @@ NitroTPM is automatically enabled when launching from the attestable AMI because
 
 ### Property 85: Deployment IP Auto-Detection
 
-*For any* valid IPv4 address returned by the IP detection service, the deployment script should construct the `allowed_http_cidr` as `{ip}/32`.
+*For any* valid IPv4 address returned by the IP detection service, when `--enable-ssh` is provided, the deployment script should construct the `allowed_ssh_cidr` as `{ip}/32` and pass it to Terraform.
 
-**Validates: Requirements 26.7, 26.8**
+**Validates: Requirements 32.27**
 
 ### Property 86: AMI Build Result Loading
 
@@ -4586,7 +4580,7 @@ NitroTPM is automatically enabled when launching from the attestable AMI because
 
 1. **File Errors**: Missing AMI build result file, missing Terraform directory, unparseable JSON
 2. **Terraform Errors**: `terraform init` failure, `terraform apply` failure, output parsing failure
-3. **Network Errors**: IP detection failure (checkip.amazonaws.com timeout)
+3. **Network Errors**: IP detection failure when `--enable-ssh` is provided (checkip.amazonaws.com timeout)
 4. **State Persistence Errors**: Failed to write infrastructure state file
 
 ### Cleanup Guidance
@@ -4600,16 +4594,16 @@ Unlike the build process which has automated `terraform destroy` in a `finally` 
 **Unit Tests** focus on:
 - CLI argument parsing with default values
 - AMI build result file loading (valid JSON, missing file, invalid JSON)
-- IP detection and CIDR construction
+- IP detection and CIDR construction (for SSH debug access only)
 - Terraform output value extraction
 - Infrastructure state file writing
 - Error handling for each failure mode
 
 **Property-Based Tests** focus on:
-- Security group configuration invariants (HTTP-only, no SSH)
+- Security group configuration invariants (HTTP open to world, no SSH by default)
 - IMDSv2 enforcement across all instance configurations
 - Infrastructure state round-trip (write → read produces equivalent data)
-- IP-to-CIDR formatting for all valid IPv4 addresses
+- IP-to-CIDR formatting for all valid IPv4 addresses (SSH only)
 - AMI build result parsing for all valid JSON structures
 - VPC configuration invariants (CIDR, DNS settings)
 
@@ -4626,7 +4620,7 @@ Unlike the build process which has automated `terraform destroy` in a `finally` 
 - Unit tests: Missing file, empty file, invalid JSON, missing required fields
 - Property tests: Valid JSON round-trip (Property 86)
 
-**IP Detection and CIDR Construction**
+**IP Detection and CIDR Construction (SSH Debug Only)**
 - Unit tests: Network timeout, invalid response
 - Property tests: IP-to-CIDR formatting (Property 85)
 
@@ -4639,8 +4633,8 @@ Unlike the build process which has automated `terraform destroy` in a `finally` 
 - Property tests: State round-trip (Property 84)
 
 **Security Configuration**
-- Unit tests: Specific port checks (8080 open, 22 closed)
-- Property tests: HTTP-only invariant (Property 82), IMDSv2 enforcement (Property 83)
+- Unit tests: Specific port checks (8080 open to 0.0.0.0/0, 22 closed by default)
+- Property tests: HTTP access invariant (Property 82), IMDSv2 enforcement (Property 83)
 
 ### Deployment Integration Testing
 
@@ -4740,7 +4734,6 @@ Destroys Terraform-managed infrastructure:
 3. Runs `terraform init` in `terraform_dir`
 4. Runs `terraform destroy -auto-approve` with dummy variable values:
    - `-var 'attestable_ami_id=dummy'`
-   - `-var 'allowed_http_cidr=0.0.0.0/0'`
 5. Verifies Terraform state file shows no remaining resources by parsing `terraform.tfstate` JSON and checking the `resources` array is empty
 
 #### `deregister_ami(ec2_client, ami_id: str, snapshot_id: str, keep_ami: bool = False) -> None`
@@ -4966,7 +4959,7 @@ The debug SSH access feature provides an opt-in mechanism to build KIWI images w
 The feature spans three phases:
 
 1. **Build-Time**: The GitHub Actions workflow passes `--enable-ssh` to the build script, which removes SSH package ignore directives from the KIWI image description and passes `ENABLE_SSH` to the Docker container so `config.sh` can enable `sshd`.
-2. **Deploy-Time**: The deploy script passes `enable_ssh` and `key_pair_name` Terraform variables, which conditionally open port 22 in the security group and attach an EC2 key pair to the instance.
+2. **Deploy-Time**: The deploy script detects the user's public IP, passes `enable_ssh`, `key_pair_name`, and `allowed_ssh_cidr` Terraform variables, which conditionally open port 22 in the security group from the deployer's IP and attach an EC2 key pair to the instance.
 3. **Key Provisioning**: SSH keys are provisioned via standard EC2 key pair mechanisms using `cloud-init` and `ec2-instance-connect` — no keys are baked into the image.
 
 ### Design Principles
@@ -5172,14 +5165,17 @@ if args.enable_ssh and not args.key_pair_name:
 ```
 
 When `--enable-ssh` is provided, the deploy script:
-1. Adds `enable_ssh` and `key_pair_name` to the Terraform variables
-2. Logs a warning about SSH debug access
-3. Includes `ssh_enabled` in the infrastructure state output
+1. Detects the user's public IP via `checkip.amazonaws.com`
+2. Adds `enable_ssh`, `key_pair_name`, and `allowed_ssh_cidr` (as `{detected_ip}/32`) to the Terraform variables
+3. Logs a warning about SSH debug access
+4. Includes `ssh_enabled` in the infrastructure state output
 
 ```python
 if args.enable_ssh:
+    user_ip = get_user_public_ip()
     tf_vars['enable_ssh'] = 'true'
     tf_vars['key_pair_name'] = args.key_pair_name
+    tf_vars['allowed_ssh_cidr'] = f'{user_ip}/32'
     logger.warning("⚠️  SSH debug access is enabled. The instance will be accessible on port 22.")
 
 # After saving terraform output:
@@ -5202,6 +5198,12 @@ variable "key_pair_name" {
   type        = string
   default     = ""
 }
+
+variable "allowed_ssh_cidr" {
+  description = "CIDR for SSH access on port 22 (only used when enable_ssh is true)"
+  type        = string
+  default     = ""
+}
 ```
 
 The security group in `main.tf` gets a conditional SSH ingress rule:
@@ -5214,7 +5216,7 @@ dynamic "ingress" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.allowed_http_cidr]
+    cidr_blocks = [var.allowed_ssh_cidr]
   }
 }
 ```
@@ -5233,14 +5235,14 @@ resource "aws_instance" "target" {
 }
 ```
 
-When `enable_ssh` is `false` (default), `key_name` is `null` (no key pair attached) and no port 22 ingress rule exists. When `enable_ssh` is `true`, the key pair is attached and port 22 is opened from the same CIDR as port 8080.
+When `enable_ssh` is `false` (default), `key_name` is `null` (no key pair attached) and no port 22 ingress rule exists. When `enable_ssh` is `true`, the key pair is attached and port 22 is opened from `allowed_ssh_cidr`.
 
 ### Security Group Configuration Summary
 
-| `enable_ssh` | Port 8080 | Port 22 | Key Pair |
-|--------------|-----------|---------|----------|
-| `false`      | Open      | Closed  | None     |
-| `true`       | Open      | Open    | Attached |
+| `enable_ssh` | Port 8080          | Port 22                    | Key Pair |
+|--------------|--------------------|----------------------------|----------|
+| `false`      | Open (0.0.0.0/0)   | Closed                     | None     |
+| `true`       | Open (0.0.0.0/0)   | Open (`allowed_ssh_cidr`)  | Attached |
 
 ## Data Models
 
@@ -5306,15 +5308,15 @@ When SSH is disabled (default):
 
 ### Property 100: Terraform SSH Configuration Consistency
 
-*For any* value of the `enable_ssh` Terraform variable, the security group should contain an inbound rule for TCP port 22 if and only if `enable_ssh` is `true`. Similarly, the EC2 instance should have a `key_name` attribute set if and only if `enable_ssh` is `true`.
+*For any* value of the `enable_ssh` Terraform variable, the security group should contain an inbound rule for TCP port 22 from `allowed_ssh_cidr` if and only if `enable_ssh` is `true`. Similarly, the EC2 instance should have a `key_name` attribute set if and only if `enable_ssh` is `true`.
 
 **Validates: Requirements 32.18, 32.19, 32.22, 32.23, 32.24, 32.25**
 
 ### Property 101: Deploy Script SSH Terraform Variable Passing
 
-*For any* invocation of the deploy script with `--enable-ssh` and `--key-pair-name`, the Terraform command should include `-var enable_ssh=true` and `-var key_pair_name={name}` flags. When `--enable-ssh` is not provided, these variables should not be passed.
+*For any* invocation of the deploy script with `--enable-ssh` and `--key-pair-name`, the Terraform command should include `-var enable_ssh=true`, `-var key_pair_name={name}`, and `-var allowed_ssh_cidr={detected_ip}/32` flags. When `--enable-ssh` is not provided, these variables should not be passed.
 
-**Validates: Requirements 32.26**
+**Validates: Requirements 32.26, 32.27**
 
 ### Property 102: Infrastructure State SSH Status
 
@@ -5406,11 +5408,11 @@ Both flags must be enabled for SSH to work end-to-end.
 - Property tests: Argument validation (Property 99)
 
 **Terraform Variable Construction**
-- Unit tests: Without SSH (4 vars), with SSH (6 vars), verify var values
+- Unit tests: Without SSH (3 vars), with SSH (6 vars including allowed_ssh_cidr), verify var values
 - Property tests: Variable passing (Property 101)
 
 **Security Group Configuration**
-- Unit tests: `enable_ssh=false` (no port 22), `enable_ssh=true` (port 22 open)
+- Unit tests: `enable_ssh=false` (no port 22), `enable_ssh=true` (port 22 open from `allowed_ssh_cidr`)
 - Property tests: Configuration consistency (Property 100)
 
 **Infrastructure State Output**
