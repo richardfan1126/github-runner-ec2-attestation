@@ -127,7 +127,8 @@ The system consists of the following major components:
 **Attest Handler**
 - Handles GET /attest requests (unauthenticated)
 - Accepts an optional `nonce` query parameter
-- Generates an Attestation_Document with the Server_Public_Key in the `public_key` field
+- Generates an Attestation_Document with the Server_Public_Key in the `public_key` field and without user_data
+- Does NOT include user_data in the attestation document (only public_key and optional nonce are included)
 - Returns the Attestation_Document in base64 encoding, unencrypted
 - Returns HTTP 500 if attestation generation fails
 
@@ -183,14 +184,14 @@ The system consists of the following major components:
 **Attestation Generator**
 - Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
-- When generating for the /attest endpoint: includes the Server_Public_Key in the `public_key` field of the attestation document
-- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document
+- When generating for the /attest endpoint: includes the Server_Public_Key in the `public_key` field of the attestation document, but does NOT include user_data (no `--user-data` flag is passed to nitro-tpm-attest)
+- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata
 - Accepts an optional nonce parameter; when provided, passes it to nitro-tpm-attest for inclusion in the attestation document
 - Signs documents using NitroTPM cryptographic capabilities
 - Encodes attestation in standard format (CBOR)
 - Implementation approach (based on `demo_api.py::AttestationAPIHandler.generate_attestation_document()`):
   1. Accepts optional user_data and nonce parameters for inclusion in attestation
-  2. Writes user_data and nonce to temporary files if provided
+  2. Writes user_data and nonce to temporary files if provided; when called for /attest, user_data is not provided so the `--user-data` flag is omitted
   3. Invokes `/usr/bin/nitro-tpm-attest` with optional `--user-data` and `--nonce` flags
   4. Captures binary CBOR-encoded attestation document from stdout
   5. Implements 30-second timeout for attestation generation
@@ -245,7 +246,7 @@ The system consists of the following major components:
 
 1. Client sends GET request to `/attest` with optional `nonce` query parameter
 2. No authentication required
-3. Attestation Generator creates attestation document with Server_Public_Key in the `public_key` field and optional nonce
+3. Attestation Generator creates attestation document with Server_Public_Key in the `public_key` field, optional nonce, and no user_data
 4. Response returned with base64-encoded attestation document (unencrypted)
 
 **Execution Request Flow:**
@@ -301,7 +302,7 @@ The system consists of the following major components:
 
 #### GET /attest
 
-Returns an attestation document containing the Server_Public_Key. Unauthenticated.
+Returns an attestation document containing the Server_Public_Key. Unauthenticated. The attestation document does NOT include user_data — only `public_key` and optionally `nonce` are included.
 
 **Query Parameters:**
 - `nonce` (optional): Client-provided nonce for attestation freshness verification
@@ -313,7 +314,7 @@ Returns an attestation document containing the Server_Public_Key. Unauthenticate
 }
 ```
 
-The attestation document's `public_key` field contains the Server_Public_Key. The response is NOT encrypted.
+The attestation document's `public_key` field contains the Server_Public_Key. The attestation document does NOT contain user_data. The response is NOT encrypted.
 
 **Error Responses:**
 - 500 Internal Server Error: Attestation generation failure
@@ -580,7 +581,7 @@ class RepositoryClient:
 class AttestationGenerator:
     def generate_attestation(
         self,
-        metadata: ExecutionMetadata,
+        metadata: ExecutionMetadata = None,
         nonce: Optional[str] = None,
         public_key: Optional[bytes] = None,
     ) -> AttestationDocument:
@@ -588,7 +589,8 @@ class AttestationGenerator:
         Generates signed attestation document.
         
         Args:
-            metadata: Execution metadata to include in user_data
+            metadata: Execution metadata to include in user_data. When None (e.g., for /attest),
+                      user_data is omitted entirely from the attestation document.
             nonce: Optional client-provided nonce for freshness verification
             public_key: Optional Server_Public_Key to include in the public_key field.
                         Only provided when generating for the /attest endpoint.
@@ -1364,6 +1366,12 @@ class EncryptionContext:
 
 **Validates: Requirements 43.1, 43.2, 43.3, 43.4**
 
+### Property 136: Attest Attestation Excludes User Data
+
+*For any* request to the /attest endpoint, the generated Attestation_Document should NOT include user_data. Only the `public_key` field (containing the Server_Public_Key) and optionally the `nonce` should be present in the attestation document.
+
+**Validates: Requirements 37.10**
+
 ### Error Categories
 
 The system handles errors in the following categories:
@@ -1575,6 +1583,7 @@ def test_hpke_encrypt_decrypt_round_trip(payload):
   - Attest attestation contains server public key (Property 124)
   - Non-attest attestation excludes server public key (Property 125)
   - Encryption exemption for non-context endpoints (Property 135)
+  - Attest attestation excludes user data (Property 136)
   - Attest endpoint no authentication (Property 123)
 
 **Output Attestation Testing**

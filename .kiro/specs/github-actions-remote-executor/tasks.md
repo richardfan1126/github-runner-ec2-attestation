@@ -2110,11 +2110,30 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 104. Final checkpoint - Ensure all HPKE encryption tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 105. Update /attest endpoint to exclude user_data from attestation document
+  - [ ] 105.1 Update AttestationGenerator.generate_attestation to support omitting user_data
+    - When metadata is None (i.e., called from /attest), do NOT create user_data JSON and do NOT pass `--user-data` flag to nitro-tpm-attest
+    - When metadata is provided (i.e., called from /execute or /execution/{id}/output), continue to include user_data as before
+    - _Requirements: 37.10_
+
+  - [ ] 105.2 Update /attest endpoint handler to not pass user_data parameters
+    - Remove the empty string arguments for repository_url, commit_hash, and script_path when calling generate_attestation from the /attest handler
+    - Pass metadata=None (or omit metadata) so that user_data is excluded from the attestation document
+    - _Requirements: 37.10_
+
+  - [ ] 105.3 Write property test for Attest Attestation Excludes User Data
+    - **Property 136: Attest Attestation Excludes User Data**
+    - Verify that for any request to /attest, the generate_attestation call does NOT include user_data (no `--user-data` flag passed to nitro-tpm-attest)
+    - **Validates: Requirements 37.10**
+
+- [ ] 106. Checkpoint - Ensure /attest user_data exclusion tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 135 correctness properties from the design document
+- Property tests validate the 136 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
@@ -2144,7 +2163,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
 - Git package provisioning (task 90) adds the git package to the KIWI image so the Repository_Client can clone repositories at runtime using git commands
 - Container image pre-pull (tasks 76-79) originally baked the configured Container_Image into the KIWI image during build; tasks 80-84 reverse this by removing the build-time pre-pull code and implementing server-startup pull instead — the GHA_Server now pulls the Container_Image from the registry at startup before accepting requests
-- All 135 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 136 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
@@ -2170,6 +2189,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - The `cryptography` library (already included via PyJWT[crypto]) provides HPKE and X25519 key generation support
 - Server_Keypair is generated once at startup and held in memory; never persisted to disk
 - /attest is the only endpoint that includes Server_Public_Key in attestation documents; /execute and /output attestations exclude it
+- /attest attestation documents do NOT include user_data — only public_key and optional nonce are included
 - OIDC tokens move from Authorization header to encrypted request body `oidc_token` field on /execute and /execution/{id}/output
 - /execution/{id}/output changes from GET to POST to support encrypted request bodies
 - Encryption_Context (Shared_Key per execution_id) is stored in memory and cleaned up with execution records

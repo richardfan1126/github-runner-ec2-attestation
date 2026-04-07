@@ -537,6 +537,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. THE Attestation_Document returned by /attest SHALL NOT be encrypted
 8. IF attestation generation fails, THEN THE GHA_Server SHALL return HTTP 500 Internal Server Error with an error message indicating attestation failure
 9. THE /attest endpoint SHALL be the only endpoint whose Attestation_Document includes the Server_Public_Key in the public_key field
+10. THE Attestation_Document returned by /attest SHALL NOT include user_data; only the public_key field and optionally the nonce SHALL be present
 
 ### Requirement 38: Nonce Support in Attestation Responses
 
