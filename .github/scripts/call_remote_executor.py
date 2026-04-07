@@ -882,6 +882,24 @@ class RemoteExecutorCaller:
                     details=exc.details,
                 )
 
+        # Log attestation document fields for audit
+        for field in EXPECTED_ATTESTATION_FIELDS:
+            if field in ("certificate", "cabundle"):
+                continue
+            if field == "nitrotpm_pcrs":
+                hex_pcrs = {
+                    idx: val.hex() if isinstance(val, bytes) else val
+                    for idx, val in payload_doc[field].items()
+                }
+                logger.info("Attestation field %s: %s", field, hex_pcrs)
+            else:
+                logger.info("Attestation field %s: %s", field, payload_doc[field])
+        for field in ("user_data", "nonce"):
+            if field in payload_doc and payload_doc[field] is not None:
+                val = payload_doc[field]
+                decoded = val.decode() if isinstance(val, bytes) else val
+                logger.info("Attestation field %s: %s", field, decoded)
+
         # Extract user_data from verified payload (SHA-256 hex digest)
         user_data_raw = payload_doc.get("user_data")
         if user_data_raw is None:
