@@ -791,9 +791,6 @@ def add_routes(app: FastAPI) -> None:
             public_key = encryption_manager.server_public_key if encryption_manager is not None else None
 
             attestation_doc, attestation_error = attestation_gen.generate_attestation(
-                "",  # repository_url - not applicable for /attest
-                "",  # commit_hash - not applicable for /attest
-                "",  # script_path - not applicable for /attest
                 nonce=nonce,
                 public_key=public_key,
             )

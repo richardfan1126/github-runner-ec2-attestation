@@ -2110,18 +2110,18 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 104. Final checkpoint - Ensure all HPKE encryption tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 105. Update /attest endpoint to exclude user_data from attestation document
-  - [ ] 105.1 Update AttestationGenerator.generate_attestation to support omitting user_data
+- [x] 105. Update /attest endpoint to exclude user_data from attestation document
+  - [x] 105.1 Update AttestationGenerator.generate_attestation to support omitting user_data
     - When metadata is None (i.e., called from /attest), do NOT create user_data JSON and do NOT pass `--user-data` flag to nitro-tpm-attest
     - When metadata is provided (i.e., called from /execute or /execution/{id}/output), continue to include user_data as before
     - _Requirements: 37.10_
 
-  - [ ] 105.2 Update /attest endpoint handler to not pass user_data parameters
+  - [x] 105.2 Update /attest endpoint handler to not pass user_data parameters
     - Remove the empty string arguments for repository_url, commit_hash, and script_path when calling generate_attestation from the /attest handler
     - Pass metadata=None (or omit metadata) so that user_data is excluded from the attestation document
     - _Requirements: 37.10_
 
-  - [ ] 105.3 Write property test for Attest Attestation Excludes User Data
+  - [x] 105.3 Write property test for Attest Attestation Excludes User Data
     - **Property 136: Attest Attestation Excludes User Data**
     - Verify that for any request to /attest, the generate_attestation call does NOT include user_data (no `--user-data` flag passed to nitro-tpm-attest)
     - **Validates: Requirements 37.10**

@@ -239,3 +239,52 @@ def test_non_attest_attestation_excludes_server_public_key(
             f"generate_attestation for /execute must NOT include public_key, "
             f"but got public_key={pk_value!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Property 136: Attest Attestation Excludes User Data
+# ---------------------------------------------------------------------------
+
+# Feature: github-actions-remote-executor, Property 136: Attest Attestation Excludes User Data
+@settings(max_examples=100, deadline=None)
+@given(nonce=st.one_of(st.none(), st.text(min_size=1, max_size=64)))
+def test_attest_attestation_excludes_user_data(nonce):
+    """
+    **Validates: Requirements 37.10**
+
+    For any request to /attest, the generate_attestation call does NOT
+    include user_data (no --user-data flag passed to nitro-tpm-attest).
+    The attestation document should only contain public_key and optionally nonce.
+    """
+    app = create_app(get_test_config())
+    client = TestClient(app)
+
+    with patch("subprocess.run") as mock_subprocess:
+        mock_subprocess.return_value = Mock(
+            returncode=0,
+            stdout=b"fake_attestation_cbor_data",
+            stderr=b"",
+        )
+
+        params = {}
+        if nonce is not None:
+            params["nonce"] = nonce
+
+        response = client.get("/attest", params=params)
+
+        assert response.status_code == 200, (
+            f"Expected 200 but got {response.status_code}: {response.text}"
+        )
+
+        # Verify subprocess.run was called (attestation generation happened)
+        mock_subprocess.assert_called_once()
+
+        # Extract the command that was passed to subprocess.run
+        call_args = mock_subprocess.call_args
+        cmd = call_args[0][0]  # First positional arg is the command list
+
+        # Verify --user-data flag is NOT in the command
+        assert "--user-data" not in cmd, (
+            f"Expected --user-data flag to NOT be in the command for /attest, "
+            f"but found it in: {cmd}"
+        )

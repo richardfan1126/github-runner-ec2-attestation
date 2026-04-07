@@ -50,9 +50,9 @@ class AttestationGenerator:
     
     def generate_attestation(
         self,
-        repository_url: str,
-        commit_hash: str,
-        script_path: str,
+        repository_url: Optional[str] = None,
+        commit_hash: Optional[str] = None,
+        script_path: Optional[str] = None,
         nonce: Optional[str] = None,
         public_key: Optional[bytes] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
@@ -60,18 +60,20 @@ class AttestationGenerator:
         Generate an attestation document using NitroTPM attestation.
         
         This method:
-        1. Creates user_data containing execution metadata (repository URL, commit hash, script path, timestamp)
-        2. Writes user_data and optional nonce to temporary files
-        3. Invokes /usr/bin/nitro-tpm-attest with optional --user-data, --nonce, and --public-key flags
-        4. Captures binary CBOR-encoded attestation document from stdout
-        5. Implements 30-second timeout for attestation generation
-        6. Returns attestation document as bytes or detailed error information
-        7. Cleans up temporary files in finally block
+        1. If metadata is provided (repository_url, commit_hash, script_path), creates user_data
+           containing execution metadata and passes --user-data flag to nitro-tpm-attest
+        2. If no metadata is provided (all three are None), skips user_data entirely (no --user-data flag)
+        3. Writes optional nonce to temporary file
+        4. Invokes /usr/bin/nitro-tpm-attest with optional --user-data, --nonce, and --public-key flags
+        5. Captures binary CBOR-encoded attestation document from stdout
+        6. Implements 30-second timeout for attestation generation
+        7. Returns attestation document as bytes or detailed error information
+        8. Cleans up temporary files in finally block
         
         Args:
-            repository_url: GitHub repository URL
-            commit_hash: Git commit SHA
-            script_path: Path to script file in repository
+            repository_url: GitHub repository URL (None when called from /attest)
+            commit_hash: Git commit SHA (None when called from /attest)
+            script_path: Path to script file in repository (None when called from /attest)
             nonce: Optional nonce for inclusion in attestation
             public_key: Optional public key bytes to include in attestation document.
                         Only provided when generating for the /attest endpoint.
@@ -87,29 +89,39 @@ class AttestationGenerator:
         public_key_path = None
         
         try:
+            # Determine if metadata is provided (i.e., called from /execute or /output)
+            has_metadata = repository_url is not None or commit_hash is not None or script_path is not None
+            
             # Log attestation generation start
-            logger.info(f"Generating attestation document for {repository_url}@{commit_hash}")
+            if has_metadata:
+                logger.info(f"Generating attestation document for {repository_url}@{commit_hash}")
+            else:
+                logger.info("Generating attestation document for /attest (no user_data)")
             
-            # Create user_data with execution metadata
             timestamp = datetime.now(UTC)
-            user_data = {
-                "repository_url": repository_url,
-                "commit_hash": commit_hash,
-                "script_path": script_path,
-                "timestamp": timestamp.isoformat(),
-            }
-            user_data_json = json.dumps(user_data)
-            
-            # Write user_data to temporary file
-            user_data_fd, user_data_path = tempfile.mkstemp(
-                prefix="attestation_user_data_", suffix=".json"
-            )
-            os.write(user_data_fd, user_data_json.encode("utf-8"))
-            os.close(user_data_fd)
-            user_data_fd = None  # Mark as closed
             
             # Build command
-            cmd = [self.tpm_attest_path, "--user-data", user_data_path]
+            cmd = [self.tpm_attest_path]
+            
+            # Only create user_data when metadata is provided
+            if has_metadata:
+                user_data = {
+                    "repository_url": repository_url,
+                    "commit_hash": commit_hash,
+                    "script_path": script_path,
+                    "timestamp": timestamp.isoformat(),
+                }
+                user_data_json = json.dumps(user_data)
+                
+                # Write user_data to temporary file
+                user_data_fd, user_data_path = tempfile.mkstemp(
+                    prefix="attestation_user_data_", suffix=".json"
+                )
+                os.write(user_data_fd, user_data_json.encode("utf-8"))
+                os.close(user_data_fd)
+                user_data_fd = None  # Mark as closed
+                
+                cmd.extend(["--user-data", user_data_path])
             
             # Write nonce to temporary file if provided
             if nonce is not None:
@@ -177,9 +189,9 @@ class AttestationGenerator:
             
             # Create and return attestation document
             attestation_doc = AttestationDocument(
-                repository_url=repository_url,
-                commit_hash=commit_hash,
-                script_path=script_path,
+                repository_url=repository_url or "",
+                commit_hash=commit_hash or "",
+                script_path=script_path or "",
                 timestamp=timestamp,
                 signature=signature,
             )
