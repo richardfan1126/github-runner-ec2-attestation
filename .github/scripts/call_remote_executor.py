@@ -999,8 +999,6 @@ class RemoteExecutorCaller:
         exit_code = output["exit_code"]
         output_attestation_b64 = output.get("output_attestation_document")
 
-        logger.info("stdout: %s", stdout)
-        logger.info("stderr: %s", stderr)
         logger.info("exit_code: %s", exit_code)
 
         # Validate output attestation with last poll nonce

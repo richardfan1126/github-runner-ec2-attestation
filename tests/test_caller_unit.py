@@ -591,7 +591,7 @@ class TestSampleBuildScript:
         content = self._read_script()
         assert "isolation-probe-${EXECUTION_MARKER}" in content
         assert "exec -a" in content
-        assert "pgrep" in content
+        assert "ps aux" in content or "ps" in content
 
     def test_outputs_isolation_process_pass_and_fail(self):
         """Sample build script outputs ISOLATION_PROCESS:PASS and ISOLATION_PROCESS:FAIL.

@@ -188,7 +188,7 @@ class TestContainerCreationAndSecurity:
 
             call = mock_client.containers._creation_calls[0]
             assert call["read_only"] is True
-            assert "/tmp/execution" in call["tmpfs"]
+            assert "/tmp" in call["tmpfs"]
 
     def test_container_no_privilege_escalation(self):
         """Container disables privilege escalation (Req 8.6)."""
@@ -219,7 +219,7 @@ class TestContainerCreationAndSecurity:
             assert call["user"] == "nobody"
             assert call["network_mode"] == "none"
             assert call["read_only"] is True
-            assert "/tmp/execution" in call["tmpfs"]
+            assert "/tmp" in call["tmpfs"]
             assert "no-new-privileges" in call["security_opt"]
             assert call["mem_limit"] == "512m"
             assert call["nano_cpus"] == int(1.0 * 1e9)
