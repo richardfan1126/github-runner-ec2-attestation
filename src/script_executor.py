@@ -138,7 +138,7 @@ class ScriptExecutor:
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
                 read_only=True,
-                tmpfs={"/tmp": "size=64m,uid=65534"},
+                tmpfs={"/tmp": "size=64m,uid=65534,mode=1777"},
                 volumes={
                     host_repo_path: {"bind": "/workspace", "mode": "ro"},
                 },
