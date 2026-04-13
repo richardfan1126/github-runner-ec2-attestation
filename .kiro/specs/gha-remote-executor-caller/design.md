@@ -2,30 +2,31 @@
 
 ## Overview
 
-The GitHub Actions Remote Executor Caller is the client-side counterpart to the Remote Executor server. It consists of a GitHub Actions workflow (`call-remote-executor.yml`) and a Python caller script (`.github/scripts/call_remote_executor.py`) that together orchestrate the full lifecycle of a remote script execution: health check, OIDC token acquisition, server attestation and public key retrieval, HPKE key exchange, encrypted execution submission, attestation validation, encrypted output polling, output integrity verification, and result reporting.
+The GitHub Actions Remote Executor Caller is the client-side counterpart to the Remote Executor server. It consists of a GitHub Actions workflow (`call-remote-executor.yml`) and a Python caller script (`.github/scripts/call_remote_executor.py`) that together orchestrate the full lifecycle of a remote script execution: health check, OIDC token acquisition, server attestation and composite public key retrieval, PQ_Hybrid_KEM key exchange (X25519 + ML-KEM-768), encrypted execution submission, attestation validation, encrypted output polling, output integrity verification, and result reporting.
 
-The caller communicates with the Remote Executor server using HPKE-based encryption for all sensitive endpoints (`/execute` and `/execution/{id}/output`). It first obtains the server's X25519 public key via the unauthenticated `/attest` endpoint (which also returns a NitroTPM attestation document for server identity verification), generates a client-side X25519 keypair, derives a shared AES-256-GCM key via ECDH + HKDF-SHA256, and encrypts all request payloads (including the OIDC token) before transmission. The OIDC token is transmitted exclusively within the encrypted payload — no `Authorization` header is used on any request.
+The caller communicates with the Remote Executor server using PQ_Hybrid_KEM-based encryption for all sensitive endpoints (`/execute` and `/execution/{id}/output`). It first obtains the server's composite public key (X25519 + ML-KEM-768 encapsulation key) via the unauthenticated `/attest` endpoint (which also returns a NitroTPM attestation document for server identity verification). The composite key is returned as a separate field in the `/attest` JSON response because it exceeds the 1024-byte attestation document `public_key` field limit — the attestation document instead contains a SHA-256 fingerprint of the composite key, which the caller verifies. The caller then generates a client-side X25519 keypair, performs ML-KEM-768 encapsulation against the server's encapsulation key, and derives a shared AES-256-GCM key by combining both the X25519 ECDH shared secret and the ML-KEM-768 shared secret via HKDF-SHA256 with `info=b"pq-hybrid-shared-key"`. All request payloads (including the OIDC token) are encrypted before transmission. The OIDC token is transmitted exclusively within the encrypted payload — no `Authorization` header is used on any request.
 
-The caller validates the server's NitroTPM attestation documents at three points: (1) when the server's public key is retrieved via `/attest`, (2) when the execution request is accepted via `/execute`, and (3) when the output is returned via `/execution/{id}/output`. Each request includes a unique random nonce that is verified in the returned attestation document to ensure freshness and prevent replay attacks.
+The caller validates the server's NitroTPM attestation documents at three points: (1) when the server's composite public key is retrieved via `/attest` (including fingerprint verification), (2) when the execution request is accepted via `/execute`, and (3) when the output is returned via `/execution/{id}/output`. Each request includes a unique random nonce that is verified in the returned attestation document to ensure freshness and prevent replay attacks.
 
-The workflow also supports concurrent execution isolation testing. When configured with a `concurrency_count` greater than 1, the workflow dispatches multiple independent caller script invocations in parallel — each with its own HPKE session, OIDC token, and attestation validation. Each execution's build script generates its own unique marker at runtime (via `/proc/sys/kernel/random/uuid`), so no marker is passed from the workflow or included in the encrypted payload. After all executions complete, the workflow extracts the `MARKER:<value>` from each execution's stdout and verifies that all markers are unique and that each execution passes filesystem and process isolation tests, demonstrating that the Remote Executor server properly isolates concurrent executions.
+The workflow also supports concurrent execution isolation testing. When configured with a `concurrency_count` greater than 1, the workflow dispatches multiple independent caller script invocations in parallel — each with its own PQ_Hybrid_KEM session, OIDC token, and attestation validation. Each execution's build script generates its own unique marker at runtime (via `/proc/sys/kernel/random/uuid`), so no marker is passed from the workflow or included in the encrypted payload. After all executions complete, the workflow extracts the `MARKER:<value>` from each execution's stdout and verifies that all markers are unique and that each execution passes filesystem and process isolation tests, demonstrating that the Remote Executor server properly isolates concurrent executions.
 
 ### Key Design Decisions
 
-1. **Single Python script**: All client logic (HTTP calls, HPKE encryption, COSE Sign1 verification, attestation validation, polling) lives in one `.github/scripts/call_remote_executor.py` file to keep the caller self-contained and easy to audit.
+1. **Single Python script**: All client logic (HTTP calls, PQ_Hybrid_KEM encryption, COSE Sign1 verification, attestation validation, polling) lives in one `.github/scripts/call_remote_executor.py` file to keep the caller self-contained and easy to audit.
 2. **`cbor2` for CBOR decoding**: The attestation documents are COSE Sign1 structures encoded in CBOR. We use the `cbor2` library (pure Python) for decoding both the outer COSE structure and the inner attestation payload.
 3. **`pycose` for COSE Sign1 verification**: The `pycose` library provides `Sign1Message` and `EC2` key types for verifying the COSE signature using the signing certificate's public key.
 4. **`pyOpenSSL` for certificate chain validation**: The `OpenSSL.crypto` module provides `X509Store` and `X509StoreContext` for validating the signing certificate against the CA bundle and root certificate, matching the NitroTPM attestation verification pattern for attestable AMIs.
 5. **`pycryptodome` for key parameter extraction**: The `Crypto.Util.number.long_to_bytes` utility converts the EC public key coordinates from integers to bytes for COSE key construction.
-6. **`cryptography` for HPKE**: The `cryptography` library provides X25519 key generation, ECDH key exchange, HKDF-SHA256 key derivation, and AES-256-GCM encryption/decryption — all components needed for the HPKE encryption scheme.
-7. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (health check → OIDC → attest → execute → poll loop).
+6. **`cryptography` for X25519 and AES-256-GCM**: The `cryptography` library provides X25519 key generation, ECDH key exchange, HKDF-SHA256 key derivation, and AES-256-GCM encryption/decryption — the classical components of the PQ_Hybrid_KEM encryption scheme.
+7. **`wolfcrypt-py` for ML-KEM-768**: The `wolfcrypt-py` library (via `wolfcrypt.ciphers` module: `MlKemType`, `MlKemPublic`) provides ML-KEM-768 (FIPS 203) encapsulation on the client side, producing the ML-KEM-768 shared secret and ciphertext needed for the post-quantum component of the hybrid key exchange.
+8. **`requests` for HTTP**: Simple synchronous HTTP client is sufficient since the caller performs sequential operations (health check → OIDC → attest → execute → poll loop).
 8. **Canonical output format**: The server constructs `Script_Output` as `stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`. The caller must replicate this exact format when computing the SHA-256 digest for output attestation verification.
 9. **Exit code propagation**: The caller script exits with the remote script's exit code, allowing the GitHub Actions workflow to naturally fail when the remote script fails.
 10. **Hardcoded trust anchors**: The NitroTPM attestation root CA certificate PEM and expected PCR4/PCR7 values are hardcoded directly in the GitHub Actions workflow YAML. This eliminates the need for users to supply these values at dispatch time, ensuring every invocation performs full cryptographic verification.
-11. **OIDC token in encrypted payload**: The caller acquires a GitHub Actions OIDC token and includes it in the `oidc_token` field of the encrypted request payload for `/execute` and `/execution/{id}/output`. No `Authorization` header is sent on any request. This ensures the token is protected by HPKE encryption in transit.
-12. **Per-session HPKE keypair**: A fresh X25519 keypair is generated for each execution session. The keypair is held in memory only and never persisted to disk. The derived shared key is reused for all `/execution/{id}/output` requests within the same session.
+11. **OIDC token in encrypted payload**: The caller acquires a GitHub Actions OIDC token and includes it in the `oidc_token` field of the encrypted request payload for `/execute` and `/execution/{id}/output`. No `Authorization` header is sent on any request. This ensures the token is protected by PQ_Hybrid_KEM encryption in transit.
+12. **Per-session PQ_Hybrid_KEM keypair**: A fresh X25519 keypair is generated and ML-KEM-768 encapsulation is performed for each execution session. The keypair and ML-KEM-768 ciphertext are held in memory only and never persisted to disk. The derived shared key is reused for all `/execution/{id}/output` requests within the same session.
 13. **Mandatory nonces on all attested endpoints**: Every request to `/attest`, `/execute`, and `/execution/{id}/output` includes a unique random nonce. The caller verifies the nonce appears in the returned attestation document to ensure freshness.
-14. **Matrix strategy for concurrent executions**: When `concurrency_count > 1`, the workflow uses a GitHub Actions matrix strategy to dispatch N parallel jobs. Each invocation runs as a fully independent job with its own HPKE session, OIDC token, and attestation validation. A separate `verify-isolation` job collects all outputs, extracts `MARKER:<value>` from each stdout, and performs cross-execution isolation verification.
+14. **Matrix strategy for concurrent executions**: When `concurrency_count > 1`, the workflow uses a GitHub Actions matrix strategy to dispatch N parallel jobs. Each invocation runs as a fully independent job with its own PQ_Hybrid_KEM session, OIDC token, and attestation validation. A separate `verify-isolation` job collects all outputs, extracts `MARKER:<value>` from each stdout, and performs cross-execution isolation verification.
 15. **Runtime-generated execution markers**: The sample build script generates its own unique marker at runtime using `/proc/sys/kernel/random/uuid`, rather than receiving a marker from the workflow or encrypted payload. This avoids coupling the caller to marker generation and works regardless of whether the server supports passing custom environment variables.
 16. **Sample build script isolation tests**: The sample build script performs filesystem isolation (write/sleep/read at `/tmp/isolation-test.txt`) and process isolation (start a uniquely-named dummy process, verify only one is visible) tests, outputting parseable `ISOLATION_FILE:PASS/FAIL` and `ISOLATION_PROCESS:PASS/FAIL` lines.
 
@@ -49,15 +50,20 @@ sequenceDiagram
     OIDC-->>CS: {value: "<oidc_jwt_token>"}
     CS->>CS: Store OIDC token for encrypted payloads
 
-    Note over CS,RE: HPKE Key Exchange via /attest
+    Note over CS,RE: PQ_Hybrid_KEM Key Exchange via /attest
     CS->>CS: Generate random nonce for /attest
     CS->>RE: GET /attest?nonce={nonce} (no auth, no encryption)
-    RE-->>CS: {attestation_document: "<base64>"}
+    RE-->>CS: {attestation_document: "<base64>", server_public_key: "<base64-composite-key>"}
     CS->>CS: Validate attestation (COSE Sign1 + PKI + PCR4/PCR7)
     CS->>CS: Verify nonce in attestation matches sent nonce
-    CS->>CS: Extract Server_Public_Key from attestation public_key field
+    CS->>CS: Base64-decode server_public_key → parse length-prefixed composite key
+    CS->>CS: Extract Server_X25519_Public_Key (32 bytes) and Server_ML_KEM_768_Encap_Key (1184 bytes)
+    CS->>CS: Verify SHA-256(composite_key) == attestation public_key field (fingerprint verification)
     CS->>CS: Generate Client_Keypair (X25519)
-    CS->>CS: Derive Shared_Key = HKDF-SHA256(ECDH(client_priv, server_pub), info=b"hpke-shared-key")
+    CS->>CS: Perform X25519 ECDH → ecdh_shared_secret
+    CS->>CS: Perform ML-KEM-768 encapsulation against Server_ML_KEM_768_Encap_Key → mlkem_shared_secret + mlkem_ciphertext
+    CS->>CS: Derive Shared_Key = HKDF-SHA256(ecdh_shared_secret || mlkem_shared_secret, info=b"pq-hybrid-shared-key")
+    CS->>CS: Build composite Client_Public_Key = len-prefix(client_x25519_pub) || len-prefix(mlkem_ciphertext)
 
     Note over CS,RE: Encrypted /execute
     CS->>CS: Generate random nonce for /execute
@@ -104,13 +110,13 @@ sequenceDiagram
     GHA->>JN: Invoke caller (standard arguments only)
 
     par Parallel execution
-        J1->>RE: Full HPKE flow (own session, own OIDC token)
+        J1->>RE: Full PQ_Hybrid_KEM flow (own session, own OIDC token)
         RE-->>J1: stdout contains MARKER:<runtime-uuid-1>, ISOLATION_FILE:PASS/FAIL, ISOLATION_PROCESS:PASS/FAIL
     and
-        J2->>RE: Full HPKE flow (own session, own OIDC token)
+        J2->>RE: Full PQ_Hybrid_KEM flow (own session, own OIDC token)
         RE-->>J2: stdout contains MARKER:<runtime-uuid-2>, ISOLATION_FILE:PASS/FAIL, ISOLATION_PROCESS:PASS/FAIL
     and
-        JN->>RE: Full HPKE flow (own session, own OIDC token)
+        JN->>RE: Full PQ_Hybrid_KEM flow (own session, own OIDC token)
         RE-->>JN: stdout contains MARKER:<runtime-uuid-N>, ISOLATION_FILE:PASS/FAIL, ISOLATION_PROCESS:PASS/FAIL
     end
 
@@ -136,8 +142,8 @@ sequenceDiagram
     call-remote-executor.yml    # workflow_dispatch workflow
   scripts/
     sample-build.sh             # sample build script for remote execution
-    call_remote_executor.py     # Python caller script (HTTP, HPKE, attestation, polling)
-    pyproject.toml              # caller dependencies (requests, cbor2, pycose, pyOpenSSL, pycryptodome, cryptography)
+    call_remote_executor.py     # Python caller script (HTTP, PQ_Hybrid_KEM, attestation, polling)
+    pyproject.toml              # caller dependencies (requests, cbor2, pycose, pyOpenSSL, pycryptodome, cryptography, wolfcrypt-py)
 ```
 
 ## Components and Interfaces
@@ -182,14 +188,15 @@ When `concurrency_count > 1`, the workflow uses a two-phase job structure:
 
 ### 2. Caller Script (`.github/scripts/call_remote_executor.py`)
 
-The script is structured as a `RemoteExecutorCaller` class with an `ClientEncryption` helper for HPKE operations:
+The script is structured as a `RemoteExecutorCaller` class with an `ClientEncryption` helper for PQ_Hybrid_KEM operations:
 
 ```python
 class ClientEncryption:
-    """HPKE encryption helper for the caller side.
+    """PQ_Hybrid_KEM encryption helper for the caller side.
     
-    Generates a client X25519 keypair, derives a shared AES-256-GCM key
-    from the server's public key via ECDH + HKDF-SHA256, and provides
+    Generates a client X25519 keypair, performs ML-KEM-768 encapsulation
+    against the server's encapsulation key, derives a shared AES-256-GCM key
+    by combining both shared secrets via HKDF-SHA256, and provides
     encrypt/decrypt methods for request/response payloads.
     """
 
@@ -198,16 +205,40 @@ class ClientEncryption:
 
     @property
     def client_public_key_bytes(self) -> bytes:
-        """Return the raw 32-byte client public key for transmission."""
-
-    def derive_shared_key(self, server_public_key_bytes: bytes) -> None:
+        """Return the composite client public key as length-prefixed concatenation
+        of the 32-byte X25519 public key + 1088-byte ML-KEM-768 ciphertext.
+        Each component is preceded by a 4-byte big-endian length prefix.
+        
+        Must be called after derive_shared_key (which performs ML-KEM-768 encapsulation).
         """
-        Derive the Shared_Key from ECDH(client_private, server_public) + HKDF-SHA256.
+
+    @staticmethod
+    def parse_composite_server_key(composite_key_bytes: bytes) -> tuple[bytes, bytes]:
+        """Parse a length-prefixed composite server public key.
         
-        HKDF parameters: salt=None, info=b"hpke-shared-key", length=32.
+        Returns (x25519_public_key_bytes, mlkem768_encap_key_bytes).
+        Raises CallerError if the format is invalid or component sizes are wrong.
+        """
+
+    @staticmethod
+    def verify_server_key_fingerprint(composite_key_bytes: bytes, expected_fingerprint: bytes) -> None:
+        """Verify that SHA-256(composite_key_bytes) matches the expected fingerprint.
+        
+        Raises CallerError if the fingerprint does not match.
+        """
+
+    def derive_shared_key(self, server_composite_key_bytes: bytes) -> None:
+        """
+        Derive the Shared_Key via PQ_Hybrid_KEM:
+        1. Parse composite server key to extract X25519 public key and ML-KEM-768 encapsulation key
+        2. Perform X25519 ECDH → ecdh_shared_secret
+        3. Perform ML-KEM-768 encapsulation against server's encapsulation key → mlkem_shared_secret + mlkem_ciphertext
+        4. Combine: HKDF-SHA256(ecdh_shared_secret || mlkem_shared_secret, salt=None, info=b"pq-hybrid-shared-key", length=32)
+        
         Stores the derived key for use by encrypt_payload/decrypt_response.
+        Stores the ML-KEM-768 ciphertext for inclusion in client_public_key_bytes.
         
-        Raises CallerError if server_public_key_bytes is not a valid 32-byte X25519 key.
+        Raises CallerError if server key is invalid or ML-KEM-768 encapsulation fails.
         """
 
     def encrypt_payload(self, payload_dict: dict) -> str:
@@ -282,18 +313,20 @@ class RemoteExecutorCaller:
 
     def attest(self) -> bytes:
         """
-        GET /attest?nonce={nonce} - retrieve server attestation and public key.
+        GET /attest?nonce={nonce} - retrieve server attestation and composite public key.
         
         Does NOT include Authorization header or any authentication.
         Generates a unique random nonce and includes it as a query parameter.
         Validates the returned attestation document (COSE Sign1 + PKI + PCR).
         Verifies the nonce in the attestation matches the sent nonce.
-        Extracts the Server_Public_Key from the attestation's public_key field.
+        Extracts the composite Server_Public_Key from the `server_public_key` field in the JSON response.
+        Verifies the SHA-256 fingerprint of the composite key matches the `public_key` field in the attestation document.
+        Parses the composite key to extract X25519 public key and ML-KEM-768 encapsulation key.
         
-        Initializes self._encryption (ClientEncryption) and derives the Shared_Key.
+        Initializes self._encryption (ClientEncryption) and derives the Shared_Key via PQ_Hybrid_KEM.
         
-        Returns the raw server public key bytes.
-        Raises CallerError on validation failure, missing public_key, or connection error.
+        Returns the raw composite server public key bytes.
+        Raises CallerError on validation failure, fingerprint mismatch, missing public_key, or connection error.
         """
 
     def execute(self, repository_url: str, commit_hash: str,
@@ -305,6 +338,7 @@ class RemoteExecutorCaller:
         github_token, oidc_token, nonce}.
         Encrypts with Shared_Key via ClientEncryption.
         Sends JSON body: {encrypted_payload: "base64", client_public_key: "base64"}.
+        The client_public_key is the composite key (length-prefixed X25519 pub + ML-KEM-768 ciphertext).
         No Authorization header.
         
         Decrypts the encrypted response to extract execution_id and attestation_document.
@@ -397,7 +431,7 @@ class RemoteExecutorCaller:
             script_path: str, github_token: str) -> int:
         """
         Orchestrate full flow:
-        health_check → request_oidc_token → attest (get server public key + derive shared key)
+        health_check → request_oidc_token → attest (get composite server public key, verify fingerprint, PQ_Hybrid_KEM key exchange)
         → execute (encrypted) → validate_attestation → poll_output (encrypted)
         → validate_output_attestation → report results.
         Returns remote script exit code.
@@ -410,7 +444,8 @@ class CallerError(Exception):
     def __init__(self, message: str, phase: str, details: dict | None = None):
         self.message = message
         self.phase = phase  # "health_check", "execute", "attestation", "polling",
-                            # "output_attestation", "oidc", "attest", "encryption"
+                            # "output_attestation", "oidc", "attest", "encryption",
+                            # "key_exchange"
         self.details = details or {}
 ```
 
@@ -464,11 +499,37 @@ echo "=== Build Complete ==="
 
 ### 4. ClientEncryption Implementation Details
 
-The `ClientEncryption` class mirrors the server's `EncryptionManager` (from `src/encryption.py`) but from the client perspective:
+The `ClientEncryption` class mirrors the server's `EncryptionManager` (from `src/encryption.py`) but from the client perspective, performing PQ_Hybrid_KEM (X25519 + ML-KEM-768):
 
 **Key Generation:**
-- Uses `cryptography.hazmat.primitives.asymmetric.x25519.X25519PrivateKey.generate()` to create a fresh keypair
-- Serializes the public key via `public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)` → 32 bytes
+- Uses `cryptography.hazmat.primitives.asymmetric.x25519.X25519PrivateKey.generate()` to create a fresh X25519 keypair
+- ML-KEM-768 encapsulation is performed during `derive_shared_key` (not at init time)
+
+**Composite Server Key Parsing:**
+```python
+import struct
+
+def parse_composite_server_key(composite_key_bytes: bytes) -> tuple[bytes, bytes]:
+    """Parse length-prefixed composite key into (x25519_pub, mlkem768_encap_key)."""
+    components = []
+    offset = 0
+    while offset < len(composite_key_bytes):
+        (length,) = struct.unpack(">I", composite_key_bytes[offset:offset+4])
+        offset += 4
+        components.append(composite_key_bytes[offset:offset+length])
+        offset += length
+    # components[0] = 32-byte X25519 public key
+    # components[1] = 1184-byte ML-KEM-768 encapsulation key
+    return components[0], components[1]
+```
+
+**Server Key Fingerprint Verification:**
+```python
+import hashlib
+
+fingerprint = hashlib.sha256(composite_key_bytes).digest()
+assert fingerprint == attestation_public_key_field  # from attestation document
+```
 
 **Key Derivation (must match server exactly):**
 ```python
@@ -476,17 +537,41 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from wolfcrypt.ciphers import MlKemType, MlKemPublic
 
-# ECDH shared secret
-shared_secret = client_private_key.exchange(server_public_key)
+# Parse composite server key
+server_x25519_pub_bytes, server_mlkem_encap_key_bytes = parse_composite_server_key(server_composite_key)
 
-# HKDF-SHA256 derivation (must match server: salt=None, info=b"hpke-shared-key", length=32)
+# X25519 ECDH shared secret
+server_x25519_pub = X25519PublicKey.from_public_bytes(server_x25519_pub_bytes)
+ecdh_shared_secret = client_private_key.exchange(server_x25519_pub)
+
+# ML-KEM-768 encapsulation (client side)
+mlkem_pub = MlKemPublic(MlKemType.ML_KEM_768)
+mlkem_pub.decode_key(server_mlkem_encap_key_bytes)
+mlkem_shared_secret, mlkem_ciphertext = mlkem_pub.encapsulate()
+
+# Combine both shared secrets via HKDF-SHA256 (must match server: salt=None, info=b"pq-hybrid-shared-key", length=32)
+combined_secret = ecdh_shared_secret + mlkem_shared_secret
 shared_key = HKDF(
     algorithm=SHA256(),
     length=32,
     salt=None,
-    info=b"hpke-shared-key",
-).derive(shared_secret)
+    info=b"pq-hybrid-shared-key",
+).derive(combined_secret)
+```
+
+**Composite Client Public Key (sent to server):**
+```python
+import struct
+
+# Length-prefixed concatenation of client X25519 pub + ML-KEM-768 ciphertext
+client_x25519_pub = client_private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)  # 32 bytes
+# mlkem_ciphertext is 1088 bytes (from encapsulation above)
+client_public_key = (
+    struct.pack(">I", len(client_x25519_pub)) + client_x25519_pub
+    + struct.pack(">I", len(mlkem_ciphertext)) + mlkem_ciphertext
+)
 ```
 
 **Encryption (request payloads):**
@@ -631,17 +716,18 @@ The following values are hardcoded inline in the workflow YAML definition (not u
 **GET /attest response:**
 ```json
 {
-  "attestation_document": "<base64-encoded-cbor>"
+  "attestation_document": "<base64-encoded-cbor>",
+  "server_public_key": "<base64-encoded-composite-key>"
 }
 ```
 
-The attestation document's payload contains the `public_key` field (raw X25519 server public key bytes) and the `nonce` field (the nonce sent in the query parameter).
+The attestation document's payload contains the `public_key` field (SHA-256 fingerprint of the composite server public key) and the `nonce` field (the nonce sent in the query parameter). The `server_public_key` field in the JSON response body contains the full composite key (length-prefixed concatenation of 32-byte X25519 public key + 1184-byte ML-KEM-768 encapsulation key), base64-encoded. The client must verify the key by computing SHA-256 of the received composite key and comparing against the fingerprint in the attestation document's `public_key` field.
 
 **POST /execute request (encrypted envelope):**
 ```json
 {
   "encrypted_payload": "<base64-encoded nonce||ciphertext>",
-  "client_public_key": "<base64-encoded raw 32-byte X25519 public key>"
+  "client_public_key": "<base64-encoded composite client key (length-prefixed X25519 pub + ML-KEM-768 ciphertext)>"
 }
 ```
 No Authorization header.
@@ -726,15 +812,18 @@ Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}
 }
 ```
 
-### HPKE Encryption Parameters
+### PQ_Hybrid_KEM Encryption Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Key type | X25519 | Elliptic curve Diffie-Hellman key agreement |
-| Key derivation | HKDF-SHA256 | `salt=None`, `info=b"hpke-shared-key"`, `length=32` |
+| Classical KEM | X25519 | Elliptic curve Diffie-Hellman key agreement |
+| Post-quantum KEM | ML-KEM-768 (FIPS 203) | Lattice-based key encapsulation mechanism via `wolfcrypt-py` |
+| Key derivation | HKDF-SHA256 | `salt=None`, `info=b"pq-hybrid-shared-key"`, `length=32`, input=`ecdh_shared_secret \|\| mlkem_shared_secret` |
 | Symmetric cipher | AES-256-GCM | 256-bit key, 12-byte random nonce, authenticated encryption |
 | Wire format | `nonce (12 bytes) \|\| ciphertext` | Concatenated, then base64-encoded |
-| Client public key format | Raw X25519 | 32 bytes, base64-encoded for transmission |
+| Server public key format | Length-prefixed composite | 4-byte BE length + X25519 pub (32 bytes) + 4-byte BE length + ML-KEM-768 encap key (1184 bytes) |
+| Server public key attestation | SHA-256 fingerprint | Fingerprint in attestation `public_key` field; full key in `/attest` JSON `server_public_key` field |
+| Client public key format | Length-prefixed composite | 4-byte BE length + X25519 pub (32 bytes) + 4-byte BE length + ML-KEM-768 ciphertext (1088 bytes) |
 
 ### COSE Sign1 Attestation Document Structure
 
@@ -762,7 +851,7 @@ After CBOR-decoding the payload (index 2), the attestation document is a map wit
     "cabundle": list[bytes], # Certificate chain (DER-encoded), first entry is root CA
     "user_data": bytes | None, # For output attestation: SHA-256 hex digest (UTF-8 encoded)
     "nonce": bytes | None,   # Nonce for freshness verification (UTF-8 encoded)
-    "public_key": bytes | None, # For /attest: raw X25519 server public key (32 bytes)
+    "public_key": bytes | None, # For /attest: SHA-256 fingerprint of composite server public key (32 bytes)
 }
 ```
 
@@ -877,9 +966,9 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 
 **Validates: Requirements 3.2, 14.1, 15.3, 15.4, 15.5**
 
-### Property 17: HPKE key derivation symmetry
+### Property 17: PQ_Hybrid_KEM key derivation symmetry
 
-*For any* X25519 client keypair and X25519 server keypair, deriving the shared key on the client side (ECDH(client_private, server_public) → HKDF-SHA256) and on the server side (ECDH(server_private, client_public) → HKDF-SHA256) with the same HKDF parameters (`salt=None`, `info=b"hpke-shared-key"`, `length=32`) should produce identical 32-byte shared keys.
+*For any* X25519 client keypair and composite server keypair (X25519 + ML-KEM-768), deriving the shared key on the client side (X25519 ECDH + ML-KEM-768 encapsulation → combine both shared secrets → HKDF-SHA256) and on the server side (X25519 ECDH + ML-KEM-768 decapsulation → combine both shared secrets → HKDF-SHA256) with the same HKDF parameters (`salt=None`, `info=b"pq-hybrid-shared-key"`, `length=32`) should produce identical 32-byte shared keys.
 
 **Validates: Requirements 13.1, 13.2**
 
@@ -891,7 +980,7 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 
 ### Property 19: Encrypted envelope structure
 
-*For any* request to `/execute`, the HTTP request body should be a JSON object with exactly `encrypted_payload` and `client_public_key` fields (both base64-encoded strings). *For any* request to `/execution/{id}/output`, the HTTP request body should be a JSON object with exactly `encrypted_payload` (base64-encoded string) and no `client_public_key` field.
+*For any* request to `/execute`, the HTTP request body should be a JSON object with exactly `encrypted_payload` and `client_public_key` fields (both base64-encoded strings), where `client_public_key` is the composite key (length-prefixed X25519 pub + ML-KEM-768 ciphertext). *For any* request to `/execution/{id}/output`, the HTTP request body should be a JSON object with exactly `encrypted_payload` (base64-encoded string) and no `client_public_key` field.
 
 **Validates: Requirements 3.1, 14.6, 14.7**
 
@@ -900,6 +989,24 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 *For any* valid encrypted payload (produced by `ClientEncryption.encrypt_payload`), if any byte of the base64-decoded wire format (nonce || ciphertext) is modified, `ClientEncryption.decrypt_response` should raise a `CallerError` indicating decryption failure.
 
 **Validates: Requirements 15.6**
+
+### Property 21: Server public key fingerprint verification
+
+*For any* composite server public key (length-prefixed X25519 pub + ML-KEM-768 encapsulation key), computing SHA-256 of the composite key bytes should produce a deterministic 32-byte fingerprint. `verify_server_key_fingerprint` should accept when the computed fingerprint matches the expected fingerprint from the attestation document's `public_key` field, and should raise a `CallerError` when the fingerprints differ.
+
+**Validates: Requirements 11A.1, 11A.2**
+
+### Property 26: Composite key serialization/deserialization round-trip
+
+*For any* valid X25519 public key (32 bytes) and ML-KEM-768 encapsulation key (1184 bytes), serializing them as a length-prefixed concatenation and then parsing via `parse_composite_server_key` should return the original X25519 public key and ML-KEM-768 encapsulation key unchanged. Similarly, *for any* valid client X25519 public key (32 bytes) and ML-KEM-768 ciphertext (1088 bytes), the composite client public key produced by `client_public_key_bytes` should be parseable by the server's `_parse_length_prefixed` to recover the original components.
+
+**Validates: Requirements 12.3, 13.1, 14.4, 14.6**
+
+### Property 27: PQ_Hybrid_KEM key exchange end-to-end
+
+*For any* server composite keypair (X25519 + ML-KEM-768) and client X25519 keypair, performing the full PQ_Hybrid_KEM key exchange on the client side (ECDH + ML-KEM-768 encapsulation → HKDF) and the server side (ECDH + ML-KEM-768 decapsulation → HKDF) should produce the same shared key, and encrypting a payload with that key on one side should be decryptable on the other side.
+
+**Validates: Requirements 13.1, 13.2, 14.1, 15.4**
 
 ### Property 22: Marker presence verification
 
@@ -941,7 +1048,11 @@ The caller must replicate this exact format for SHA-256 digest comparison.
 | Attest | Attestation validation failure (COSE/PKI/PCR) | Raise `CallerError(phase="attest")` with validation details |
 | Attest | Nonce mismatch in attestation | Raise `CallerError(phase="attest")` indicating nonce verification failure |
 | Attest | Missing `public_key` in attestation payload | Raise `CallerError(phase="attest")` indicating server did not provide a public key |
-| Attest | Invalid server public key (not 32-byte X25519) | Raise `CallerError(phase="encryption")` indicating invalid server public key |
+| Attest | Missing `server_public_key` in /attest JSON response | Raise `CallerError(phase="attest")` indicating server did not provide a composite public key |
+| Attest | Server public key fingerprint mismatch | Raise `CallerError(phase="attest")` indicating SHA-256 fingerprint of composite key does not match attestation document |
+| Attest | Invalid composite server key format | Raise `CallerError(phase="encryption")` indicating composite key parsing failed |
+| Attest | Invalid server X25519 public key component | Raise `CallerError(phase="encryption")` indicating invalid server public key |
+| Attest | ML-KEM-768 encapsulation failure | Raise `CallerError(phase="encryption")` indicating ML-KEM-768 encapsulation failed |
 | Encryption | Shared key not yet derived | Raise `CallerError(phase="encryption")` indicating key exchange not completed |
 | Encryption | AES-256-GCM encryption failure | Raise `CallerError(phase="encryption")` with encryption error details |
 | Decryption | Base64 decode failure on encrypted_response | Raise `CallerError(phase="encryption")` with decoding details |
@@ -1012,12 +1123,12 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - **Library**: [Hypothesis](https://hypothesis.readthedocs.io/) (already in project dev dependencies)
 - **CBOR library**: `cbor2` for encoding/decoding in tests
 - **COSE library**: `pycose` for constructing test COSE Sign1 messages
-- **Crypto libraries**: `pyOpenSSL`, `cryptography` for generating test certificates, keys, and HPKE operations
+- **Crypto libraries**: `pyOpenSSL`, `cryptography` for generating test certificates, keys, and PQ_Hybrid_KEM operations; `wolfcrypt-py` for ML-KEM-768 encapsulation/decapsulation in tests
 - **Minimum iterations**: 100 per property test (via `@settings(max_examples=100)`)
 - **Each property test references its design property** with a tag comment in the format:
   `# Feature: gha-remote-executor-caller, Property {number}: {property_text}`
 - **Each correctness property is implemented by a single property-based test**
-- **Test key fixtures**: Property tests that involve COSE signature verification use a shared test EC P-384 key pair fixture. Property tests involving HPKE use test X25519 keypairs.
+- **Test key fixtures**: Property tests that involve COSE signature verification use a shared test EC P-384 key pair fixture. Property tests involving PQ_Hybrid_KEM use test X25519 keypairs and ML-KEM-768 keypairs.
 
 ### Test Plan
 
@@ -1044,7 +1155,7 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 7. **Polling retry on transient errors**: Generate random K < max_retries consecutive errors followed by success. Verify polling recovers. Generate K >= max_retries and verify CallerError raised.
    `# Feature: gha-remote-executor-caller, Property 7: Polling retry on transient errors`
 
-8. **Exit code propagation**: Generate random integer exit codes (0-255). Mock the full run flow (including HPKE key exchange). Verify `run()` returns the same exit code.
+8. **Exit code propagation**: Generate random integer exit codes (0-255). Mock the full run flow (including PQ_Hybrid_KEM key exchange). Verify `run()` returns the same exit code.
    `# Feature: gha-remote-executor-caller, Property 8: Exit code propagation`
 
 9. **Summary contains execution results**: Generate random execution results. Call summary generation. Verify the output string contains all expected fields.
@@ -1062,7 +1173,7 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 13. **OIDC token acquisition**: Generate random audience strings. Mock the OIDC provider endpoint. Verify `request_oidc_token` makes an HTTP GET to `ACTIONS_ID_TOKEN_REQUEST_URL` with the correct `audience` query parameter and `Authorization: Bearer {ACTIONS_ID_TOKEN_REQUEST_TOKEN}` header, and that the returned token is stored on the instance.
     `# Feature: gha-remote-executor-caller, Property 13: OIDC token acquisition`
 
-14. **OIDC token in encrypted payload, not in headers**: Generate random OIDC tokens. Set the token on the caller instance. Mock HTTP endpoints and HPKE encryption. Verify `execute` and `poll_output` include the token in the encrypted payload's `oidc_token` field. Verify NO HTTP request to any endpoint includes an `Authorization` header.
+14. **OIDC token in encrypted payload, not in headers**: Generate random OIDC tokens. Set the token on the caller instance. Mock HTTP endpoints and PQ_Hybrid_KEM encryption. Verify `execute` and `poll_output` include the token in the encrypted payload's `oidc_token` field. Verify NO HTTP request to any endpoint includes an `Authorization` header.
     `# Feature: gha-remote-executor-caller, Property 14: OIDC token in encrypted payload, not in headers`
 
 15. **OIDC authentication error handling**: Generate random 401 and 403 HTTP responses for `/execute` and `/execution/{id}/output`. Verify the caller raises `CallerError` with appropriate auth error messages. Also test missing `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` env vars cause `CallerError` with `id-token: write` permission message.
@@ -1071,8 +1182,8 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 16. **AES-256-GCM encryption round-trip**: Generate random JSON-serializable dicts and random 32-byte AES keys. Encrypt via `ClientEncryption.encrypt_payload`, decrypt via `ClientEncryption.decrypt_response` with the same key. Verify the result equals the original dict.
     `# Feature: gha-remote-executor-caller, Property 16: AES-256-GCM encryption round-trip`
 
-17. **HPKE key derivation symmetry**: Generate random X25519 keypairs for both client and server. Derive the shared key on both sides using ECDH + HKDF-SHA256 with `salt=None`, `info=b"hpke-shared-key"`, `length=32`. Verify both sides produce identical 32-byte keys.
-    `# Feature: gha-remote-executor-caller, Property 17: HPKE key derivation symmetry`
+17. **PQ_Hybrid_KEM key derivation symmetry**: Generate random X25519 keypairs and ML-KEM-768 keypairs for both client and server. Perform PQ_Hybrid_KEM on both sides (client: ECDH + encapsulation, server: ECDH + decapsulation). Derive the shared key on both sides using HKDF-SHA256 with `salt=None`, `info=b"pq-hybrid-shared-key"`, `length=32`. Verify both sides produce identical 32-byte keys.
+    `# Feature: gha-remote-executor-caller, Property 17: PQ_Hybrid_KEM key derivation symmetry`
 
 18. **Nonce freshness verification**: Generate random nonce strings. Build attestation documents with matching and non-matching nonces. Verify `validate_attestation` with `expected_nonce` accepts when nonces match and raises `CallerError` when they differ or the nonce field is missing.
     `# Feature: gha-remote-executor-caller, Property 18: Nonce freshness verification`
@@ -1085,7 +1196,16 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 
 21. (Removed — execution marker is no longer included in the encrypted payload. Markers are generated at runtime by the build script.)
 
-22. **Marker presence verification**: Generate random stdout strings. Insert a `MARKER:<uuid>` line into some. Verify the isolation verification logic accepts when exactly one `MARKER:` line is present and rejects when no `MARKER:` line is found.
+22. **Server public key fingerprint verification**: Generate random composite server keys (32-byte X25519 pub + 1184-byte ML-KEM-768 encap key, length-prefixed). Compute SHA-256 fingerprint. Verify `verify_server_key_fingerprint` accepts when fingerprints match and raises `CallerError` when they differ.
+    `# Feature: gha-remote-executor-caller, Property 21: Server public key fingerprint verification`
+
+23. **Composite key serialization/deserialization round-trip**: Generate random 32-byte X25519 keys and 1184-byte ML-KEM-768 encapsulation keys. Serialize as length-prefixed concatenation. Parse via `parse_composite_server_key`. Verify round-trip produces identical components. Also test client composite key (X25519 pub + ML-KEM-768 ciphertext) round-trip.
+    `# Feature: gha-remote-executor-caller, Property 26: Composite key serialization/deserialization round-trip`
+
+24. **PQ_Hybrid_KEM key exchange end-to-end**: Generate server composite keypair (X25519 + ML-KEM-768) and client X25519 keypair. Perform full PQ_Hybrid_KEM on client side (ECDH + encapsulation → HKDF). Parse client composite key on server side, perform ECDH + decapsulation → HKDF. Verify both sides derive the same shared key. Encrypt a payload on one side, decrypt on the other.
+    `# Feature: gha-remote-executor-caller, Property 27: PQ_Hybrid_KEM key exchange end-to-end`
+
+25. **Marker presence verification**: Generate random stdout strings. Insert a `MARKER:<uuid>` line into some. Verify the isolation verification logic accepts when exactly one `MARKER:` line is present and rejects when no `MARKER:` line is found.
     `# Feature: gha-remote-executor-caller, Property 22: Marker presence verification`
 
 23. **Marker uniqueness verification**: Generate random sets of N (2-5) execution outputs, each containing a `MARKER:<uuid>` line with a unique runtime-generated UUID. Verify the isolation verification logic accepts when all markers are unique. Then duplicate one marker across two outputs and verify it rejects with an isolation violation error.
@@ -1130,7 +1250,10 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - Workflow YAML contains `id-token: write` permission (Req 9.1)
 - Workflow YAML contains `audience` input (Req 9.2)
 - Missing `public_key` in /attest attestation raises `CallerError` (Req 11.7)
-- Invalid server public key (not 32 bytes) raises `CallerError` (Req 13.5)
+- Missing `server_public_key` in /attest JSON response raises `CallerError` (Req 11A.3)
+- Server public key fingerprint mismatch raises `CallerError` (Req 11A.1, 11A.2)
+- Invalid composite server key format raises `CallerError` (Req 13.5)
+- ML-KEM-768 encapsulation failure raises `CallerError` (Req 13.6)
 - Decryption failure on tampered response raises `CallerError` with phase "encryption" (Req 15.6)
 - Decrypted response that is not valid JSON raises `CallerError` (Req 15.7)
 - Attest failure prevents encrypted requests from being sent (Req 16.6)
@@ -1146,6 +1269,6 @@ The caller uses both unit tests and property-based tests for comprehensive cover
 - Sample build script contains process isolation test logic with uniquely-named dummy process (Req 2.10)
 - Sample build script outputs `ISOLATION_PROCESS:PASS` and `ISOLATION_PROCESS:FAIL` (Req 2.11, 2.12)
 - Sample build script cleans up dummy background process (Req 2.13)
-- Each matrix job performs independent HPKE key exchange (Req 17C.12)
+- Each matrix job performs independent PQ_Hybrid_KEM key exchange (Req 17C.12)
 - Workflow succeeds when all executions pass and isolation is verified (Req 17D.17)
 - Workflow fails and reports which execution failed (Req 17D.18)

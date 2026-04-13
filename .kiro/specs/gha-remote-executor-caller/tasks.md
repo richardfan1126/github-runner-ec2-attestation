@@ -631,7 +631,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - When `concurrency_count > 1`, use a matrix strategy with `index: [1, 2, ..., concurrency_count]` to dispatch N parallel `execute` jobs
     - Each matrix job: checks out the repository, installs Python dependencies, invokes the caller script with all standard arguments (no `--execution-marker`), saves stdout output to a file, uploads the output file as a GitHub Actions artifact (`execution-output-{index}`)
     - When `concurrency_count == 1`, dispatch a single invocation (preserve existing behavior in the `call-remote-executor` job)
-    - Each matrix job performs its own independent HPKE key exchange, OIDC token acquisition, and attestation validation
+    - Each matrix job performs its own independent PQ_Hybrid_KEM key exchange, OIDC token acquisition, and attestation validation
     - _Requirements: 17A.1, 17A.2, 17C.14, 17C.15, 17C.16_
 
   - [x] 35.3 Add `verify-isolation` job to workflow
@@ -650,7 +650,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test workflow YAML contains matrix strategy for concurrent execution (Req 17A.1)
     - Test workflow YAML dispatches single invocation when concurrency_count is 1 (Req 17A.2)
     - Test workflow YAML has `verify-isolation` job that depends on execute jobs (Req 17B.3)
-    - Test each matrix job performs independent HPKE key exchange (Req 17C.14)
+    - Test each matrix job performs independent PQ_Hybrid_KEM key exchange (Req 17C.14)
     - _Requirements: 1.8, 17A.1, 17A.2, 17B.3, 17C.14_
 
 - [x] 36. Checkpoint - Ensure workflow structure tests pass
@@ -719,6 +719,148 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 40. Final checkpoint - Ensure all concurrent execution isolation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 41. Add `wolfcrypt-py` dependency and update imports
+  - [ ] 41.1 Update `.github/scripts/pyproject.toml` to add `wolfcrypt-py` dependency
+    - Add `wolfcrypt-py>=5.0.0` to dependencies
+    - _Requirements: 13.4_
+
+  - [ ] 41.2 Update `call_remote_executor.py` imports for PQ_Hybrid_KEM
+    - Add `import struct` and `import hashlib` (if not already present)
+    - Add `from wolfcrypt.ciphers import MlKemType, MlKemPublic` for ML-KEM-768 encapsulation
+    - _Requirements: 13.4_
+
+- [ ] 42. Migrate `ClientEncryption` to PQ_Hybrid_KEM
+  - [ ] 42.1 Add `parse_composite_server_key` static method to `ClientEncryption`
+    - Parse length-prefixed composite key bytes into (x25519_pub_bytes, mlkem768_encap_key_bytes)
+    - Validate that exactly 2 components are present
+    - Validate X25519 component is 32 bytes and ML-KEM-768 encapsulation key is 1184 bytes
+    - Raise `CallerError(phase="encryption")` on invalid format
+    - _Requirements: 11A.5, 13.6_
+
+  - [ ] 42.2 Add `verify_server_key_fingerprint` static method to `ClientEncryption`
+    - Compute SHA-256 of composite key bytes
+    - Compare against expected fingerprint from attestation document's `public_key` field
+    - Raise `CallerError(phase="attest")` on mismatch
+    - _Requirements: 11A.1, 11A.2, 11A.4_
+
+  - [ ] 42.3 Rewrite `derive_shared_key` for PQ_Hybrid_KEM
+    - Accept `server_composite_key_bytes: bytes` (full composite key, not just X25519)
+    - Call `parse_composite_server_key` to extract X25519 pub and ML-KEM-768 encap key
+    - Perform X25519 ECDH to get `ecdh_shared_secret`
+    - Perform ML-KEM-768 encapsulation via `MlKemPublic` to get `mlkem_shared_secret` and `mlkem_ciphertext`
+    - Store `mlkem_ciphertext` for inclusion in `client_public_key_bytes`
+    - Combine: `HKDF-SHA256(ecdh_shared_secret || mlkem_shared_secret, salt=None, info=b"pq-hybrid-shared-key", length=32)`
+    - Raise `CallerError(phase="encryption")` on invalid key or encapsulation failure
+    - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.6, 13.7_
+
+  - [ ] 42.4 Update `client_public_key_bytes` property for composite format
+    - Return length-prefixed concatenation of 32-byte X25519 public key + 1088-byte ML-KEM-768 ciphertext
+    - Each component preceded by 4-byte big-endian length prefix
+    - Raise `CallerError` if `derive_shared_key` has not been called (no ML-KEM-768 ciphertext available)
+    - _Requirements: 12.3, 14.4, 14.6_
+
+- [ ] 43. Update `attest` method for composite key and fingerprint verification
+  - [ ] 43.1 Update `attest` method to handle new `/attest` response format
+    - Extract both `attestation_document` and `server_public_key` from JSON response
+    - Base64-decode `server_public_key` to get composite key bytes
+    - Raise `CallerError(phase="attest")` if `server_public_key` field is missing
+    - _Requirements: 11.4, 11A.1, 11A.3_
+
+  - [ ] 43.2 Add fingerprint verification to `attest` method
+    - After validating attestation, extract `public_key` field from attestation payload (now contains SHA-256 fingerprint)
+    - Call `ClientEncryption.verify_server_key_fingerprint(composite_key_bytes, attestation_fingerprint)`
+    - Raise `CallerError(phase="attest")` on fingerprint mismatch
+    - _Requirements: 11A.2, 11A.4_
+
+  - [ ] 43.3 Update `attest` to pass composite key to `derive_shared_key`
+    - Pass the full composite key bytes to `ClientEncryption.derive_shared_key()` instead of raw X25519 bytes
+    - _Requirements: 13.1, 13.2_
+
+  - [ ] 43.4 Write unit tests for updated attest method
+    - Test attest extracts `server_public_key` from JSON response (Req 11.4)
+    - Test missing `server_public_key` in JSON response raises `CallerError` (Req 11A.3)
+    - Test fingerprint mismatch raises `CallerError` (Req 11A.4)
+    - Test fingerprint match proceeds to key derivation (Req 11A.2)
+    - Test invalid composite key format raises `CallerError` (Req 13.6)
+    - _Requirements: 11.4, 11A.2, 11A.3, 11A.4, 13.6_
+
+- [ ] 44. Checkpoint - Ensure PQ_Hybrid_KEM migration compiles and existing tests are updated
+  - Update existing tests that construct `ClientEncryption` or mock `derive_shared_key` to use composite key format
+  - Update existing tests that mock `/attest` response to include `server_public_key` field
+  - Update existing tests that check `client_public_key` to expect composite format
+  - Ensure all existing tests pass with the updated signatures
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 45. Write property tests for PQ_Hybrid_KEM
+  - [ ] 45.1 Write property test for server public key fingerprint verification
+    - **Property 21: Server public key fingerprint verification**
+    - Generate random composite server keys (32-byte X25519 pub + 1184-byte ML-KEM-768 encap key, length-prefixed)
+    - Compute SHA-256 fingerprint
+    - Verify `verify_server_key_fingerprint` accepts when fingerprints match
+    - Verify raises `CallerError` when fingerprints differ
+    - **Validates: Requirements 11A.1, 11A.2**
+
+  - [ ] 45.2 Write property test for composite key serialization/deserialization round-trip
+    - **Property 26: Composite key serialization/deserialization round-trip**
+    - Generate random 32-byte X25519 keys and 1184-byte ML-KEM-768 encapsulation keys
+    - Serialize as length-prefixed concatenation, parse via `parse_composite_server_key`
+    - Verify round-trip produces identical components
+    - Also test client composite key (X25519 pub + 1088-byte ML-KEM-768 ciphertext) round-trip
+    - **Validates: Requirements 12.3, 13.1, 14.4, 14.6**
+
+  - [ ] 45.3 Write property test for PQ_Hybrid_KEM key exchange end-to-end
+    - **Property 27: PQ_Hybrid_KEM key exchange end-to-end**
+    - Generate server composite keypair (X25519 via `cryptography` + ML-KEM-768 via `wolfcrypt-py`)
+    - Generate client X25519 keypair
+    - Perform full PQ_Hybrid_KEM on client side (ECDH + encapsulation → HKDF with `info=b"pq-hybrid-shared-key"`)
+    - Parse client composite key on server side, perform ECDH + decapsulation → HKDF
+    - Verify both sides derive the same 32-byte shared key
+    - Encrypt a random payload on one side, decrypt on the other
+    - **Validates: Requirements 13.1, 13.2, 14.1, 15.4**
+
+  - [ ] 45.4 Update property test for PQ_Hybrid_KEM key derivation symmetry
+    - **Property 17: PQ_Hybrid_KEM key derivation symmetry**
+    - Update existing Property 17 test to use PQ_Hybrid_KEM instead of plain ECDH
+    - Generate server composite keypair (X25519 + ML-KEM-768) and client X25519 keypair
+    - Client: ECDH + ML-KEM-768 encapsulation → combine secrets → HKDF with `info=b"pq-hybrid-shared-key"`
+    - Server: ECDH + ML-KEM-768 decapsulation → combine secrets → HKDF with `info=b"pq-hybrid-shared-key"`
+    - Verify both sides produce identical 32-byte shared keys
+    - **Validates: Requirements 13.1, 13.2**
+
+- [ ] 46. Write unit tests for PQ_Hybrid_KEM edge cases
+  - [ ] 46.1 Write unit tests for `parse_composite_server_key`
+    - Test valid composite key (32-byte X25519 + 1184-byte ML-KEM-768) parses correctly
+    - Test truncated key raises `CallerError`
+    - Test key with wrong number of components raises `CallerError`
+    - Test key with wrong component sizes raises `CallerError`
+    - _Requirements: 11A.5, 13.6_
+
+  - [ ] 46.2 Write unit tests for `verify_server_key_fingerprint`
+    - Test matching fingerprint passes
+    - Test mismatched fingerprint raises `CallerError`
+    - _Requirements: 11A.1, 11A.2, 11A.4_
+
+  - [ ] 46.3 Write unit tests for PQ_Hybrid_KEM `derive_shared_key`
+    - Test valid composite server key derives shared key successfully
+    - Test invalid composite key format raises `CallerError`
+    - Test ML-KEM-768 encapsulation failure raises `CallerError`
+    - _Requirements: 13.1, 13.6, 13.7_
+
+  - [ ] 46.4 Write unit tests for composite `client_public_key_bytes`
+    - Test composite client key contains length-prefixed X25519 pub + ML-KEM-768 ciphertext
+    - Test calling before `derive_shared_key` raises `CallerError`
+    - _Requirements: 12.3, 14.4_
+
+  - [ ] 46.5 Update existing unit tests for PQ_Hybrid_KEM compatibility
+    - Update all tests that mock `ClientEncryption.derive_shared_key` to pass composite key bytes
+    - Update all tests that check `client_public_key_bytes` to expect composite format
+    - Update all tests that mock `/attest` response to include `server_public_key` field
+    - Update all tests that check HKDF info label from `b"hpke-shared-key"` to `b"pq-hybrid-shared-key"`
+    - _Requirements: 11A.1, 12.3, 13.1, 13.3_
+
+- [ ] 47. Final checkpoint - Ensure all PQ_Hybrid_KEM tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -732,3 +874,4 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - Tasks 12-19 cover OIDC authentication support (Requirements 9, 10; Properties 13-15)
 - Tasks 20-32 cover HPKE encrypted communication, mandatory nonces, and related updates (Requirements 11-16; Properties 16-20)
 - Tasks 33-40 cover concurrent execution isolation support (Requirements 1.8, 2.5-2.14, 17; Properties 22-25)
+- Tasks 41-47 cover PQ_Hybrid_KEM migration from HPKE (Requirements 11A, 12.3, 13.1-13.7; Properties 17, 21, 26, 27)

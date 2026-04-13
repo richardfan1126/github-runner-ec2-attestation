@@ -4,16 +4,16 @@
 
 This document specifies the requirements for the GitHub Actions Remote Executor Caller — a GitHub Actions workflow and supporting scripts that act as the client side of the Remote Executor system. The caller workflow is triggered via `workflow_dispatch`, sends execution requests to an already-deployed Remote Executor server, validates the server's identity and response integrity through NitroTPM attestation documents, and reports results back in the GitHub Actions workflow output.
 
-All communication with the Remote Executor server's `/execute` and `/execution/{id}/output` endpoints uses HPKE-based encryption. The caller first obtains the server's public key via the unauthenticated `/attest` endpoint, generates a client-side X25519 keypair, derives a shared AES-256-GCM key via ECDH + HKDF-SHA256, and encrypts all request payloads (including the OIDC token) before transmission. Responses from these endpoints are also encrypted and must be decrypted by the caller using the same shared key.
+All communication with the Remote Executor server's `/execute` and `/execution/{id}/output` endpoints uses PQ_Hybrid_KEM-based encryption (post-quantum hybrid key encapsulation combining X25519 ECDH with ML-KEM-768). The caller first obtains the server's composite public key via the unauthenticated `/attest` endpoint (which returns both an attestation document and the composite key as a separate JSON field), verifies the key's SHA-256 fingerprint against the attestation document, generates a client-side X25519 keypair, performs ML-KEM-768 encapsulation against the server's encapsulation key, derives a shared AES-256-GCM key by combining both shared secrets via HKDF-SHA256 with `info=b"pq-hybrid-shared-key"`, and encrypts all request payloads (including the OIDC token) before transmission. Responses from these endpoints are also encrypted and must be decrypted by the caller using the same shared key.
 
-The workflow also demonstrates that concurrent server executions are isolated from each other. When configured with a concurrency count greater than 1, the workflow dispatches multiple independent execution requests in parallel — each with its own HPKE session, attestation validation, and output polling — and verifies that each execution produces the expected output without interference from other concurrent executions on the same server.
+The workflow also demonstrates that concurrent server executions are isolated from each other. When configured with a concurrency count greater than 1, the workflow dispatches multiple independent execution requests in parallel — each with its own PQ_Hybrid_KEM session, attestation validation, and output polling — and verifies that each execution produces the expected output without interference from other concurrent executions on the same server.
 
 The caller includes:
 
 1. **GitHub Actions Workflow**: A `workflow_dispatch`-triggered workflow that orchestrates the entire attest-encrypt-execute-poll-verify cycle against the Remote Executor server, with support for dispatching multiple concurrent executions to demonstrate isolation.
 2. **Sample Build Script**: A sample script included in the repository that the Remote Executor server will fetch and execute. The script generates a unique execution marker at runtime and performs filesystem and process isolation tests to enable isolation verification.
 3. **Attestation Validation Logic**: Client-side logic to decode, cryptographically verify, and validate COSE Sign1-encoded NitroTPM attestation documents returned by the server, including certificate chain (PKI) validation, COSE signature verification, PCR value validation, and output integrity verification.
-4. **HPKE Encryption Logic**: Client-side X25519 key generation, ECDH key agreement, HKDF-SHA256 key derivation, and AES-256-GCM encryption/decryption for all request and response payloads on encrypted endpoints.
+4. **PQ_Hybrid_KEM Encryption Logic**: Client-side X25519 key generation, ML-KEM-768 encapsulation (via `wolfcrypt-py`), ECDH key agreement, combined HKDF-SHA256 key derivation with `info=b"pq-hybrid-shared-key"`, and AES-256-GCM encryption/decryption for all request and response payloads on encrypted endpoints.
 
 ## Glossary
 
@@ -33,17 +33,19 @@ The caller includes:
 - **Expected_PCRs**: A JSON map of PCR index (integer) to expected hex-encoded PCR value for PCR4 and PCR7, hardcoded in the Caller_Workflow definition, used to validate the attestable AMI's Platform Configuration Registers against known-good values
 - **Certificate_Chain**: The ordered list of intermediate CA certificates (cabundle) included in the attestation document, linking the signing certificate to the Root_CA_Certificate
 - **Signing_Certificate**: The DER-encoded X.509 certificate embedded in the attestation document payload, whose public key is used to verify the COSE Sign1 signature
-- **OIDC_Token**: JSON Web Token (JWT) issued by GitHub's OIDC provider (`https://token.actions.githubusercontent.com`) to a GitHub Actions workflow, included in the `oidc_token` field of HPKE-encrypted request payloads to authenticate requests to the Remote_Executor_Server
+- **OIDC_Token**: JSON Web Token (JWT) issued by GitHub's OIDC provider (`https://token.actions.githubusercontent.com`) to a GitHub Actions workflow, included in the `oidc_token` field of PQ_Hybrid_KEM-encrypted request payloads to authenticate requests to the Remote_Executor_Server
 - **OIDC_Provider**: GitHub Actions' built-in OpenID Connect identity provider that issues OIDC_Tokens to workflows with `id-token: write` permission
 - **Audience**: A configurable string passed when requesting an OIDC_Token, which must match the Remote_Executor_Server's expected audience configuration to ensure the token was issued for the correct server instance
 - **ACTIONS_ID_TOKEN_REQUEST_TOKEN**: Environment variable automatically set by GitHub Actions when `id-token: write` permission is granted, containing the bearer token used to authenticate the OIDC token request to the OIDC_Provider
 - **ACTIONS_ID_TOKEN_REQUEST_URL**: Environment variable automatically set by GitHub Actions when `id-token: write` permission is granted, containing the URL endpoint to request an OIDC_Token from the OIDC_Provider
-- **Server_Public_Key**: The X25519 public key of the Remote_Executor_Server, obtained from the `public_key` field of the Attestation_Document returned by the `/attest` endpoint, used for HPKE key exchange
-- **Client_Keypair**: An X25519 keypair generated by the Caller_Script for each execution session, used for HPKE key agreement with the Remote_Executor_Server
-- **Client_Public_Key**: The public component of the Client_Keypair, sent unencrypted alongside encrypted request payloads so the server can derive the same Shared_Key
-- **Shared_Key**: A 256-bit AES key derived from the ECDH shared secret between the Client_Keypair private key and the Server_Public_Key, using HKDF-SHA256 with info=`b"hpke-shared-key"`, used for AES-256-GCM encryption and decryption of request and response payloads
-- **HPKE**: Hybrid Public Key Encryption — the encryption scheme used for securing communication between the Caller_Script and the Remote_Executor_Server, combining X25519 key agreement with AES-256-GCM symmetric encryption
-- **Encrypted_Envelope**: The JSON structure sent to encrypted endpoints, containing `encrypted_payload` (base64-encoded `nonce || ciphertext`) and `client_public_key` (base64-encoded raw X25519 public key)
+- **Server_Public_Key**: The composite public key of the Remote_Executor_Server, consisting of a length-prefixed concatenation of a 32-byte X25519 public key and a 1184-byte ML-KEM-768 encapsulation key (each preceded by a 4-byte big-endian length prefix). Obtained from the `server_public_key` field of the `/attest` JSON response body (base64-encoded). The attestation document's `public_key` field contains a SHA-256 fingerprint of this composite key (because the composite key exceeds the 1024-byte attestation field limit), which the client must verify before using the key for PQ_Hybrid_KEM key exchange.
+- **Client_Keypair**: An X25519 keypair generated by the Caller_Script for each execution session, used for the classical component of PQ_Hybrid_KEM key agreement with the Remote_Executor_Server
+- **Client_Public_Key**: The composite client public key sent to the server, consisting of a length-prefixed concatenation of the client's 32-byte X25519 public key and the 1088-byte ML-KEM-768 ciphertext (produced during encapsulation), each preceded by a 4-byte big-endian length prefix
+- **Shared_Key**: A 256-bit AES key derived from the combined X25519 ECDH shared secret and ML-KEM-768 shared secret, using HKDF-SHA256 with `info=b"pq-hybrid-shared-key"`, used for AES-256-GCM encryption and decryption of request and response payloads
+- **PQ_Hybrid_KEM**: Post-Quantum Hybrid Key Encapsulation Mechanism — the encryption scheme used for securing communication between the Caller_Script and the Remote_Executor_Server, combining X25519 ECDH (classical) with ML-KEM-768 (post-quantum, FIPS 203) key agreement, followed by AES-256-GCM symmetric encryption. Provides security against both classical and quantum attacks.
+- **ML-KEM-768**: Module-Lattice-Based Key Encapsulation Mechanism (FIPS 203) at the 768 parameter set, providing post-quantum security. The server generates an ML-KEM-768 keypair at startup; the client performs encapsulation against the server's encapsulation key to produce a shared secret and ciphertext. Implemented via the `wolfcrypt-py` library (`wolfcrypt.ciphers` module: `MlKemType`, `MlKemPublic`).
+- **Server_Public_Key_Fingerprint**: The SHA-256 hash of the serialized composite Server_Public_Key, included in the attestation document's `public_key` field because the composite key (1224 bytes) exceeds the 1024-byte field limit. The client verifies this fingerprint against the composite key received in the `/attest` JSON response body.
+- **Encrypted_Envelope**: The JSON structure sent to encrypted endpoints, containing `encrypted_payload` (base64-encoded `nonce || ciphertext`) and `client_public_key` (base64-encoded composite client key: length-prefixed X25519 pub + ML-KEM-768 ciphertext)
 - **Nonce**: A random value included in all attestation requests and encrypted payloads to verify freshness of attestation documents and prevent replay attacks. The caller generates a unique nonce for every request to an endpoint that supports it (/attest, /execute, /execution/{id}/output)
 - **Concurrency_Count**: A positive integer (default 1) specifying how many independent execution requests the Caller_Workflow dispatches in parallel to demonstrate that the Remote_Executor_Server isolates concurrent executions
 - **Execution_Marker**: A unique identifier generated at runtime by the Sample_Build_Script (e.g., using `uuidgen` or `/proc/sys/kernel/random/uuid`), echoed in the script output as `MARKER:<value>`, and used to verify that each execution produces its own unique output. Since the server does not support passing custom environment variables from the caller, the marker is generated inside the execution environment rather than being passed from the workflow.
@@ -95,7 +97,7 @@ The caller includes:
 
 #### Acceptance Criteria
 
-1. THE Caller_Script SHALL send an HTTP POST request to `{Server_URL}/execute` with a JSON body containing `encrypted_payload` (base64-encoded `nonce || ciphertext`) and `client_public_key` (base64-encoded raw X25519 public key)
+1. THE Caller_Script SHALL send an HTTP POST request to `{Server_URL}/execute` with a JSON body containing `encrypted_payload` (base64-encoded `nonce || ciphertext`) and `client_public_key` (base64-encoded composite client key: length-prefixed X25519 pub + ML-KEM-768 ciphertext)
 2. THE Caller_Script SHALL encrypt the request payload using the Shared_Key derived from the Client_Keypair and Server_Public_Key before sending
 3. THE encrypted request payload SHALL contain `repository_url`, `commit_hash`, `script_path`, `github_token`, and `oidc_token` fields
 4. THE Caller_Script SHALL use the repository URL of the current GitHub repository for the `repository_url` field
@@ -157,7 +159,7 @@ The caller includes:
 #### Acceptance Criteria
 
 1. THE Caller_Script SHALL send HTTP POST requests to `{Server_URL}/execution/{Execution_ID}/output` with an encrypted request body to poll for results
-2. THE Caller_Script SHALL encrypt the output request payload using the same Shared_Key derived during the `/execute` HPKE key exchange
+2. THE Caller_Script SHALL encrypt the output request payload using the same Shared_Key derived during the `/execute` PQ_Hybrid_KEM key exchange
 3. THE encrypted output request payload SHALL contain the `oidc_token` field and a `nonce` field
 13. THE Caller_Script SHALL generate a unique random nonce for each `/execution/{id}/output` request
 14. WHEN the execution is complete and the decrypted response contains an Output_Attestation_Document, THE Caller_Script SHALL verify that the nonce in the Output_Attestation_Document matches the nonce that was sent in that polling request
@@ -242,7 +244,7 @@ The caller includes:
 
 ### Requirement 10: OIDC Token Transmission
 
-**User Story:** As a GitHub Actions workflow, I want to include the OIDC token in the encrypted request body sent to the Remote Executor server, so that the server can authenticate and authorize the caller while the token is protected by HPKE encryption.
+**User Story:** As a GitHub Actions workflow, I want to include the OIDC token in the encrypted request body sent to the Remote Executor server, so that the server can authenticate and authorize the caller while the token is protected by PQ_Hybrid_KEM encryption.
 
 #### Acceptance Criteria
 
@@ -257,7 +259,7 @@ The caller includes:
 
 ### Requirement 11: Server Attestation and Public Key Retrieval
 
-**User Story:** As a GitHub Actions workflow, I want to call the server's `/attest` endpoint to obtain an attestation document containing the server's public key, so that I can verify the server's identity and establish an encrypted channel.
+**User Story:** As a GitHub Actions workflow, I want to call the server's `/attest` endpoint to obtain an attestation document and the server's composite public key, so that I can verify the server's identity and establish a post-quantum hybrid encrypted channel.
 
 #### Acceptance Criteria
 
@@ -265,39 +267,50 @@ The caller includes:
 2. THE `/attest` request SHALL NOT include an Authorization header or any authentication credentials
 3. THE Caller_Script SHALL include a `nonce` query parameter in the `/attest` request for attestation freshness verification
 12. THE Caller_Script SHALL generate a unique random nonce for each `/attest` request
-4. WHEN the `/attest` endpoint returns HTTP 200, THE Caller_Script SHALL extract the `attestation_document` field from the JSON response
+4. WHEN the `/attest` endpoint returns HTTP 200, THE Caller_Script SHALL extract the `attestation_document` field and the `server_public_key` field from the JSON response
 5. THE Caller_Script SHALL validate the Attestation_Document from `/attest` using the same COSE Sign1 parsing, PKI validation, COSE signature verification, and PCR validation as Requirement 4
-6. THE Caller_Script SHALL extract the Server_Public_Key from the `public_key` field of the validated attestation payload
-7. IF the `public_key` field is null or missing in the attestation payload, THEN THE Caller_Script SHALL fail the workflow step with an error indicating the server did not provide a public key
+6. THE Caller_Script SHALL extract the Server_Public_Key_Fingerprint from the `public_key` field of the validated attestation payload
+7. IF the `public_key` field is null or missing in the attestation payload, THEN THE Caller_Script SHALL fail the workflow step with an error indicating the server did not provide a public key fingerprint
 8. IF the `/attest` endpoint returns an HTTP error status, THEN THE Caller_Script SHALL fail the workflow step with the error details
 9. IF the `/attest` endpoint is unreachable, THEN THE Caller_Script SHALL fail the workflow step with a connection error message
 10. THE Caller_Script SHALL set a configurable timeout for the `/attest` request
+11. THE Caller_Script SHALL verify that the nonce in the validated attestation payload matches the nonce that was sent
+
+##### 11A: Server Public Key Fingerprint Verification
+
+1. THE Caller_Script SHALL base64-decode the `server_public_key` field from the `/attest` JSON response to obtain the composite Server_Public_Key bytes
+2. THE Caller_Script SHALL compute the SHA-256 fingerprint of the received composite Server_Public_Key bytes and compare it against the Server_Public_Key_Fingerprint extracted from the attestation document's `public_key` field
+3. IF the `server_public_key` field is null or missing in the `/attest` JSON response, THEN THE Caller_Script SHALL fail the workflow step with an error indicating the server did not provide a composite public key
+4. IF the computed SHA-256 fingerprint does not match the fingerprint in the attestation document, THEN THE Caller_Script SHALL fail the workflow step with an error indicating the server public key does not match the attested fingerprint
+5. THE Caller_Script SHALL parse the verified composite Server_Public_Key to extract the 32-byte X25519 public key and the 1184-byte ML-KEM-768 encapsulation key (each preceded by a 4-byte big-endian length prefix)_Script SHALL set a configurable timeout for the `/attest` request
 11. THE Caller_Script SHALL generate a unique random nonce for each `/attest` request
 12. THE Caller_Script SHALL verify that the nonce in the validated attestation payload matches the nonce that was sent
 
-### Requirement 12: Client-Side HPKE Key Generation
+### Requirement 12: Client-Side Key Generation
 
-**User Story:** As a security engineer, I want the caller to generate a fresh X25519 keypair for each execution session, so that each session uses unique cryptographic material for HPKE key exchange.
+**User Story:** As a security engineer, I want the caller to generate a fresh X25519 keypair for each execution session, so that each session uses unique cryptographic material for the classical component of PQ_Hybrid_KEM key exchange.
 
 #### Acceptance Criteria
 
 1. THE Caller_Script SHALL generate a new Client_Keypair (X25519 private key and public key) for each execution session
 2. THE Caller_Script SHALL use the `cryptography` library to generate the Client_Keypair
-3. THE Caller_Script SHALL serialize the Client_Public_Key in raw format (32 bytes) for transmission to the Remote_Executor_Server
+3. THE Caller_Script SHALL serialize the Client_Public_Key as a length-prefixed concatenation of the 32-byte X25519 public key and the 1088-byte ML-KEM-768 ciphertext (produced during encapsulation), each preceded by a 4-byte big-endian length prefix, for transmission to the Remote_Executor_Server
 4. THE Caller_Script SHALL NOT persist the Client_Keypair to disk
 5. THE Caller_Script SHALL retain the Client_Keypair in memory for the duration of the execution session to derive the Shared_Key and decrypt responses
 
-### Requirement 13: HPKE Key Derivation
+### Requirement 13: PQ_Hybrid_KEM Key Derivation
 
-**User Story:** As a security engineer, I want the caller to derive a shared encryption key using ECDH and HKDF, so that the caller and server can encrypt and decrypt payloads using the same symmetric key.
+**User Story:** As a security engineer, I want the caller to derive a shared encryption key using both X25519 ECDH and ML-KEM-768 encapsulation combined via HKDF, so that the caller and server can encrypt and decrypt payloads using the same symmetric key with post-quantum security.
 
 #### Acceptance Criteria
 
-1. THE Caller_Script SHALL compute an ECDH shared secret by performing X25519 key exchange between the Client_Keypair private key and the Server_Public_Key
-2. THE Caller_Script SHALL derive the Shared_Key from the ECDH shared secret using HKDF-SHA256 with `salt=None`, `info=b"hpke-shared-key"`, and `length=32` (256-bit AES key)
-3. THE Caller_Script SHALL use the `cryptography` library for both the ECDH key exchange and HKDF key derivation
-4. THE Caller_Script SHALL retain the Shared_Key in memory for the duration of the execution session to encrypt requests and decrypt responses for both `/execute` and `/execution/{id}/output`
-5. IF the Server_Public_Key is not a valid 32-byte X25519 public key, THEN THE Caller_Script SHALL fail with an error indicating an invalid server public key
+1. THE Caller_Script SHALL compute an X25519 ECDH shared secret by performing key exchange between the Client_Keypair private key and the server's X25519 public key (extracted from the composite Server_Public_Key)
+2. THE Caller_Script SHALL perform ML-KEM-768 encapsulation against the server's ML-KEM-768 encapsulation key (extracted from the composite Server_Public_Key) to produce an ML-KEM-768 shared secret and an ML-KEM-768 ciphertext
+3. THE Caller_Script SHALL derive the Shared_Key by combining the X25519 ECDH shared secret and the ML-KEM-768 shared secret (concatenated in that order) via HKDF-SHA256 with `salt=None`, `info=b"pq-hybrid-shared-key"`, and `length=32` (256-bit AES key)
+4. THE Caller_Script SHALL use the `cryptography` library for X25519 ECDH key exchange and HKDF key derivation, and the `wolfcrypt-py` library (`wolfcrypt.ciphers` module: `MlKemType`, `MlKemPublic`) for ML-KEM-768 encapsulation
+5. THE Caller_Script SHALL retain the Shared_Key in memory for the duration of the execution session to encrypt requests and decrypt responses for both `/execute` and `/execution/{id}/output`
+6. IF the composite Server_Public_Key cannot be parsed or contains invalid X25519 or ML-KEM-768 components, THEN THE Caller_Script SHALL fail with an error indicating an invalid server public key
+7. IF ML-KEM-768 encapsulation fails, THEN THE Caller_Script SHALL fail with an error indicating ML-KEM-768 encapsulation failure
 
 ### Requirement 14: Request Payload Encryption
 
@@ -308,7 +321,7 @@ The caller includes:
 1. THE Caller_Script SHALL encrypt request payloads by serializing the payload dict to JSON, then encrypting with AES-256-GCM using the Shared_Key
 2. THE Caller_Script SHALL generate a random 12-byte nonce for each encryption operation
 3. THE encrypted wire format SHALL be `nonce (12 bytes) || ciphertext` concatenated, then base64-encoded for the `encrypted_payload` field
-4. THE Caller_Script SHALL base64-encode the raw Client_Public_Key bytes for the `client_public_key` field in the `/execute` request
+4. THE Caller_Script SHALL base64-encode the composite Client_Public_Key bytes (length-prefixed X25519 pub + ML-KEM-768 ciphertext) for the `client_public_key` field in the `/execute` request
 5. THE Caller_Script SHALL use the `cryptography` library's AESGCM implementation for encryption
 6. THE `/execute` Encrypted_Envelope SHALL contain both `encrypted_payload` and `client_public_key` fields
 7. THE `/execution/{id}/output` encrypted request body SHALL contain only the `encrypted_payload` field (the server already has the Shared_Key from the execution context)
@@ -333,7 +346,7 @@ The caller includes:
 
 #### Acceptance Criteria
 
-1. THE Caller_Script SHALL execute the communication flow in this order: health_check → request_oidc_token → attest (get server public key) → generate Client_Keypair → derive Shared_Key → encrypt and send /execute → decrypt /execute response → validate attestation → encrypt and send /output polls → decrypt /output responses → validate output attestation
+1. THE Caller_Script SHALL execute the communication flow in this order: health_check → request_oidc_token → attest (get composite server public key, verify fingerprint) → generate Client_Keypair → perform PQ_Hybrid_KEM (X25519 ECDH + ML-KEM-768 encapsulation) → derive Shared_Key → encrypt and send /execute → decrypt /execute response → validate attestation → encrypt and send /output polls → decrypt /output responses → validate output attestation
 2. THE Caller_Script SHALL reuse the same Shared_Key for all `/execution/{id}/output` requests within a single execution session
 3. THE Caller_Script SHALL NOT send any unencrypted request payloads to the `/execute` or `/execution/{id}/output` endpoints
 4. THE `/health` endpoint SHALL remain unencrypted (plain HTTP GET with no request body)
@@ -367,7 +380,7 @@ The caller includes:
 
 ##### 17C: Independent Sessions
 
-14. THE Caller_Workflow SHALL ensure each concurrent Caller_Script invocation performs its own independent HPKE key exchange (separate Client_Keypair and Shared_Key per invocation)
+14. THE Caller_Workflow SHALL ensure each concurrent Caller_Script invocation performs its own independent PQ_Hybrid_KEM key exchange (separate Client_Keypair, ML-KEM-768 encapsulation, and Shared_Key per invocation)
 15. THE Caller_Workflow SHALL ensure each concurrent Caller_Script invocation acquires its own OIDC_Token
 16. THE Caller_Workflow SHALL ensure each concurrent Caller_Script invocation performs its own attestation validation
 
