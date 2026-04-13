@@ -2328,8 +2328,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - For any /execution/{id}/output request and response, client encrypts request, server decrypts, processes, encrypts response, client decrypts — producing original content
     - **Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**
 
-- [ ] 120. Update all existing encryption unit tests for PQ Hybrid KEM
-  - [ ] 120.1 Update test_encryption_unit.py for composite keypair
+- [x] 120. Update all existing encryption unit tests for PQ Hybrid KEM
+  - [x] 120.1 Update test_encryption_unit.py for composite keypair
     - Update unit tests to verify composite keypair generation (X25519 + ML-KEM-768)
     - Test length-prefixed serialization/deserialization of composite keys
     - Test SHA-256 fingerprint computation of composite Server_Public_Key
@@ -2339,18 +2339,18 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test Encryption_Context storage and cleanup (unchanged logic, but verify with PQ-derived keys)
     - _Requirements: 36.1, 36.4, 36.6, 39.1, 39.3, 40.1, 40.3, 40.4, 40.5, 40.6, 40.11_
 
-  - [ ] 120.2 Update test_encryption_context_lifecycle_properties.py for PQ Hybrid KEM
+  - [x] 120.2 Update test_encryption_context_lifecycle_properties.py for PQ Hybrid KEM
     - Update Encryption_Context lifecycle tests to use PQ hybrid derived Shared_Keys
     - **Property 131: Encryption Context Lifecycle**
     - **Validates: Requirements 41.1, 41.2, 41.6**
 
-  - [ ] 120.3 Update test_encryption_exemption_properties.py for PQ Hybrid KEM
+  - [x] 120.3 Update test_encryption_exemption_properties.py for PQ Hybrid KEM
     - Verify /attest, /health, /metrics still return unencrypted responses with PQ hybrid EncryptionManager
     - **Property 135: Encryption Exemption for Non-Context Endpoints**
     - **Validates: Requirements 43.1, 43.2, 43.3, 43.4**
 
-- [ ] 121. Update /attest endpoint property tests for PQ Hybrid KEM
-  - [ ] 121.1 Update test_attest_endpoint_properties.py for composite key response
+- [x] 121. Update /attest endpoint property tests for PQ Hybrid KEM
+  - [x] 121.1 Update test_attest_endpoint_properties.py for composite key response
     - Update tests to verify /attest returns JSON with `server_public_key` (base64-encoded composite key) and `attestation_document`
     - **Property 123: Attest Endpoint No Authentication**
     - **Property 124: Attest Attestation Contains Server Public Key Fingerprint**

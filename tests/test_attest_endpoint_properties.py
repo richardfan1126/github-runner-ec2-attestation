@@ -1,7 +1,7 @@
 """Property-based tests for /attest endpoint behavior.
 
 Feature: github-actions-remote-executor
-Tests Properties 123, 124, 125 from the design document.
+Tests Properties 123, 124, 125, 126, 136 from the design document.
 """
 import base64
 from datetime import datetime, timezone
@@ -112,10 +112,10 @@ def test_attest_endpoint_no_authentication(nonce):
 
 
 # ---------------------------------------------------------------------------
-# Property 124: Attest Attestation Contains Server Public Key
+# Property 124: Attest Attestation Contains Server Public Key Fingerprint
 # ---------------------------------------------------------------------------
 
-# Feature: github-actions-remote-executor, Property 124: Attest Attestation Contains Server Public Key
+# Feature: github-actions-remote-executor, Property 124: Attest Attestation Contains Server Public Key Fingerprint
 @settings(max_examples=20, deadline=None)
 @given(nonce=st.one_of(st.none(), st.text(min_size=1, max_size=64)))
 def test_attest_attestation_contains_server_public_key(nonce):
@@ -253,6 +253,53 @@ def test_non_attest_attestation_excludes_server_public_key(
         assert pk_value is None, (
             f"generate_attestation for /execute must NOT include public_key, "
             f"but got public_key={pk_value!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Property 126: Nonce Passthrough in Attestation
+# ---------------------------------------------------------------------------
+
+# Feature: github-actions-remote-executor, Property 126: Nonce Passthrough in Attestation
+@settings(max_examples=20, deadline=None)
+@given(nonce=st.one_of(st.none(), st.text(min_size=1, max_size=64)))
+def test_nonce_passthrough_in_attestation(nonce):
+    """
+    **Validates: Requirements 37.3, 37.5, 39.3**
+
+    For any request to the /attest endpoint with an optional nonce query
+    parameter, the nonce value must be forwarded to generate_attestation
+    so it is included in the Attestation_Document. When no nonce is
+    provided, generate_attestation must be called with nonce=None.
+    """
+    encryption_manager = EncryptionManager()
+    app = create_app(get_test_config(), encryption_manager=encryption_manager)
+    client = TestClient(app)
+
+    with patch.object(
+        app.state.attestation_generator, "generate_attestation"
+    ) as mock_attest:
+        mock_attest.return_value = (_make_attestation_doc(), None)
+
+        params = {}
+        if nonce is not None:
+            params["nonce"] = nonce
+
+        response = client.get("/attest", params=params)
+
+        assert response.status_code == 200, (
+            f"Expected 200 but got {response.status_code}: {response.text}"
+        )
+
+        # Verify generate_attestation was called exactly once
+        mock_attest.assert_called_once()
+        call_kwargs = mock_attest.call_args
+
+        # The nonce kwarg must match what was provided in the query string
+        actual_nonce = call_kwargs.kwargs.get("nonce")
+        assert actual_nonce == nonce, (
+            f"Expected nonce={nonce!r} to be passed through to "
+            f"generate_attestation, but got nonce={actual_nonce!r}"
         )
 
 
