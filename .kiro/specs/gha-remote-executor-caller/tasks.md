@@ -791,8 +791,8 @@ Implement the client-side caller for the Remote Executor system: a Python script
   - Ensure all existing tests pass with the updated signatures
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 45. Write property tests for PQ_Hybrid_KEM
-  - [ ] 45.1 Write property test for server public key fingerprint verification
+- [x] 45. Write property tests for PQ_Hybrid_KEM
+  - [x] 45.1 Write property test for server public key fingerprint verification
     - **Property 21: Server public key fingerprint verification**
     - Generate random composite server keys (32-byte X25519 pub + 1184-byte ML-KEM-768 encap key, length-prefixed)
     - Compute SHA-256 fingerprint
@@ -800,7 +800,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Verify raises `CallerError` when fingerprints differ
     - **Validates: Requirements 11A.1, 11A.2**
 
-  - [ ] 45.2 Write property test for composite key serialization/deserialization round-trip
+  - [x] 45.2 Write property test for composite key serialization/deserialization round-trip
     - **Property 26: Composite key serialization/deserialization round-trip**
     - Generate random 32-byte X25519 keys and 1184-byte ML-KEM-768 encapsulation keys
     - Serialize as length-prefixed concatenation, parse via `parse_composite_server_key`
@@ -808,7 +808,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Also test client composite key (X25519 pub + 1088-byte ML-KEM-768 ciphertext) round-trip
     - **Validates: Requirements 12.3, 13.1, 14.4, 14.6**
 
-  - [ ] 45.3 Write property test for PQ_Hybrid_KEM key exchange end-to-end
+  - [x] 45.3 Write property test for PQ_Hybrid_KEM key exchange end-to-end
     - **Property 27: PQ_Hybrid_KEM key exchange end-to-end**
     - Generate server composite keypair (X25519 via `cryptography` + ML-KEM-768 via `wolfcrypt-py`)
     - Generate client X25519 keypair
@@ -818,7 +818,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Encrypt a random payload on one side, decrypt on the other
     - **Validates: Requirements 13.1, 13.2, 14.1, 15.4**
 
-  - [ ] 45.4 Update property test for PQ_Hybrid_KEM key derivation symmetry
+  - [x] 45.4 Update property test for PQ_Hybrid_KEM key derivation symmetry
     - **Property 17: PQ_Hybrid_KEM key derivation symmetry**
     - Update existing Property 17 test to use PQ_Hybrid_KEM instead of plain ECDH
     - Generate server composite keypair (X25519 + ML-KEM-768) and client X25519 keypair

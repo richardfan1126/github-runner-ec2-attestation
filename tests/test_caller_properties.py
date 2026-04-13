@@ -1208,32 +1208,43 @@ class TestAESGCMEncryptionRoundTrip:
 
 
 # ---------------------------------------------------------------------------
-# Property 17: HPKE key derivation symmetry
+# Property 17: PQ_Hybrid_KEM key derivation symmetry
 # ---------------------------------------------------------------------------
 
-# Feature: gha-remote-executor-caller, Property 17: HPKE key derivation symmetry
+# Feature: gha-remote-executor-caller, Property 17: PQ_Hybrid_KEM key derivation symmetry
 # **Validates: Requirements 13.1, 13.2**
-class TestHPKEKeyDerivationSymmetry:
-    """Property 17: For a client and server using PQ_Hybrid_KEM, deriving the shared
-    key on both sides should produce identical 32-byte keys."""
+class TestPQHybridKEMKeyDerivationSymmetry:
+    """Property 17: For a client and server using PQ_Hybrid_KEM (X25519 ECDH +
+    ML-KEM-768 encapsulation/decapsulation → combined HKDF-SHA256 with
+    info=b"pq-hybrid-shared-key"), deriving the shared key on both sides
+    should produce identical 32-byte keys."""
 
     @given(data=st.data())
     @settings(max_examples=50)
     def test_shared_key_symmetry(self, data):
-        """Both sides derive the same shared key."""
+        """Client (ECDH + ML-KEM-768 encapsulation) and server (ECDH + ML-KEM-768
+        decapsulation) derive the same 32-byte shared key via PQ_Hybrid_KEM."""
         import base64 as _b64
         from src.encryption import EncryptionManager
 
+        # Server generates composite keypair (X25519 + ML-KEM-768)
         server_mgr = EncryptionManager()
+
+        # Client performs PQ_Hybrid_KEM: ECDH + ML-KEM-768 encapsulation → HKDF
         client = ClientEncryption()
         client.derive_shared_key(server_mgr.server_public_key)
 
-        # Derive server-side shared key
+        # Verify client produced ML-KEM-768 ciphertext during encapsulation
+        assert client._mlkem_ciphertext is not None
+        assert len(client._mlkem_ciphertext) == 1088
+
+        # Server performs PQ_Hybrid_KEM: ECDH + ML-KEM-768 decapsulation → HKDF
         dummy = client.encrypt_payload({"_setup": True})
         _, server_shared_key = server_mgr.decrypt_request(
             _b64.b64decode(dummy), client.client_public_key_bytes,
         )
 
+        # Both sides must derive identical 32-byte shared keys
         assert client._shared_key is not None
         assert server_shared_key is not None
         assert len(client._shared_key) == 32
@@ -1685,3 +1696,181 @@ class TestIsolationSummaryContainsAllResults:
             assert r["marker_unique"] in summary
             assert r["file_isolation"] in summary
             assert r["process_isolation"] in summary
+
+
+# ---------------------------------------------------------------------------
+# Property 21: Server public key fingerprint verification
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 21: Server public key fingerprint verification
+# **Validates: Requirements 11A.1, 11A.2**
+class TestServerPublicKeyFingerprintVerification:
+    """Property 21: For any composite server key (32-byte X25519 pub + 1184-byte
+    ML-KEM-768 encap key, length-prefixed), verify_server_key_fingerprint accepts
+    when the SHA-256 fingerprint matches and rejects when it differs."""
+
+    @given(
+        x25519_pub=st.binary(min_size=32, max_size=32),
+        mlkem_encap_key=st.binary(min_size=1184, max_size=1184),
+    )
+    @settings(max_examples=50)
+    def test_matching_fingerprint_accepted(self, x25519_pub: bytes, mlkem_encap_key: bytes):
+        """verify_server_key_fingerprint accepts when fingerprints match."""
+        import struct
+        import hashlib
+
+        composite_key = (
+            struct.pack(">I", len(x25519_pub)) + x25519_pub
+            + struct.pack(">I", len(mlkem_encap_key)) + mlkem_encap_key
+        )
+        fingerprint = hashlib.sha256(composite_key).digest()
+
+        # Should not raise
+        ClientEncryption.verify_server_key_fingerprint(composite_key, fingerprint)
+
+    @given(
+        x25519_pub=st.binary(min_size=32, max_size=32),
+        mlkem_encap_key=st.binary(min_size=1184, max_size=1184),
+        tamper_byte=st.integers(min_value=1, max_value=255),
+    )
+    @settings(max_examples=50)
+    def test_mismatched_fingerprint_rejected(self, x25519_pub: bytes, mlkem_encap_key: bytes, tamper_byte: int):
+        """verify_server_key_fingerprint raises CallerError when fingerprints differ."""
+        import struct
+        import hashlib
+
+        composite_key = (
+            struct.pack(">I", len(x25519_pub)) + x25519_pub
+            + struct.pack(">I", len(mlkem_encap_key)) + mlkem_encap_key
+        )
+        fingerprint = hashlib.sha256(composite_key).digest()
+
+        # Tamper the fingerprint so it no longer matches
+        tampered = bytearray(fingerprint)
+        tampered[0] = (tampered[0] + tamper_byte) % 256
+        assume(bytes(tampered) != fingerprint)
+
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.verify_server_key_fingerprint(composite_key, bytes(tampered))
+        assert exc_info.value.phase == "attest"
+        assert "fingerprint" in exc_info.value.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# Property 26: Composite key serialization/deserialization round-trip
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 26: Composite key serialization/deserialization round-trip
+# **Validates: Requirements 12.3, 13.1, 14.4, 14.6**
+class TestCompositeKeySerializationRoundTrip:
+    """Property 26: For any random 32-byte X25519 key and 1184-byte ML-KEM-768
+    encapsulation key, serializing as length-prefixed concatenation and parsing
+    via parse_composite_server_key produces identical components."""
+
+    @given(
+        x25519_pub=st.binary(min_size=32, max_size=32),
+        mlkem_encap_key=st.binary(min_size=1184, max_size=1184),
+    )
+    @settings(max_examples=50)
+    def test_server_composite_key_round_trip(self, x25519_pub: bytes, mlkem_encap_key: bytes):
+        """Server composite key round-trips through serialize/parse."""
+        import struct
+
+        composite_key = (
+            struct.pack(">I", len(x25519_pub)) + x25519_pub
+            + struct.pack(">I", len(mlkem_encap_key)) + mlkem_encap_key
+        )
+
+        parsed_x25519, parsed_mlkem = ClientEncryption.parse_composite_server_key(composite_key)
+
+        assert parsed_x25519 == x25519_pub
+        assert parsed_mlkem == mlkem_encap_key
+
+    @given(
+        x25519_pub=st.binary(min_size=32, max_size=32),
+        mlkem_ciphertext=st.binary(min_size=1088, max_size=1088),
+    )
+    @settings(max_examples=50)
+    def test_client_composite_key_round_trip(self, x25519_pub: bytes, mlkem_ciphertext: bytes):
+        """Client composite key (X25519 pub + ML-KEM-768 ciphertext) round-trips
+        through length-prefixed serialization and parsing."""
+        import struct
+
+        # Serialize in the same format as client_public_key_bytes
+        composite_key = (
+            struct.pack(">I", len(x25519_pub)) + x25519_pub
+            + struct.pack(">I", len(mlkem_ciphertext)) + mlkem_ciphertext
+        )
+
+        # Parse using the same length-prefix logic
+        offset = 0
+        components = []
+        while offset < len(composite_key):
+            (length,) = struct.unpack(">I", composite_key[offset : offset + 4])
+            offset += 4
+            components.append(composite_key[offset : offset + length])
+            offset += length
+
+        assert len(components) == 2
+        assert components[0] == x25519_pub
+        assert components[1] == mlkem_ciphertext
+
+
+# ---------------------------------------------------------------------------
+# Property 27: PQ_Hybrid_KEM key exchange end-to-end
+# ---------------------------------------------------------------------------
+
+# Feature: gha-remote-executor-caller, Property 27: PQ_Hybrid_KEM key exchange end-to-end
+# **Validates: Requirements 13.1, 13.2, 14.1, 15.4**
+class TestPQHybridKEMKeyExchangeEndToEnd:
+    """Property 27: For a server composite keypair (X25519 + ML-KEM-768) and a
+    client X25519 keypair, performing full PQ_Hybrid_KEM on both sides produces
+    the same 32-byte shared key, and a payload encrypted on one side can be
+    decrypted on the other."""
+
+    @given(
+        payload=st.fixed_dictionaries({
+            "key": st.text(min_size=1, max_size=50),
+            "value": st.text(min_size=0, max_size=100),
+        }),
+    )
+    @settings(max_examples=20)
+    def test_end_to_end_key_exchange_and_encryption(self, payload: dict):
+        """Full PQ_Hybrid_KEM key exchange produces matching keys and
+        encryption/decryption works across sides."""
+        import base64 as _b64
+        from src.encryption import EncryptionManager
+
+        # Server generates composite keypair
+        server_mgr = EncryptionManager()
+
+        # Client performs key exchange
+        client = ClientEncryption()
+        client.derive_shared_key(server_mgr.server_public_key)
+
+        # Client encrypts a payload
+        encrypted_b64 = client.encrypt_payload(payload)
+
+        # Server decrypts using its private keys + client's composite public key
+        decrypted_dict, server_shared_key = server_mgr.decrypt_request(
+            _b64.b64decode(encrypted_b64),
+            client.client_public_key_bytes,
+        )
+
+        # Both sides derived the same 32-byte shared key
+        assert client._shared_key is not None
+        assert server_shared_key is not None
+        assert len(client._shared_key) == 32
+        assert len(server_shared_key) == 32
+        assert client._shared_key == server_shared_key
+
+        # Decrypted payload matches original
+        assert decrypted_dict == payload
+
+        # Server encrypts a response, client decrypts it
+        server_response = {"status": "ok", "data": payload}
+        encrypted_response = server_mgr.encrypt_response(server_response, server_shared_key)
+        encrypted_response_b64 = _b64.b64encode(encrypted_response).decode("ascii")
+
+        client_decrypted = client.decrypt_response(encrypted_response_b64)
+        assert client_decrypted == server_response
