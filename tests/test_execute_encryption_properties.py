@@ -1,7 +1,7 @@
 """Property-based tests for encrypted /execute endpoint.
 
 Feature: github-actions-remote-executor
-Tests Properties 129, 130, 132 from the design document.
+Tests Properties 129, 130, 132, 134 from the design document.
 """
 import base64
 import json
@@ -25,10 +25,12 @@ from src.encryption import EncryptionManager, _AES_KEY_LENGTH, _HKDF_INFO
 from src.models import (
     AttestationDocument,
     CloneResult,
+    ExecutionRecord,
     ExecutionStatus,
     OIDCValidationResult,
 )
 from src.server import create_app
+from tests.encryption_test_helpers import EncryptionTestContext, make_encrypted_execute_request
 
 
 # ---------------------------------------------------------------------------
@@ -404,3 +406,50 @@ class TestExecuteResponseEncryptionRoundTrip:
 
         # Verify attestation_document is valid base64
         base64.b64decode(decrypted_response["attestation_document"])
+
+
+# ---------------------------------------------------------------------------
+# Property 134: Missing Encryption Context Returns HTTP 400
+# ---------------------------------------------------------------------------
+
+
+class TestMissingEncryptionContextReturnsHTTP400:
+    """**Validates: Requirements 42.6**"""
+
+    @given(execution_id=st.uuids().map(str))
+    @settings(max_examples=30)
+    def test_no_encryption_context_returns_400(self, execution_id: str):
+        """Property 134: Request /execution/{id}/output with an execution_id
+        that has no Encryption_Context returns HTTP 400."""
+        encryption_manager = EncryptionManager()
+        app = create_app(get_test_config(), encryption_manager=encryption_manager)
+        client = TestClient(app)
+
+        # Ensure no encryption context exists
+        encryption_manager.remove_encryption_context(execution_id)
+
+        # Create a dummy execution record so the endpoint doesn't 404
+        record = ExecutionRecord(
+            execution_id=execution_id,
+            repository_url="https://github.com/test/repo",
+            commit_hash="a" * 40,
+            script_path="scripts/test.sh",
+            status=ExecutionStatus.RUNNING,
+            created_at=datetime.now(timezone.utc),
+            started_at=None,
+            completed_at=None,
+            exit_code=None,
+            timeout_seconds=300,
+        )
+
+        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+            response = client.post(
+                f"/execution/{execution_id}/output",
+                json={"encrypted_payload": base64.b64encode(b"dummy").decode()},
+            )
+
+        assert response.status_code == 400, (
+            f"Expected 400 for missing encryption context, got {response.status_code}"
+        )
+        data = response.json()
+        assert data["detail"]["error"] == "no_encryption_context"

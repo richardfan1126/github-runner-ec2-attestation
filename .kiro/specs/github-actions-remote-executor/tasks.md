@@ -2359,8 +2359,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 136: Attest Attestation Excludes User Data**
     - **Validates: Requirements 37.2, 37.4, 37.5, 37.6, 37.9, 37.10, 39.1, 39.2, 39.3, 2.21**
 
-- [ ] 122. Update /execute and /output endpoint property tests for PQ Hybrid KEM
-  - [ ] 122.1 Update test_execute_encryption_properties.py for PQ Hybrid KEM
+- [x] 122. Update /execute and /output endpoint property tests for PQ Hybrid KEM
+  - [x] 122.1 Update test_execute_encryption_properties.py for PQ Hybrid KEM
     - Update all /execute encryption property tests to use PQ Hybrid KEM key exchange
     - Update EncryptionTestContext usage to use composite keys
     - **Property 130: OIDC Token Extracted from Decrypted Body**
