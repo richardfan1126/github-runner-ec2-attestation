@@ -353,6 +353,241 @@ class TestErrorScenarios:
         assert output_data["status"] in ["running", "timed_out"]
 
 
+class TestPQHybridKEMEndToEnd:
+    """Test PQ Hybrid KEM specific end-to-end scenarios (Req 36.1, 37.1, 40.1, 41.1, 42.1, 42.4)"""
+
+    def test_attest_returns_server_public_key_and_attestation(self, client, encryption_ctx):
+        """
+        Verify /attest returns both server_public_key and attestation_document (Req 37.1).
+        """
+        response = client.get("/attest")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "attestation_document" in data
+        assert "server_public_key" in data
+
+        # Verify server_public_key is valid base64 and matches the encryption manager's key
+        import base64
+        server_key_bytes = base64.b64decode(data["server_public_key"])
+        assert server_key_bytes == encryption_ctx.encryption_manager.server_public_key
+
+    def test_pq_hybrid_key_exchange_produces_correct_shared_key(self, client, encryption_ctx):
+        """
+        Verify PQ hybrid key exchange (X25519 + ML-KEM-768) produces a shared key
+        that correctly encrypts/decrypts /execute payloads (Req 40.1, 42.1).
+        """
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        response = _post_execute(client, encryption_ctx, request_data)
+        assert response.status_code == 200
+
+        # Decrypt with the client-derived shared key — proves both sides derived the same key
+        data = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        assert "execution_id" in data
+        assert data["status"] == "queued"
+
+        # Verify the shared key was stored per execution (Req 41.1)
+        stored_key = encryption_ctx.encryption_manager.get_shared_key(data["execution_id"])
+        assert stored_key is not None
+        assert stored_key == encryption_ctx.shared_key
+
+    def test_execute_response_encrypted_with_attestation(self, client, encryption_ctx):
+        """
+        Verify /execute response is encrypted and contains attestation_document (Req 42.1).
+        """
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        response = _post_execute(client, encryption_ctx, request_data)
+        assert response.status_code == 200
+
+        # Raw response should only have encrypted_response (not plaintext fields)
+        raw = response.json()
+        assert "encrypted_response" in raw
+        assert "execution_id" not in raw
+
+        data = decrypt_execute_response(raw, encryption_ctx.shared_key)
+        assert "attestation_document" in data
+        assert len(data["attestation_document"]) > 0
+
+    def test_output_attestation_document_on_completion(self, client, mock_github_and_attestation, encryption_ctx):
+        """
+        Verify output_attestation_document is included when execution completes (Req 42.4).
+        """
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "f1f2f3f4f5f6f1f2f3f4f5f6f1f2f3f4f5f6f1f2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        response = _post_execute(client, encryption_ctx, request_data)
+        assert response.status_code == 200
+        data = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        execution_id = data["execution_id"]
+
+        # Poll until complete
+        for _ in range(20):
+            time.sleep(0.2)
+            output_response = _post_output(client, execution_id, encryption_ctx.shared_key)
+            assert output_response.status_code == 200
+
+            output_data = decrypt_output_response(output_response.json(), encryption_ctx.shared_key)
+            if output_data["complete"]:
+                # Verify output attestation document is present
+                assert "output_attestation_document" in output_data
+                # It may be a base64 string or None if attestation generation failed
+                # In our mock setup it should be present
+                break
+        else:
+            pytest.fail("Execution did not complete")
+
+    def test_output_response_encrypted(self, client, encryption_ctx):
+        """
+        Verify /execution/{id}/output response is encrypted (Req 42.4).
+        """
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "a2b2c2d2e2f2a2b2c2d2e2f2a2b2c2d2e2f2a2b2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        response = _post_execute(client, encryption_ctx, request_data)
+        data = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        execution_id = data["execution_id"]
+
+        time.sleep(0.3)
+        output_response = _post_output(client, execution_id, encryption_ctx.shared_key)
+        assert output_response.status_code == 200
+
+        # Raw response should only have encrypted_response
+        raw = output_response.json()
+        assert "encrypted_response" in raw
+        assert "stdout" not in raw
+
+
+class TestPQHybridKEMErrorScenarios:
+    """Test PQ Hybrid KEM error scenarios (Req 40.5, 40.6, 42.6, 42.7)"""
+
+    def test_execute_with_wrong_pq_hybrid_key(self, client, encryption_ctx):
+        """
+        Test that using a DIFFERENT EncryptionTestContext (different keys) for
+        /execute results in decryption failure → 400 (Req 40.5).
+        """
+        # Create a second context with different keys
+        wrong_ctx = EncryptionTestContext()
+
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "b1b2b3b4b5b6b1b2b3b4b5b6b1b2b3b4b5b6b1b2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        # Encrypt with wrong_ctx (different server keypair) but send to the app
+        # that uses encryption_ctx's server. The client_public_key won't match.
+        body = make_encrypted_execute_request(request_data, wrong_ctx)
+        response = client.post("/execute", json=body)
+        assert response.status_code == 400
+
+    def test_execute_with_invalid_client_public_key(self, client, encryption_ctx):
+        """
+        Test that sending invalid/corrupted Client_Public_Key (bad ML-KEM-768
+        ciphertext) returns 400 (Req 40.6).
+        """
+        import base64
+        import struct
+
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "c1c2c3c4c5c6c1c2c3c4c5c6c1c2c3c4c5c6c1c2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        # Build a valid encrypted payload using the real context
+        body = make_encrypted_execute_request(request_data, encryption_ctx)
+
+        # Replace client_public_key with one containing garbage ML-KEM-768 ciphertext
+        valid_x25519_pub = encryption_ctx._client_x25519_pub_bytes
+        bad_mlkem_ct = os.urandom(1088)  # Random bytes, not a valid ML-KEM-768 ciphertext
+        bad_client_key = (
+            struct.pack(">I", len(valid_x25519_pub))
+            + valid_x25519_pub
+            + struct.pack(">I", len(bad_mlkem_ct))
+            + bad_mlkem_ct
+        )
+        body["client_public_key"] = base64.b64encode(bad_client_key).decode()
+
+        response = client.post("/execute", json=body)
+        assert response.status_code == 400
+
+    def test_output_missing_encryption_context(self, client, encryption_ctx):
+        """
+        Test that calling /execution/{id}/output without an Encryption_Context
+        returns 400 (Req 42.6).
+        """
+        # Create an execution first so the execution record exists
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        response = _post_execute(client, encryption_ctx, request_data)
+        assert response.status_code == 200
+        data = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        execution_id = data["execution_id"]
+
+        # Remove the encryption context to simulate missing context
+        encryption_ctx.encryption_manager.remove_encryption_context(execution_id)
+
+        # Now try to get output — should get 400 (no encryption context)
+        output_response = _post_output(client, execution_id, encryption_ctx.shared_key)
+        assert output_response.status_code == 400
+
+    def test_output_decryption_failure_wrong_key(self, client, encryption_ctx):
+        """
+        Test that decryption failure on /execution/{id}/output returns 400 (Req 42.7).
+        """
+        request_data = {
+            "repository_url": "https://github.com/test/repo",
+            "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        response = _post_execute(client, encryption_ctx, request_data)
+        assert response.status_code == 200
+        data = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        execution_id = data["execution_id"]
+
+        # Send output request encrypted with a WRONG key
+        wrong_key = os.urandom(32)
+        output_response = _post_output(client, execution_id, wrong_key)
+        assert output_response.status_code == 400
+
+
 class TestCleanupAndRetention:
     """Test cleanup and retention policies"""
 

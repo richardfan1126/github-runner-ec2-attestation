@@ -2367,19 +2367,19 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 134: Missing Encryption Context Returns HTTP 400**
     - **Validates: Requirements 40.6, 40.9, 42.6, 2.1, 2.2**
 
-- [ ] 123. Update integration tests for PQ Hybrid KEM
-  - [ ] 123.1 Update integration tests for end-to-end PQ hybrid encrypted flow
+- [x] 123. Update integration tests for PQ Hybrid KEM
+  - [x] 123.1 Update integration tests for end-to-end PQ hybrid encrypted flow
     - Update integration tests to use PQ Hybrid KEM key exchange for /execute and /execution/{id}/output
     - Verify attestation documents, execution results, and output integrity through PQ hybrid encryption
     - _Requirements: 36.1, 37.1, 40.1, 41.1, 42.1, 42.4_
 
-  - [ ] 123.2 Update integration tests for error scenarios with PQ Hybrid KEM
+  - [x] 123.2 Update integration tests for error scenarios with PQ Hybrid KEM
     - Test decryption failure on /execute with wrong PQ hybrid key
     - Test invalid Client_Public_Key (bad ML-KEM-768 ciphertext)
     - Test missing Encryption_Context on /execution/{id}/output
     - _Requirements: 40.5, 40.6, 42.6, 42.7_
 
-- [ ] 124. Final checkpoint - Ensure all PQ Hybrid KEM tests pass
+- [x] 124. Final checkpoint - Ensure all PQ Hybrid KEM tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
