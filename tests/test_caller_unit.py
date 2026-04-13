@@ -23,10 +23,37 @@ from call_remote_executor import (
     RemoteExecutorCaller,
 )
 
+# Add src to path for EncryptionManager
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 
 def _make_caller() -> RemoteExecutorCaller:
     """Create a caller instance for testing."""
     return RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
+
+
+def _setup_encryption_for_caller(caller):
+    """Set up PQ_Hybrid_KEM encryption on a caller instance (simulating attest()).
+    Returns a server-side encryption helper that shares the same key.
+    Uses EncryptionManager from src/encryption.py to generate proper composite keys."""
+    import base64 as _b64
+    from src.encryption import EncryptionManager
+
+    server_mgr = EncryptionManager()
+    caller._encryption = ClientEncryption()
+    caller._encryption.derive_shared_key(server_mgr.server_public_key)
+
+    # Derive the server-side shared key by decrypting a dummy request
+    dummy_payload = caller._encryption.encrypt_payload({"_setup": True})
+    _, shared_key = server_mgr.decrypt_request(
+        _b64.b64decode(dummy_payload),
+        caller._encryption.client_public_key_bytes,
+    )
+
+    # Create a server-side encryption helper with the derived shared key
+    server_enc = ClientEncryption.__new__(ClientEncryption)
+    server_enc._shared_key = shared_key
+    return server_enc
 
 
 class TestAttestationValidationEdgeCases:
@@ -276,13 +303,7 @@ class TestHealthCheckAndExecuteEdgeCases:
         Validates: Requirement 3.6"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
-        caller._encryption = ClientEncryption()
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        server_key = X25519PrivateKey.generate()
-        caller._encryption.derive_shared_key(
-            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        )
+        _setup_encryption_for_caller(caller)
         with patch("call_remote_executor.requests.post", side_effect=requests.ConnectionError("Connection refused")):
             with pytest.raises(CallerError) as exc_info:
                 caller.execute(
@@ -310,16 +331,9 @@ class TestPollingEdgeCases:
         )
         caller._oidc_token = "test-token"
         # Set up encryption so poll_output can encrypt payloads
-        caller._encryption = ClientEncryption()
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        server_key = X25519PrivateKey.generate()
-        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        caller._encryption.derive_shared_key(server_pub_bytes)
+        server_enc = _setup_encryption_for_caller(caller)
 
         # Build encrypted incomplete response
-        server_enc = ClientEncryption.__new__(ClientEncryption)
-        server_enc._shared_key = caller._encryption._shared_key
         incomplete_data = {
             "stdout": "",
             "stderr": "",
@@ -426,13 +440,7 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.4"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
-        caller._encryption = ClientEncryption()
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        server_key = X25519PrivateKey.generate()
-        caller._encryption.derive_shared_key(
-            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        )
+        _setup_encryption_for_caller(caller)
         mock_resp = type("MockResp", (), {"status_code": 401, "text": "Unauthorized"})()
         with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
@@ -445,13 +453,7 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.5"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
-        caller._encryption = ClientEncryption()
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        server_key = X25519PrivateKey.generate()
-        caller._encryption.derive_shared_key(
-            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        )
+        _setup_encryption_for_caller(caller)
         mock_resp = type("MockResp", (), {"status_code": 403, "text": "Forbidden"})()
         with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
@@ -464,13 +466,7 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.4"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
-        caller._encryption = ClientEncryption()
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        server_key = X25519PrivateKey.generate()
-        caller._encryption.derive_shared_key(
-            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        )
+        _setup_encryption_for_caller(caller)
         mock_resp = type("MockResp", (), {"status_code": 401, "text": "Unauthorized"})()
         with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
@@ -483,13 +479,7 @@ class TestOIDCAuthenticatedEndpointErrors:
         Validates: Requirement 10.5"""
         caller = _make_caller()
         caller._oidc_token = "test-token"
-        caller._encryption = ClientEncryption()
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        server_key = X25519PrivateKey.generate()
-        caller._encryption.derive_shared_key(
-            server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        )
+        _setup_encryption_for_caller(caller)
         mock_resp = type("MockResp", (), {"status_code": 403, "text": "Forbidden"})()
         with patch("call_remote_executor.requests.post", return_value=mock_resp):
             with pytest.raises(CallerError) as exc_info:
@@ -859,20 +849,32 @@ class TestClientEncryptionEdgeCases:
     def test_tampered_response_raises_caller_error(self):
         """Decryption failure on tampered response raises CallerError with phase 'encryption'.
         Validates: Requirement 15.6"""
+        import base64 as b64mod
+        from src.encryption import EncryptionManager
+
+        server_mgr = EncryptionManager()
         client = ClientEncryption()
-        server = ClientEncryption()
-        client.derive_shared_key(server.client_public_key_bytes)
-        server.derive_shared_key(client.client_public_key_bytes)
+        client.derive_shared_key(server_mgr.server_public_key)
+
+        # Derive server-side shared key
+        dummy_payload = client.encrypt_payload({"_setup": True})
+        _, shared_key = server_mgr.decrypt_request(
+            b64mod.b64decode(dummy_payload),
+            client.client_public_key_bytes,
+        )
 
         encrypted = client.encrypt_payload({"hello": "world"})
         # Tamper with the encrypted data
-        import base64 as b64mod
         wire = bytearray(b64mod.b64decode(encrypted))
         wire[-1] = (wire[-1] + 1) % 256
         tampered = b64mod.b64encode(bytes(wire)).decode("ascii")
 
+        # Create a server-side decryptor with the shared key
+        server_dec = ClientEncryption.__new__(ClientEncryption)
+        server_dec._shared_key = shared_key
+
         with pytest.raises(CallerError) as exc_info:
-            server.decrypt_response(tampered)
+            server_dec.decrypt_response(tampered)
         assert exc_info.value.phase == "encryption"
 
     def test_invalid_json_response_raises_caller_error(self):
@@ -880,21 +882,31 @@ class TestClientEncryptionEdgeCases:
         Validates: Requirement 15.7"""
         import base64 as b64mod
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
+        from src.encryption import EncryptionManager
 
+        server_mgr = EncryptionManager()
         client = ClientEncryption()
-        server = ClientEncryption()
-        client.derive_shared_key(server.client_public_key_bytes)
-        server.derive_shared_key(client.client_public_key_bytes)
+        client.derive_shared_key(server_mgr.server_public_key)
+
+        # Derive server-side shared key
+        dummy_payload = client.encrypt_payload({"_setup": True})
+        _, shared_key = server_mgr.decrypt_request(
+            b64mod.b64decode(dummy_payload),
+            client.client_public_key_bytes,
+        )
 
         # Manually encrypt non-JSON plaintext using the shared key
         nonce = os.urandom(12)
         plaintext = b"this is not json {{{{"
-        ciphertext = _AESGCM(server._shared_key).encrypt(nonce, plaintext, None)
+        ciphertext = _AESGCM(shared_key).encrypt(nonce, plaintext, None)
         wire = nonce + ciphertext
         encoded = b64mod.b64encode(wire).decode("ascii")
 
+        server_dec = ClientEncryption.__new__(ClientEncryption)
+        server_dec._shared_key = shared_key
+
         with pytest.raises(CallerError) as exc_info:
-            server.decrypt_response(encoded)
+            server_dec.decrypt_response(encoded)
         assert exc_info.value.phase == "encryption"
 
 
@@ -1260,20 +1272,9 @@ class TestEncryptedExecute:
 
     def _setup_caller_with_encryption(self):
         """Create a caller with encryption initialized (simulating attest())."""
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
         caller = _make_caller()
         caller._oidc_token = "test-oidc-token"
-        caller._encryption = ClientEncryption()
-        server_key = X25519PrivateKey.generate()
-        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        caller._encryption.derive_shared_key(server_pub_bytes)
-
-        # Create a server-side encryption helper with the same shared key for building responses
-        server_enc = ClientEncryption.__new__(ClientEncryption)
-        server_enc._shared_key = caller._encryption._shared_key
-        server_enc._private_key = server_key
+        server_enc = _setup_encryption_for_caller(caller)
         return caller, server_enc
 
     def _make_encrypted_response(self, server_enc, payload_dict):
@@ -1424,19 +1425,9 @@ class TestEncryptedPollOutput:
 
     def _setup_caller_with_encryption(self):
         """Create a caller with encryption initialized (simulating attest())."""
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
         caller = _make_caller()
         caller._oidc_token = "test-oidc-token"
-        caller._encryption = ClientEncryption()
-        server_key = X25519PrivateKey.generate()
-        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        caller._encryption.derive_shared_key(server_pub_bytes)
-
-        server_enc = ClientEncryption.__new__(ClientEncryption)
-        server_enc._shared_key = caller._encryption._shared_key
-        server_enc._private_key = server_key
+        server_enc = _setup_encryption_for_caller(caller)
         return caller, server_enc
 
     def _make_encrypted_response(self, server_enc, payload_dict):

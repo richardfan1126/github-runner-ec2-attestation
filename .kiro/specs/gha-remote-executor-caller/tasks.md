@@ -784,7 +784,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Test invalid composite key format raises `CallerError` (Req 13.6)
     - _Requirements: 11.4, 11A.2, 11A.3, 11A.4, 13.6_
 
-- [ ] 44. Checkpoint - Ensure PQ_Hybrid_KEM migration compiles and existing tests are updated
+- [x] 44. Checkpoint - Ensure PQ_Hybrid_KEM migration compiles and existing tests are updated
   - Update existing tests that construct `ClientEncryption` or mock `derive_shared_key` to use composite key format
   - Update existing tests that mock `/attest` response to include `server_public_key` field
   - Update existing tests that check `client_public_key` to expect composite format

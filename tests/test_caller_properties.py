@@ -33,6 +33,9 @@ from call_remote_executor import (
     RemoteExecutorCaller,
 )
 
+# Add src to path for EncryptionManager
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 
 # ---------------------------------------------------------------------------
 # Test CA and signing certificate generation (module-level, generated once)
@@ -87,19 +90,28 @@ def _make_caller() -> RemoteExecutorCaller:
 
 
 def _setup_encryption(caller):
-    """Set up HPKE encryption on a caller instance (simulating attest()).
-    Returns a server-side encryption helper that shares the same key."""
-    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    """Set up PQ_Hybrid_KEM encryption on a caller instance (simulating attest()).
+    Returns a server-side encryption helper that shares the same key.
+    Uses EncryptionManager from src/encryption.py to generate proper composite keys."""
+    from src.encryption import EncryptionManager
 
+    server_mgr = EncryptionManager()
     caller._encryption = ClientEncryption()
-    server_key = X25519PrivateKey.generate()
-    server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    caller._encryption.derive_shared_key(server_pub_bytes)
+    caller._encryption.derive_shared_key(server_mgr.server_public_key)
 
+    # Derive the server-side shared key by decrypting a dummy request
+    # to establish the shared key on the server side
+    import base64 as _b64
+    dummy_payload = caller._encryption.encrypt_payload({"_setup": True})
+    client_pub_b64 = _b64.b64encode(caller._encryption.client_public_key_bytes).decode()
+    _, shared_key = server_mgr.decrypt_request(
+        _b64.b64decode(dummy_payload),
+        caller._encryption.client_public_key_bytes,
+    )
+
+    # Create a server-side encryption helper with the derived shared key
     server_enc = ClientEncryption.__new__(ClientEncryption)
-    server_enc._shared_key = caller._encryption._shared_key
-    server_enc._private_key = server_key
+    server_enc._shared_key = shared_key
     return server_enc
 
 
@@ -1172,16 +1184,25 @@ class TestAESGCMEncryptionRoundTrip:
     @settings(max_examples=50)
     def test_encrypt_decrypt_round_trip(self, payload: dict):
         """Encrypt then decrypt should return the original dict."""
-        client = ClientEncryption()
-        server = ClientEncryption()
+        import base64 as _b64
+        from src.encryption import EncryptionManager
 
-        # Derive shared keys from each other's public keys
-        client.derive_shared_key(server.client_public_key_bytes)
-        server.derive_shared_key(client.client_public_key_bytes)
+        server_mgr = EncryptionManager()
+        client = ClientEncryption()
+        client.derive_shared_key(server_mgr.server_public_key)
+
+        # Derive server-side shared key
+        dummy = client.encrypt_payload({"_setup": True})
+        _, shared_key = server_mgr.decrypt_request(
+            _b64.b64decode(dummy), client.client_public_key_bytes,
+        )
 
         # Encrypt with client, decrypt with server (same shared key)
         encrypted = client.encrypt_payload(payload)
-        decrypted = server.decrypt_response(encrypted)
+
+        server_dec = ClientEncryption.__new__(ClientEncryption)
+        server_dec._shared_key = shared_key
+        decrypted = server_dec.decrypt_response(encrypted)
 
         assert decrypted == payload
 
@@ -1193,25 +1214,31 @@ class TestAESGCMEncryptionRoundTrip:
 # Feature: gha-remote-executor-caller, Property 17: HPKE key derivation symmetry
 # **Validates: Requirements 13.1, 13.2**
 class TestHPKEKeyDerivationSymmetry:
-    """Property 17: For any two X25519 keypairs, deriving the shared key on both
-    sides using ECDH + HKDF-SHA256 with the same parameters should produce
-    identical 32-byte keys."""
+    """Property 17: For a client and server using PQ_Hybrid_KEM, deriving the shared
+    key on both sides should produce identical 32-byte keys."""
 
     @given(data=st.data())
     @settings(max_examples=50)
     def test_shared_key_symmetry(self, data):
         """Both sides derive the same shared key."""
-        client = ClientEncryption()
-        server = ClientEncryption()
+        import base64 as _b64
+        from src.encryption import EncryptionManager
 
-        client.derive_shared_key(server.client_public_key_bytes)
-        server.derive_shared_key(client.client_public_key_bytes)
+        server_mgr = EncryptionManager()
+        client = ClientEncryption()
+        client.derive_shared_key(server_mgr.server_public_key)
+
+        # Derive server-side shared key
+        dummy = client.encrypt_payload({"_setup": True})
+        _, server_shared_key = server_mgr.decrypt_request(
+            _b64.b64decode(dummy), client.client_public_key_bytes,
+        )
 
         assert client._shared_key is not None
-        assert server._shared_key is not None
+        assert server_shared_key is not None
         assert len(client._shared_key) == 32
-        assert len(server._shared_key) == 32
-        assert client._shared_key == server._shared_key
+        assert len(server_shared_key) == 32
+        assert client._shared_key == server_shared_key
 
 
 # ---------------------------------------------------------------------------
@@ -1235,11 +1262,18 @@ class TestAESGCMDecryptionRejectsTamperedCiphertext:
     @settings(max_examples=50)
     def test_tampered_ciphertext_rejected(self, payload: dict, tamper_offset: int, tamper_byte: int):
         """Tampering with the wire bytes should cause decryption to fail."""
-        client = ClientEncryption()
-        server = ClientEncryption()
+        import base64 as _b64
+        from src.encryption import EncryptionManager
 
-        client.derive_shared_key(server.client_public_key_bytes)
-        server.derive_shared_key(client.client_public_key_bytes)
+        server_mgr = EncryptionManager()
+        client = ClientEncryption()
+        client.derive_shared_key(server_mgr.server_public_key)
+
+        # Derive server-side shared key
+        dummy = client.encrypt_payload({"_setup": True})
+        _, shared_key = server_mgr.decrypt_request(
+            _b64.b64decode(dummy), client.client_public_key_bytes,
+        )
 
         encrypted_b64 = client.encrypt_payload(payload)
         wire_bytes = bytearray(base64.b64decode(encrypted_b64))
@@ -1253,8 +1287,11 @@ class TestAESGCMDecryptionRejectsTamperedCiphertext:
 
         tampered_b64 = base64.b64encode(bytes(wire_bytes)).decode("ascii")
 
+        server_dec = ClientEncryption.__new__(ClientEncryption)
+        server_dec._shared_key = shared_key
+
         with pytest.raises(CallerError) as exc_info:
-            server.decrypt_response(tampered_b64)
+            server_dec.decrypt_response(tampered_b64)
         assert exc_info.value.phase == "encryption"
 
 
@@ -1406,17 +1443,11 @@ class TestEncryptedEnvelopeStructure:
     @settings(max_examples=30)
     def test_execute_sends_encrypted_envelope(self, repository_url: str, commit_hash: str, script_path: str, github_token: str):
         """execute() sends JSON body with encrypted_payload and client_public_key, both base64-encoded."""
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-
         caller = RemoteExecutorCaller(server_url="http://localhost:8080", audience="test-audience")
         caller._oidc_token = "test-oidc-token"
 
         # Set up encryption (simulating attest() having been called)
-        caller._encryption = ClientEncryption()
-        server_key = X25519PrivateKey.generate()
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        server_pub_bytes = server_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-        caller._encryption.derive_shared_key(server_pub_bytes)
+        server_enc = _setup_encryption(caller)
 
         # Build a mock encrypted response that the server would return
         response_payload = {
@@ -1424,11 +1455,7 @@ class TestEncryptedEnvelopeStructure:
             "attestation_document": "",
             "status": "queued",
         }
-        # Encrypt the response using a server-side encryption helper with the same shared key
-        server_encryption = ClientEncryption.__new__(ClientEncryption)
-        server_encryption._shared_key = caller._encryption._shared_key
-        server_encryption._private_key = server_key
-        encrypted_resp = server_encryption.encrypt_payload(response_payload)
+        encrypted_resp = server_enc.encrypt_payload(response_payload)
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1451,7 +1478,10 @@ class TestEncryptedEnvelopeStructure:
         assert len(encrypted_payload_bytes) > 12, "encrypted_payload must contain nonce + ciphertext"
 
         client_pub_key_bytes = _b64.b64decode(sent_json["client_public_key"])
-        assert len(client_pub_key_bytes) == 32, "client_public_key must be 32 bytes (raw X25519)"
+        # Composite format: 4 + 32 + 4 + 1088 = 1128 bytes
+        assert len(client_pub_key_bytes) == 1128, (
+            f"client_public_key must be 1128 bytes (composite: len-prefix + X25519 + len-prefix + ML-KEM-768 ciphertext), got {len(client_pub_key_bytes)}"
+        )
 
         # Must NOT have Authorization header
         headers = call_kwargs[1].get("headers", {})
