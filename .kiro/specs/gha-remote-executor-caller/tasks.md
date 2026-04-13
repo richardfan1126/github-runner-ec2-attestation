@@ -719,12 +719,12 @@ Implement the client-side caller for the Remote Executor system: a Python script
 - [x] 40. Final checkpoint - Ensure all concurrent execution isolation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 41. Add `wolfcrypt-py` dependency and update imports
-  - [ ] 41.1 Update `.github/scripts/pyproject.toml` to add `wolfcrypt-py` dependency
+- [x] 41. Add `wolfcrypt-py` dependency and update imports
+  - [x] 41.1 Update `.github/scripts/pyproject.toml` to add `wolfcrypt-py` dependency
     - Add `wolfcrypt-py>=5.0.0` to dependencies
     - _Requirements: 13.4_
 
-  - [ ] 41.2 Update `call_remote_executor.py` imports for PQ_Hybrid_KEM
+  - [x] 41.2 Update `call_remote_executor.py` imports for PQ_Hybrid_KEM
     - Add `import struct` and `import hashlib` (if not already present)
     - Add `from wolfcrypt.ciphers import MlKemType, MlKemPublic` for ML-KEM-768 encapsulation
     - _Requirements: 13.4_

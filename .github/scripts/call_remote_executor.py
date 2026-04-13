@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import struct
 import sys
 import time
 
@@ -31,6 +32,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from wolfcrypt.ciphers import MlKemType, MlKemPublic
 
 logger = logging.getLogger(__name__)
 
