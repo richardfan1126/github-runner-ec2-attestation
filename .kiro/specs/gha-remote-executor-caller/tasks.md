@@ -729,21 +729,21 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Add `from wolfcrypt.ciphers import MlKemType, MlKemPublic` for ML-KEM-768 encapsulation
     - _Requirements: 13.4_
 
-- [ ] 42. Migrate `ClientEncryption` to PQ_Hybrid_KEM
-  - [ ] 42.1 Add `parse_composite_server_key` static method to `ClientEncryption`
+- [x] 42. Migrate `ClientEncryption` to PQ_Hybrid_KEM
+  - [x] 42.1 Add `parse_composite_server_key` static method to `ClientEncryption`
     - Parse length-prefixed composite key bytes into (x25519_pub_bytes, mlkem768_encap_key_bytes)
     - Validate that exactly 2 components are present
     - Validate X25519 component is 32 bytes and ML-KEM-768 encapsulation key is 1184 bytes
     - Raise `CallerError(phase="encryption")` on invalid format
     - _Requirements: 11A.5, 13.6_
 
-  - [ ] 42.2 Add `verify_server_key_fingerprint` static method to `ClientEncryption`
+  - [x] 42.2 Add `verify_server_key_fingerprint` static method to `ClientEncryption`
     - Compute SHA-256 of composite key bytes
     - Compare against expected fingerprint from attestation document's `public_key` field
     - Raise `CallerError(phase="attest")` on mismatch
     - _Requirements: 11A.1, 11A.2, 11A.4_
 
-  - [ ] 42.3 Rewrite `derive_shared_key` for PQ_Hybrid_KEM
+  - [x] 42.3 Rewrite `derive_shared_key` for PQ_Hybrid_KEM
     - Accept `server_composite_key_bytes: bytes` (full composite key, not just X25519)
     - Call `parse_composite_server_key` to extract X25519 pub and ML-KEM-768 encap key
     - Perform X25519 ECDH to get `ecdh_shared_secret`
@@ -753,7 +753,7 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Raise `CallerError(phase="encryption")` on invalid key or encapsulation failure
     - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.6, 13.7_
 
-  - [ ] 42.4 Update `client_public_key_bytes` property for composite format
+  - [x] 42.4 Update `client_public_key_bytes` property for composite format
     - Return length-prefixed concatenation of 32-byte X25519 public key + 1088-byte ML-KEM-768 ciphertext
     - Each component preceded by 4-byte big-endian length prefix
     - Raise `CallerError` if `derive_shared_key` has not been called (no ML-KEM-768 ciphertext available)
