@@ -1,13 +1,15 @@
 """Property-based tests for EncryptionManager (PQ Hybrid KEM: X25519 + ML-KEM-768).
 
 Feature: github-actions-remote-executor
-Tests Properties 122, 127, 128 from the design document.
+Tests Properties 122, 127, 128, 129, 132, 133 from the design document.
 """
+import base64
 import hashlib
 import json
 import os
 import struct
 
+import httpx
 import pytest
 from hypothesis import given, settings, strategies as st
 
@@ -21,6 +23,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from wolfcrypt.ciphers import MlKemPublic, MlKemType
 
+from src.config import ServerConfig
 from src.encryption import (
     EncryptionManager,
     _AES_KEY_LENGTH,
@@ -28,6 +31,7 @@ from src.encryption import (
     _X25519_KEY_LENGTH,
     _MLKEM768_ENCAP_KEY_LENGTH,
 )
+from src.server import create_app
 
 
 # ---------------------------------------------------------------------------
@@ -211,3 +215,182 @@ class TestPQHybridKEMEncryptDecryptRoundTrip:
 
         assert decrypted == payload
         assert server_shared == _client_shared
+
+
+# ---------------------------------------------------------------------------
+# Helpers for HTTP-level tests (Property 129)
+# ---------------------------------------------------------------------------
+
+
+def _get_test_config() -> ServerConfig:
+    return ServerConfig(
+        port=8080,
+        execution_timeout_seconds=30,
+        max_script_size_bytes=1048576,
+        rate_limit_per_ip=100,
+        rate_limit_window_seconds=60,
+        temp_storage_path="/tmp/test",
+        output_retention_hours=1,
+        allowed_repositories=["owner/repo"],
+        expected_audience="test-audience",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
+        max_concurrent_executions=5,
+        tpm_attest_path="/usr/bin/nitro-tpm-attest",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 129: Decryption Failure Returns HTTP 400
+# ---------------------------------------------------------------------------
+
+
+class TestDecryptionFailureReturnsHTTP400:
+    """**Validates: Requirements 40.5, 42.7**"""
+
+    @pytest.mark.asyncio
+    @given(bad_payload=st.binary(min_size=1, max_size=256))
+    @settings(max_examples=100)
+    async def test_random_bytes_as_encrypted_payload(self, bad_payload: bytes):
+        """Property 129: Sending random bytes as encrypted_payload to /execute
+        returns HTTP 400 with error code 'decryption_failed'."""
+        encryption_manager = EncryptionManager()
+        app = create_app(_get_test_config(), encryption_manager=encryption_manager)
+
+        # Build a plausible client_public_key (valid format, wrong key material)
+        client_x25519_priv = X25519PrivateKey.generate()
+        client_x25519_pub = client_x25519_priv.public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw
+        )
+        dummy_mlkem_ct = os.urandom(1088)
+        client_pub = (
+            struct.pack(">I", len(client_x25519_pub)) + client_x25519_pub
+            + struct.pack(">I", len(dummy_mlkem_ct)) + dummy_mlkem_ct
+        )
+
+        body = {
+            "encrypted_payload": base64.b64encode(bad_payload).decode(),
+            "client_public_key": base64.b64encode(client_pub).decode(),
+        }
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post("/execute", json=body)
+
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    @given(flip_index=st.integers(min_value=0, max_value=255))
+    @settings(max_examples=100)
+    async def test_corrupted_ciphertext_returns_400(self, flip_index: int):
+        """Property 129: Flipping a byte in a valid ciphertext causes
+        decryption failure → HTTP 400."""
+        encryption_manager = EncryptionManager()
+        app = create_app(_get_test_config(), encryption_manager=encryption_manager)
+
+        payload = {"test": "data", "oidc_token": "tok"}
+        encrypted, client_pub, _sk = _client_encrypt(
+            payload, encryption_manager.server_public_key
+        )
+
+        corrupted = bytearray(encrypted)
+        idx = flip_index % len(corrupted)
+        corrupted[idx] ^= 0xFF
+        corrupted = bytes(corrupted)
+
+        body = {
+            "encrypted_payload": base64.b64encode(corrupted).decode(),
+            "client_public_key": base64.b64encode(client_pub).decode(),
+        }
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post("/execute", json=body)
+
+        assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Property 132: Execute Response Encryption Round-Trip
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteResponseEncryptionRoundTrip:
+    """**Validates: Requirements 41.3, 42.1, 42.8**"""
+
+    @given(payload=json_dicts)
+    @settings(max_examples=100)
+    def test_encrypt_response_then_decrypt_round_trip(self, payload: dict):
+        """Property 132: For any response payload, server encrypts with
+        Shared_Key and client decrypts with same Shared_Key, producing
+        original content."""
+        mgr = EncryptionManager()
+
+        # Establish a shared key via the PQ Hybrid KEM handshake
+        _enc, _cpub, shared_key = _client_encrypt(
+            {"handshake": True}, mgr.server_public_key
+        )
+
+        # Server encrypts a response
+        encrypted_response = mgr.encrypt_response(payload, shared_key)
+
+        # Client decrypts with the same shared key
+        nonce = encrypted_response[:12]
+        ciphertext = encrypted_response[12:]
+        plaintext = AESGCM(shared_key).decrypt(nonce, ciphertext, None)
+        decrypted = json.loads(plaintext)
+
+        assert decrypted == payload
+
+
+# ---------------------------------------------------------------------------
+# Property 133: Output Request-Response Encryption Round-Trip
+# ---------------------------------------------------------------------------
+
+
+class TestOutputRequestResponseEncryptionRoundTrip:
+    """**Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**"""
+
+    @given(
+        request_payload=json_dicts,
+        response_payload=json_dicts,
+    )
+    @settings(max_examples=100)
+    def test_output_request_response_round_trip(
+        self, request_payload: dict, response_payload: dict
+    ):
+        """Property 133: Client encrypts request with Shared_Key, server
+        decrypts, processes, encrypts response, client decrypts — producing
+        original content."""
+        mgr = EncryptionManager()
+
+        # Establish a shared key via the PQ Hybrid KEM handshake
+        _enc, _cpub, shared_key = _client_encrypt(
+            {"handshake": True}, mgr.server_public_key
+        )
+
+        # --- Client encrypts request with shared key ---
+        req_plaintext = json.dumps(request_payload).encode("utf-8")
+        req_nonce = os.urandom(12)
+        req_ciphertext = AESGCM(shared_key).encrypt(req_nonce, req_plaintext, None)
+        encrypted_request = req_nonce + req_ciphertext
+
+        # --- Server decrypts request with decrypt_with_shared_key ---
+        decrypted_request = mgr.decrypt_with_shared_key(encrypted_request, shared_key)
+        assert decrypted_request == request_payload
+
+        # --- Server encrypts response with encrypt_response ---
+        encrypted_response = mgr.encrypt_response(response_payload, shared_key)
+
+        # --- Client decrypts response ---
+        resp_nonce = encrypted_response[:12]
+        resp_ciphertext = encrypted_response[12:]
+        resp_plaintext = AESGCM(shared_key).decrypt(resp_nonce, resp_ciphertext, None)
+        decrypted_response = json.loads(resp_plaintext)
+
+        assert decrypted_response == response_payload

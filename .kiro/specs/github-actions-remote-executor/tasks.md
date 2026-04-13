@@ -2272,14 +2272,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Ensure the attestation document does NOT include user_data
     - _Requirements: 37.9, 37.10, 39.1, 39.3_
 
-- [ ] 117. Update /execute endpoint for new Client_Public_Key format
-  - [ ] 117.1 Update /execute handler to pass length-prefixed Client_Public_Key to decrypt_request
+- [x] 117. Update /execute endpoint for new Client_Public_Key format
+  - [x] 117.1 Update /execute handler to pass length-prefixed Client_Public_Key to decrypt_request
     - The client_public_key field now contains a length-prefixed concatenation of the client's X25519 public key + ML-KEM-768 ciphertext (instead of a raw 32-byte X25519 key)
     - No handler changes needed beyond ensuring the base64-decoded bytes are passed directly to `decrypt_request` (the new `decrypt_request` handles parsing internally)
     - _Requirements: 40.2, 40.3_
 
-- [ ] 118. Update encryption_test_helpers.py for PQ Hybrid KEM
-  - [ ] 118.1 Rewrite EncryptionTestContext for composite key exchange
+- [x] 118. Update encryption_test_helpers.py for PQ Hybrid KEM
+  - [x] 118.1 Rewrite EncryptionTestContext for composite key exchange
     - Generate a client X25519 key pair and perform X25519 ECDH against the server's X25519 public key (extracted from the composite Server_Public_Key)
     - Perform ML-KEM-768 encapsulation against the server's ML-KEM-768 encapsulation key (extracted from the composite Server_Public_Key)
     - Combine both shared secrets via HKDF-SHA256 with info label `b"pq-hybrid-shared-key"` to derive the Shared_Key
@@ -2287,43 +2287,43 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Update `_encrypt_with_shared_key` to use the new Shared_Key
     - _Requirements: 40.1, 40.2, 40.11_
 
-  - [ ] 118.2 Update make_encrypted_execute_request to use composite client_public_key
+  - [x] 118.2 Update make_encrypted_execute_request to use composite client_public_key
     - Ensure the `client_public_key` field in the outer JSON uses the length-prefixed composite value
     - _Requirements: 40.2_
 
-- [ ] 119. Update all existing encryption property tests for PQ Hybrid KEM
-  - [ ] 119.1 Update test_encryption_properties.py for PQ Hybrid round-trip
+- [x] 119. Update all existing encryption property tests for PQ Hybrid KEM
+  - [x] 119.1 Update test_encryption_properties.py for PQ Hybrid round-trip
     - Update existing HPKE-based property tests to use PQ Hybrid KEM (X25519 + ML-KEM-768)
     - Update HKDF info label references from `b"hpke-shared-key"` to `b"pq-hybrid-shared-key"`
     - Ensure all property tests use the new composite key format
     - _Requirements: 40.1, 40.3, 40.4, 40.11_
 
-  - [ ] 119.2 Write property test for Server Keypair Consistency
+  - [x] 119.2 Write property test for Server Keypair Consistency
     - **Property 122: Server Keypair Consistency**
     - For any two calls to `server_public_key` on the same EncryptionManager instance, the composite key and its SHA-256 fingerprint should be identical
     - **Validates: Requirements 36.3, 37.4, 37.6**
 
-  - [ ] 119.3 Write property test for Server Public Key Serialization Round-Trip
+  - [x] 119.3 Write property test for Server Public Key Serialization Round-Trip
     - **Property 127: Server Public Key Serialization Round-Trip**
     - For any Server_Public_Key, serializing as length-prefixed concatenation, computing SHA-256 fingerprint, then deserializing and recomputing fingerprint should produce the same result; deserialized components should be usable for PQ_Hybrid_KEM key exchange
     - **Validates: Requirements 36.6, 37.6, 37.11, 39.3, 39.4**
 
-  - [ ] 119.4 Write property test for PQ Hybrid Encrypt-Decrypt Round-Trip for Execute
+  - [x] 119.4 Write property test for PQ Hybrid Encrypt-Decrypt Round-Trip for Execute
     - **Property 128: PQ Hybrid Encrypt-Decrypt Round-Trip for Execute**
     - For any valid execution request payload, client-side PQ_Hybrid_KEM encryption followed by server-side decryption should produce the original payload
     - **Validates: Requirements 40.1, 40.3, 40.4, 40.8, 40.11**
 
-  - [ ] 119.5 Write property test for Decryption Failure Returns HTTP 400
+  - [x] 119.5 Write property test for Decryption Failure Returns HTTP 400
     - **Property 129: Decryption Failure Returns HTTP 400**
     - For any request with invalid encrypted payload (random bytes, wrong key, corrupted ciphertext), the server should return HTTP 400
     - **Validates: Requirements 40.5, 42.7**
 
-  - [ ] 119.6 Write property test for Execute Response Encryption Round-Trip
+  - [x] 119.6 Write property test for Execute Response Encryption Round-Trip
     - **Property 132: Execute Response Encryption Round-Trip**
     - For any /execute response payload, server encrypts with Shared_Key and client decrypts with same Shared_Key, producing original content
     - **Validates: Requirements 41.3, 42.1, 42.8**
 
-  - [ ] 119.7 Write property test for Output Request-Response Encryption Round-Trip
+  - [x] 119.7 Write property test for Output Request-Response Encryption Round-Trip
     - **Property 133: Output Request-Response Encryption Round-Trip**
     - For any /execution/{id}/output request and response, client encrypts request, server decrypts, processes, encrypts response, client decrypts — producing original content
     - **Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**
