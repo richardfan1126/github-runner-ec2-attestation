@@ -1,4 +1,4 @@
-"""Encryption test helpers for HPKE-based request/response encryption.
+"""Encryption test helpers for PQ Hybrid KEM (X25519 + ML-KEM-768).
 
 Provides utilities to create encrypted requests and decrypt responses
 for testing the encrypted /execute and /execution/{id}/output endpoints.
@@ -6,14 +6,35 @@ for testing the encrypted /execute and /execution/{id}/output endpoints.
 import base64
 import json
 import os
+import struct
 
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.x25519 import (
+    X25519PrivateKey,
+    X25519PublicKey,
+)
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from wolfcrypt.ciphers import MlKemPublic, MlKemType
 
-from src.encryption import EncryptionManager
+from src.encryption import EncryptionManager, _AES_KEY_LENGTH, _HKDF_INFO
+
+
+def _parse_server_public_key(composite_key: bytes) -> tuple[bytes, bytes]:
+    """Parse the length-prefixed composite Server_Public_Key.
+
+    Returns (x25519_pub_bytes, mlkem_encap_key_bytes).
+    """
+    offset = 0
+    x25519_len = struct.unpack(">I", composite_key[offset:offset + 4])[0]
+    offset += 4
+    x25519_pub = composite_key[offset:offset + x25519_len]
+    offset += x25519_len
+    mlkem_len = struct.unpack(">I", composite_key[offset:offset + 4])[0]
+    offset += 4
+    mlkem_encap_key = composite_key[offset:offset + mlkem_len]
+    return x25519_pub, mlkem_encap_key
 
 
 class EncryptionTestContext:
@@ -21,17 +42,38 @@ class EncryptionTestContext:
 
     def __init__(self):
         self.encryption_manager = EncryptionManager()
-        self._client_private = X25519PrivateKey.generate()
-        self.client_public = self._client_private.public_key().public_bytes(
+
+        # Parse server composite public key
+        server_key = self.encryption_manager.server_public_key
+        x25519_pub_bytes, mlkem_encap_key_bytes = _parse_server_public_key(server_key)
+
+        # X25519 client key exchange
+        self._client_x25519_private = X25519PrivateKey.generate()
+        self._client_x25519_public = self._client_x25519_private.public_key()
+        self._client_x25519_pub_bytes = self._client_x25519_public.public_bytes(
             Encoding.Raw, PublicFormat.Raw
         )
-        # Derive shared key (same derivation the server does)
-        shared_secret = self._client_private.exchange(
-            self.encryption_manager._public_key
-        )
+        server_x25519_pub = X25519PublicKey.from_public_bytes(x25519_pub_bytes)
+        x25519_shared_secret = self._client_x25519_private.exchange(server_x25519_pub)
+
+        # ML-KEM-768 encapsulation
+        mlkem_pub = MlKemPublic(MlKemType.ML_KEM_768)
+        mlkem_pub.decode_key(mlkem_encap_key_bytes)
+        mlkem_shared_secret, self._mlkem_ciphertext = mlkem_pub.encapsulate()
+
+        # Derive hybrid shared key
+        combined = x25519_shared_secret + mlkem_shared_secret
         self.shared_key = HKDF(
-            algorithm=SHA256(), length=32, salt=None, info=b"hpke-shared-key"
-        ).derive(shared_secret)
+            algorithm=SHA256(), length=_AES_KEY_LENGTH, salt=None, info=_HKDF_INFO,
+        ).derive(combined)
+
+        # Build length-prefixed client_public_key
+        self.client_public = (
+            struct.pack(">I", len(self._client_x25519_pub_bytes))
+            + self._client_x25519_pub_bytes
+            + struct.pack(">I", len(self._mlkem_ciphertext))
+            + self._mlkem_ciphertext
+        )
 
     def _encrypt_with_shared_key(self, payload_dict: dict) -> bytes:
         """Encrypt a dict payload using the shared key. Returns nonce||ciphertext."""

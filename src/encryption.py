@@ -1,11 +1,15 @@
-"""Encryption manager for HPKE-based request/response encryption.
+"""Encryption manager for PQ Hybrid KEM (X25519 + ML-KEM-768) request/response encryption.
 
-Uses X25519 for key agreement, HKDF-SHA256 for key derivation,
-and AES-256-GCM for symmetric encryption.
+Uses X25519 ECDH + ML-KEM-768 for hybrid key agreement, HKDF-SHA256 for key
+derivation, and AES-256-GCM for symmetric encryption.  The hybrid approach
+combines a classical (X25519) and post-quantum (ML-KEM-768, FIPS 203) KEM so
+that the system remains secure even if one component is broken.
 """
+import hashlib
 import json
 import logging
 import os
+import struct
 import threading
 from typing import Optional
 
@@ -20,52 +24,115 @@ from cryptography.hazmat.primitives.serialization import (
     Encoding,
     PublicFormat,
 )
+from wolfcrypt.ciphers import MlKemPrivate, MlKemPublic, MlKemType
 
 logger = logging.getLogger(__name__)
 
 # Constants
 _AES_KEY_LENGTH = 32  # 256-bit AES key
 _NONCE_LENGTH = 12  # 96-bit nonce for AES-GCM
-_HKDF_INFO = b"hpke-shared-key"
+_HKDF_INFO = b"pq-hybrid-shared-key"
+_X25519_KEY_LENGTH = 32
+_MLKEM768_ENCAP_KEY_LENGTH = 1184
+_MLKEM768_CIPHERTEXT_LENGTH = 1088
 
 
 class EncryptionManager:
-    """Manages HPKE-based encryption for request/response payloads.
+    """Manages PQ Hybrid KEM encryption for request/response payloads.
 
-    Generates an X25519 keypair at initialization (held in memory only),
-    derives shared keys via ECDH + HKDF, and encrypts/decrypts payloads
-    using AES-256-GCM.
+    Generates a composite Server_Keypair (X25519 + ML-KEM-768) at
+    initialization (held in memory only), derives shared keys via hybrid
+    KEM + HKDF, and encrypts/decrypts payloads using AES-256-GCM.
     """
 
     def __init__(self) -> None:
-        """Generate Server_Keypair at initialization and hold in memory."""
-        self._private_key = X25519PrivateKey.generate()
-        self._public_key = self._private_key.public_key()
-        self._serialized_public_key = self._public_key.public_bytes(
+        """Generate composite Server_Keypair at initialization and hold in memory."""
+        # X25519 keypair
+        self._x25519_private_key = X25519PrivateKey.generate()
+        self._x25519_public_key = self._x25519_private_key.public_key()
+        self._x25519_public_bytes = self._x25519_public_key.public_bytes(
             Encoding.Raw, PublicFormat.Raw
         )
+
+        # ML-KEM-768 keypair
+        self._mlkem_private_key = MlKemPrivate.make_key(MlKemType.ML_KEM_768)
+        self._mlkem_encap_key_bytes = self._mlkem_private_key.encode_pub_key()
+
+        # Serialize composite Server_Public_Key: length-prefixed concatenation
+        self._serialized_public_key = (
+            struct.pack(">I", len(self._x25519_public_bytes))
+            + self._x25519_public_bytes
+            + struct.pack(">I", len(self._mlkem_encap_key_bytes))
+            + self._mlkem_encap_key_bytes
+        )
+
+        # Pre-compute fingerprint
+        self._public_key_fingerprint = hashlib.sha256(
+            self._serialized_public_key
+        ).digest()
+
         self._contexts: dict[str, bytes] = {}
         self._lock = threading.Lock()
-        logger.info("Server keypair generated for HPKE key exchange")
+        logger.info(
+            "Server composite keypair generated (X25519 + ML-KEM-768) for PQ hybrid key exchange"
+        )
 
     @property
     def server_public_key(self) -> bytes:
-        """Return the serialized Server_Public_Key (32 bytes, raw X25519)."""
+        """Return the serialized composite Server_Public_Key.
+
+        Format: 4-byte big-endian length + X25519 pubkey (32 bytes)
+              + 4-byte big-endian length + ML-KEM-768 encapsulation key (1184 bytes).
+        """
         return self._serialized_public_key
+
+    @property
+    def server_public_key_fingerprint(self) -> bytes:
+        """Return the SHA-256 fingerprint of the serialized Server_Public_Key.
+
+        Used in the attestation document's public_key field because the
+        composite key (1224 bytes) exceeds the 1024-byte field limit.
+        """
+        return self._public_key_fingerprint
 
     # ------------------------------------------------------------------
     # Key derivation helpers
     # ------------------------------------------------------------------
 
-    def _derive_shared_key(self, peer_public_key: X25519PublicKey) -> bytes:
-        """Derive a 256-bit AES key from ECDH shared secret via HKDF-SHA256."""
-        shared_secret = self._private_key.exchange(peer_public_key)
+    @staticmethod
+    def _parse_length_prefixed(data: bytes) -> list[bytes]:
+        """Parse a sequence of length-prefixed components from *data*.
+
+        Each component is preceded by a 4-byte big-endian length.
+        Returns a list of the extracted byte strings.
+        """
+        components: list[bytes] = []
+        offset = 0
+        while offset < len(data):
+            if offset + 4 > len(data):
+                raise ValueError("Truncated length prefix")
+            (length,) = struct.unpack(">I", data[offset : offset + 4])
+            offset += 4
+            if offset + length > len(data):
+                raise ValueError(
+                    f"Component length {length} exceeds remaining data "
+                    f"({len(data) - offset} bytes)"
+                )
+            components.append(data[offset : offset + length])
+            offset += length
+        return components
+
+    def _derive_hybrid_shared_key(
+        self, x25519_shared_secret: bytes, mlkem_shared_secret: bytes
+    ) -> bytes:
+        """Derive a 256-bit AES key by combining both shared secrets via HKDF-SHA256."""
+        combined = x25519_shared_secret + mlkem_shared_secret
         return HKDF(
             algorithm=SHA256(),
             length=_AES_KEY_LENGTH,
             salt=None,
             info=_HKDF_INFO,
-        ).derive(shared_secret)
+        ).derive(combined)
 
     @staticmethod
     def _encrypt(payload_bytes: bytes, key: bytes) -> bytes:
@@ -99,11 +166,12 @@ class EncryptionManager:
     def decrypt_request(
         self, encrypted_payload: bytes, client_public_key: bytes
     ) -> tuple[dict, bytes]:
-        """Derive Shared_Key via HPKE and decrypt the request payload.
+        """Derive Shared_Key via PQ Hybrid KEM and decrypt the request payload.
 
         Args:
             encrypted_payload: ``nonce || ciphertext`` bytes.
-            client_public_key: Raw 32-byte X25519 public key from the client.
+            client_public_key: Length-prefixed concatenation of the client's
+                X25519 public key and ML-KEM-768 ciphertext.
 
         Returns:
             Tuple of ``(decrypted_dict, shared_key_bytes)``.
@@ -111,12 +179,39 @@ class EncryptionManager:
         Raises:
             ValueError: On decryption or deserialisation failure.
         """
+        # Parse client_public_key into X25519 pubkey + ML-KEM-768 ciphertext
         try:
-            peer_key = X25519PublicKey.from_public_bytes(client_public_key)
-        except Exception as exc:
-            raise ValueError(f"Invalid client public key: {exc}") from exc
+            components = self._parse_length_prefixed(client_public_key)
+        except ValueError as exc:
+            raise ValueError(f"Invalid client public key format: {exc}") from exc
 
-        shared_key = self._derive_shared_key(peer_key)
+        if len(components) != 2:
+            raise ValueError(
+                f"Expected 2 components in client public key, got {len(components)}"
+            )
+
+        client_x25519_bytes, client_mlkem_ct = components
+
+        # X25519 ECDH
+        try:
+            peer_x25519_key = X25519PublicKey.from_public_bytes(client_x25519_bytes)
+        except Exception as exc:
+            raise ValueError(f"Invalid client X25519 public key: {exc}") from exc
+
+        x25519_shared_secret = self._x25519_private_key.exchange(peer_x25519_key)
+
+        # ML-KEM-768 decapsulation
+        try:
+            mlkem_shared_secret = self._mlkem_private_key.decapsulate(client_mlkem_ct)
+        except Exception as exc:
+            raise ValueError(f"ML-KEM-768 decapsulation failed: {exc}") from exc
+
+        # Combine via HKDF
+        shared_key = self._derive_hybrid_shared_key(
+            x25519_shared_secret, mlkem_shared_secret
+        )
+
+        # Decrypt payload
         plaintext = self._decrypt(encrypted_payload, shared_key)
 
         try:

@@ -2227,24 +2227,24 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add `python3.11 -c "import wolfcrypt" || { echo "ERROR: wolfcrypt not importable"; exit 1; }` after the existing critical package verification lines
     - _Requirements: 12.21_
 
-- [ ] 114. Rewrite EncryptionManager for PQ Hybrid KEM (X25519 + ML-KEM-768)
-  - [ ] 114.1 Rewrite EncryptionManager.__init__ to generate composite Server_Keypair
+- [x] 114. Rewrite EncryptionManager for PQ Hybrid KEM (X25519 + ML-KEM-768)
+  - [x] 114.1 Rewrite EncryptionManager.__init__ to generate composite Server_Keypair
     - Replace the single X25519 keypair generation with composite keypair: generate an X25519 key pair using `cryptography` and an ML-KEM-768 key pair using `wolfcrypt.ciphers.MlKemPrivate.make_key(MlKemType.ML_KEM_768)`
     - Store both private keys (X25519 private key + ML-KEM-768 decapsulation key) in memory
     - Serialize the composite Server_Public_Key as length-prefixed concatenation: 4-byte big-endian length prefix + 32-byte X25519 public key + 4-byte big-endian length prefix + 1184-byte ML-KEM-768 encapsulation key
     - Log keypair generation at INFO level without logging private key or decapsulation key material
     - _Requirements: 36.1, 36.2, 36.3, 36.4, 36.5, 36.6_
 
-  - [ ] 114.2 Implement server_public_key property with length-prefixed serialization
+  - [x] 114.2 Implement server_public_key property with length-prefixed serialization
     - Return the serialized composite Server_Public_Key (length-prefixed X25519 pubkey + ML-KEM-768 encapsulation key)
     - _Requirements: 36.6_
 
-  - [ ] 114.3 Implement server_public_key_fingerprint property
+  - [x] 114.3 Implement server_public_key_fingerprint property
     - Compute and return SHA-256 digest of the serialized Server_Public_Key
     - This fingerprint is used in the attestation document's public_key field because the composite key exceeds the 1024-byte field limit
     - _Requirements: 39.1, 39.3_
 
-  - [ ] 114.4 Rewrite decrypt_request for PQ_Hybrid_KEM key derivation
+  - [x] 114.4 Rewrite decrypt_request for PQ_Hybrid_KEM key derivation
     - Parse the Client_Public_Key (length-prefixed: 4-byte big-endian length + X25519 public key + 4-byte big-endian length + ML-KEM-768 ciphertext)
     - Perform X25519 ECDH using the server's X25519 private key and the client's X25519 public key
     - Perform ML-KEM-768 decapsulation using the server's ML-KEM-768 decapsulation key and the client's ML-KEM-768 ciphertext
@@ -2254,7 +2254,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Raise ValueError on invalid Client_Public_Key (bad X25519 or ML-KEM-768 components) or decryption failure
     - _Requirements: 40.1, 40.2, 40.3, 40.4, 40.5, 40.6, 40.11_
 
-  - [ ] 114.5 Update HKDF info label from b"hpke-shared-key" to b"pq-hybrid-shared-key"
+  - [x] 114.5 Update HKDF info label from b"hpke-shared-key" to b"pq-hybrid-shared-key"
     - Change the `_HKDF_INFO` constant to `b"pq-hybrid-shared-key"` for domain separation
     - _Requirements: 40.11_
 

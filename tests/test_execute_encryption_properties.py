@@ -6,6 +6,7 @@ Tests Properties 129, 130, 132 from the design document.
 import base64
 import json
 import os
+import struct
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi.testclient import TestClient
 from hypothesis import given, settings, strategies as st
+from wolfcrypt.ciphers import MlKemPublic, MlKemType
 
 from src.config import ServerConfig
 from src.encryption import EncryptionManager, _AES_KEY_LENGTH, _HKDF_INFO
@@ -64,30 +66,57 @@ def get_test_config():
     )
 
 
-def _client_encrypt(payload_dict: dict, server_pub_bytes: bytes) -> tuple[bytes, bytes, bytes]:
-    """Simulate client-side HPKE encryption.
+def _parse_server_public_key(composite_key: bytes) -> tuple[bytes, bytes]:
+    """Parse the length-prefixed composite Server_Public_Key."""
+    offset = 0
+    x25519_len = struct.unpack(">I", composite_key[offset:offset + 4])[0]
+    offset += 4
+    x25519_pub = composite_key[offset:offset + x25519_len]
+    offset += x25519_len
+    mlkem_len = struct.unpack(">I", composite_key[offset:offset + 4])[0]
+    offset += 4
+    mlkem_encap_key = composite_key[offset:offset + mlkem_len]
+    return x25519_pub, mlkem_encap_key
 
-    Returns (encrypted_payload, client_public_key_bytes, shared_key).
+
+def _client_encrypt(payload_dict: dict, server_composite_key: bytes) -> tuple[bytes, bytes, bytes]:
+    """Simulate client-side PQ Hybrid KEM encryption.
+
+    Returns (encrypted_payload, client_public_key, shared_key).
     """
-    client_private = X25519PrivateKey.generate()
-    client_public = client_private.public_key()
+    x25519_pub_bytes, mlkem_encap_key_bytes = _parse_server_public_key(server_composite_key)
 
-    server_pub = X25519PublicKey.from_public_bytes(server_pub_bytes)
-    shared_secret = client_private.exchange(server_pub)
+    # X25519 ECDH
+    client_x25519_priv = X25519PrivateKey.generate()
+    client_x25519_pub = client_x25519_priv.public_key()
+    server_x25519_pub = X25519PublicKey.from_public_bytes(x25519_pub_bytes)
+    x25519_shared_secret = client_x25519_priv.exchange(server_x25519_pub)
+
+    # ML-KEM-768 encapsulation
+    mlkem_pub = MlKemPublic(MlKemType.ML_KEM_768)
+    mlkem_pub.decode_key(mlkem_encap_key_bytes)
+    mlkem_shared_secret, mlkem_ciphertext = mlkem_pub.encapsulate()
+
+    # Combine via HKDF
+    combined = x25519_shared_secret + mlkem_shared_secret
     shared_key = HKDF(
-        algorithm=SHA256(),
-        length=_AES_KEY_LENGTH,
-        salt=None,
-        info=_HKDF_INFO,
-    ).derive(shared_secret)
+        algorithm=SHA256(), length=_AES_KEY_LENGTH, salt=None, info=_HKDF_INFO,
+    ).derive(combined)
 
+    # Encrypt payload
     plaintext = json.dumps(payload_dict).encode("utf-8")
     nonce = os.urandom(12)
     ciphertext = AESGCM(shared_key).encrypt(nonce, plaintext, None)
     encrypted_payload = nonce + ciphertext
 
-    client_pub_bytes = client_public.public_bytes(Encoding.Raw, PublicFormat.Raw)
-    return encrypted_payload, client_pub_bytes, shared_key
+    # Build length-prefixed client_public_key
+    client_x25519_bytes = client_x25519_pub.public_bytes(Encoding.Raw, PublicFormat.Raw)
+    client_public_key = (
+        struct.pack(">I", len(client_x25519_bytes)) + client_x25519_bytes
+        + struct.pack(">I", len(mlkem_ciphertext)) + mlkem_ciphertext
+    )
+
+    return encrypted_payload, client_public_key, shared_key
 
 
 def _make_encrypted_request_body(
@@ -203,13 +232,19 @@ class TestDecryptionFailureReturnsHTTP400:
         app = create_app(get_test_config(), encryption_manager=encryption_manager)
         client = TestClient(app)
 
-        # Use a valid client key but garbage ciphertext
-        client_private = X25519PrivateKey.generate()
-        client_pub_bytes = client_private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        # Build a valid-looking client_public_key in the new format
+        client_x25519_priv = X25519PrivateKey.generate()
+        client_x25519_pub = client_x25519_priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        # Use a dummy ML-KEM ciphertext (wrong, but format is valid)
+        dummy_mlkem_ct = os.urandom(1088)
+        client_pub = (
+            struct.pack(">I", len(client_x25519_pub)) + client_x25519_pub
+            + struct.pack(">I", len(dummy_mlkem_ct)) + dummy_mlkem_ct
+        )
 
         body = {
             "encrypted_payload": base64.b64encode(bad_payload).decode(),
-            "client_public_key": base64.b64encode(client_pub_bytes).decode(),
+            "client_public_key": base64.b64encode(client_pub).decode(),
         }
 
         response = client.post("/execute", json=body)
@@ -231,9 +266,14 @@ class TestDecryptionFailureReturnsHTTP400:
             payload, encryption_manager.server_public_key
         )
 
-        # Send a *different* client public key
-        wrong_private = X25519PrivateKey.generate()
-        wrong_pub = wrong_private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        # Send a *different* client public key (different X25519 + different ML-KEM ct)
+        wrong_x25519_priv = X25519PrivateKey.generate()
+        wrong_x25519_pub = wrong_x25519_priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        wrong_mlkem_ct = os.urandom(1088)
+        wrong_pub = (
+            struct.pack(">I", len(wrong_x25519_pub)) + wrong_x25519_pub
+            + struct.pack(">I", len(wrong_mlkem_ct)) + wrong_mlkem_ct
+        )
 
         body = {
             "encrypted_payload": base64.b64encode(encrypted_payload).decode(),

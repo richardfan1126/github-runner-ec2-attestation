@@ -484,6 +484,7 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "requests" },
     { name = "uvicorn" },
+    { name = "wolfcrypt" },
 ]
 
 [package.optional-dependencies]
@@ -522,6 +523,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "uvicorn", specifier = ">=0.32.0" },
+    { name = "wolfcrypt", specifier = ">=5.7.0" },
 ]
 provides-extras = ["dev"]
 
@@ -1108,3 +1110,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/32/ce/eeb58ae4ac36fe09e
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/e4/d04a086285c20886c0daad0e026f250869201013d18f81d9ff5eada73a88/uvicorn-0.41.0-py3-none-any.whl", hash = "sha256:29e35b1d2c36a04b9e180d4007ede3bcb32a85fbdfd6c6aeb3f26839de088187", size = 68783, upload-time = "2026-02-16T23:07:22.357Z" },
 ]
+
+[[package]]
+name = "wolfcrypt"
+version = "5.8.4.post0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/2d/d1805b7d7440afb2f79d772bc76a593f7c7da03809845062dbf624f9565d/wolfcrypt-5.8.4.post0.tar.gz", hash = "sha256:51918c924ec9aba58f7cd75c831c284145ea042afc7e902c14135787c6be8659", size = 143152, upload-time = "2026-01-08T20:16:00.645Z" }
