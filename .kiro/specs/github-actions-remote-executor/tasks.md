@@ -2258,16 +2258,16 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change the `_HKDF_INFO` constant to `b"pq-hybrid-shared-key"` for domain separation
     - _Requirements: 40.11_
 
-- [ ] 115. Checkpoint - Ensure EncryptionManager compiles and basic tests pass
+- [x] 115. Checkpoint - Ensure EncryptionManager compiles and basic tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 116. Update /attest endpoint for composite key response
-  - [ ] 116.1 Update /attest handler to return composite Server_Public_Key in JSON body
+- [x] 116. Update /attest endpoint for composite key response
+  - [x] 116.1 Update /attest handler to return composite Server_Public_Key in JSON body
     - Return JSON with `attestation_document` (base64-encoded CBOR) and `server_public_key` (base64-encoded composite key)
     - Pass the SHA-256 fingerprint (from `encryption_manager.server_public_key_fingerprint`) as the `public_key` parameter to `generate_attestation`
     - _Requirements: 37.4, 37.6, 39.1_
 
-  - [ ] 116.2 Verify /attest attestation document includes fingerprint, not full key
+  - [x] 116.2 Verify /attest attestation document includes fingerprint, not full key
     - Ensure the attestation document's public_key field contains the SHA-256 fingerprint of the composite Server_Public_Key, not the full key
     - Ensure the attestation document does NOT include user_data
     - _Requirements: 37.9, 37.10, 39.1, 39.3_

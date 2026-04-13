@@ -82,9 +82,10 @@ def test_attest_endpoint_no_authentication(nonce):
 
     For any request to the /attest endpoint without any authentication
     credentials, the server should return a successful response containing
-    an attestation document.
+    an attestation document and the server public key.
     """
-    app = create_app(get_test_config())
+    encryption_manager = EncryptionManager()
+    app = create_app(get_test_config(), encryption_manager=encryption_manager)
     client = TestClient(app)
 
     with patch.object(
@@ -104,8 +105,10 @@ def test_attest_endpoint_no_authentication(nonce):
         )
         body = response.json()
         assert "attestation_document" in body
-        # The value must be valid base64
+        assert "server_public_key" in body
+        # Both values must be valid base64
         base64.b64decode(body["attestation_document"])
+        base64.b64decode(body["server_public_key"])
 
 
 # ---------------------------------------------------------------------------
@@ -117,11 +120,13 @@ def test_attest_endpoint_no_authentication(nonce):
 @given(nonce=st.one_of(st.none(), st.text(min_size=1, max_size=64)))
 def test_attest_attestation_contains_server_public_key(nonce):
     """
-    **Validates: Requirements 37.4, 39.1**
+    **Validates: Requirements 37.4, 37.6, 39.1**
 
-    For any request to the /attest endpoint, the generated
-    Attestation_Document should include the Server_Public_Key in the
-    `public_key` field passed to generate_attestation.
+    For any request to the /attest endpoint:
+    - generate_attestation is called with public_key equal to the SHA-256
+      fingerprint of the composite Server_Public_Key (not the full key).
+    - The JSON response body contains a `server_public_key` field with the
+      base64-encoded full composite Server_Public_Key.
     """
     encryption_manager = EncryptionManager()
     app = create_app(get_test_config(), encryption_manager=encryption_manager)
@@ -141,11 +146,21 @@ def test_attest_attestation_contains_server_public_key(nonce):
         assert response.status_code == 200
 
         # Verify generate_attestation was called with public_key equal to
-        # the EncryptionManager's server_public_key bytes.
+        # the SHA-256 fingerprint (not the full composite key).
         mock_attest.assert_called_once()
         call_kwargs = mock_attest.call_args
-        assert call_kwargs.kwargs.get("public_key") == encryption_manager.server_public_key, (
-            "generate_attestation must be called with public_key=server_public_key"
+        assert call_kwargs.kwargs.get("public_key") == encryption_manager.server_public_key_fingerprint, (
+            "generate_attestation must be called with public_key=server_public_key_fingerprint"
+        )
+
+        # Verify the JSON response contains the full composite key
+        body = response.json()
+        assert "server_public_key" in body, (
+            "Response must include server_public_key field"
+        )
+        decoded_key = base64.b64decode(body["server_public_key"])
+        assert decoded_key == encryption_manager.server_public_key, (
+            "server_public_key in response must be the full composite Server_Public_Key"
         )
 
 

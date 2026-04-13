@@ -771,7 +771,9 @@ def add_routes(app: FastAPI) -> None:
     @app.get("/attest")
     async def attest(request: Request, nonce: str = None):
         """
-        Return an attestation document containing the Server_Public_Key.
+        Return an attestation document with SHA-256 fingerprint of the
+        Server_Public_Key in the attestation's public_key field, and the
+        full composite Server_Public_Key as a separate JSON field.
         No authentication required.
 
         Query parameters:
@@ -779,7 +781,8 @@ def add_routes(app: FastAPI) -> None:
 
         Returns:
         {
-            "attestation_document": "base64-encoded-cbor"
+            "attestation_document": "base64-encoded-cbor",
+            "server_public_key": "base64-encoded-composite-key"
         }
         """
         try:
@@ -788,11 +791,18 @@ def add_routes(app: FastAPI) -> None:
             attestation_gen = request.app.state.attestation_generator
 
             encryption_manager = request.app.state.encryption_manager
-            public_key = encryption_manager.server_public_key if encryption_manager is not None else None
+            # Pass the SHA-256 fingerprint (not the full key) as public_key
+            # for inclusion in the attestation document, because the composite
+            # key exceeds the 1024-byte public_key field limit.
+            fingerprint = (
+                encryption_manager.server_public_key_fingerprint
+                if encryption_manager is not None
+                else None
+            )
 
             attestation_doc, attestation_error = attestation_gen.generate_attestation(
                 nonce=nonce,
-                public_key=public_key,
+                public_key=fingerprint,
             )
 
             if attestation_error:
@@ -807,11 +817,18 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Build response with attestation doc and full composite key
+            response_content = {
+                "attestation_document": base64.b64encode(attestation_doc.signature).decode("utf-8"),
+            }
+            if encryption_manager is not None:
+                response_content["server_public_key"] = base64.b64encode(
+                    encryption_manager.server_public_key
+                ).decode("utf-8")
+
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content={
-                    "attestation_document": base64.b64encode(attestation_doc.signature).decode("utf-8")
-                }
+                content=response_content,
             )
 
         except Exception as e:
