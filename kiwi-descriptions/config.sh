@@ -77,6 +77,7 @@ python3.11 -c "import uvicorn" || { echo "ERROR: uvicorn not importable"; exit 1
 python3.11 -c "import requests" || { echo "ERROR: requests not importable"; exit 1; }
 python3.11 -c "import jwt" || { echo "ERROR: PyJWT not importable"; exit 1; }
 python3.11 -c "import docker" || { echo "ERROR: docker not importable"; exit 1; }
+python3.11 -c "import wolfcrypt" || { echo "ERROR: wolfcrypt not importable"; exit 1; }
 
 echo "✓ All critical packages verified successfully"
 echo "✓ Python dependency installation complete"

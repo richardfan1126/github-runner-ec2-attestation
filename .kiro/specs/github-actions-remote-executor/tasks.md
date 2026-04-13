@@ -2218,12 +2218,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 112. Final checkpoint - Ensure all updated tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 113. Add wolfcrypt-py dependency and update KIWI config verification
-  - [ ] 113.1 Add wolfcrypt-py to pyproject.toml dependencies
+- [x] 113. Add wolfcrypt-py dependency and update KIWI config verification
+  - [x] 113.1 Add wolfcrypt-py to pyproject.toml dependencies
     - Add `wolfcrypt-py` to the `dependencies` list in pyproject.toml alongside existing packages
     - _Requirements: 12.9, 36.4_
 
-  - [ ] 113.2 Update kiwi-descriptions/config.sh to verify wolfcrypt is importable
+  - [x] 113.2 Update kiwi-descriptions/config.sh to verify wolfcrypt is importable
     - Add `python3.11 -c "import wolfcrypt" || { echo "ERROR: wolfcrypt not importable"; exit 1; }` after the existing critical package verification lines
     - _Requirements: 12.21_
 
