@@ -910,6 +910,216 @@ class TestClientEncryptionEdgeCases:
         assert exc_info.value.phase == "encryption"
 
 
+class TestParseCompositeServerKey:
+    """Unit tests for ClientEncryption.parse_composite_server_key.
+    Validates: Requirements 11A.5, 13.6"""
+
+    def test_valid_composite_key_parses_correctly(self):
+        """Valid composite key (32-byte X25519 + 1184-byte ML-KEM-768) parses correctly."""
+        import struct
+        x25519_pub = os.urandom(32)
+        mlkem_encap_key = os.urandom(1184)
+        composite = (
+            struct.pack(">I", len(x25519_pub)) + x25519_pub
+            + struct.pack(">I", len(mlkem_encap_key)) + mlkem_encap_key
+        )
+        parsed_x25519, parsed_mlkem = ClientEncryption.parse_composite_server_key(composite)
+        assert parsed_x25519 == x25519_pub
+        assert parsed_mlkem == mlkem_encap_key
+
+    def test_truncated_key_raises_caller_error(self):
+        """Truncated composite key raises CallerError with phase 'encryption'."""
+        # Only 2 bytes of length prefix (needs 4)
+        truncated = b"\x00\x00"
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.parse_composite_server_key(truncated)
+        assert exc_info.value.phase == "encryption"
+
+    def test_truncated_component_data_raises_caller_error(self):
+        """Composite key with truncated component data raises CallerError."""
+        import struct
+        # Length prefix says 32 bytes but only 10 bytes follow
+        truncated = struct.pack(">I", 32) + os.urandom(10)
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.parse_composite_server_key(truncated)
+        assert exc_info.value.phase == "encryption"
+
+    def test_wrong_number_of_components_raises_caller_error(self):
+        """Composite key with wrong number of components raises CallerError."""
+        import struct
+        # Only one component
+        one_component = struct.pack(">I", 32) + os.urandom(32)
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.parse_composite_server_key(one_component)
+        assert exc_info.value.phase == "encryption"
+
+        # Three components
+        three_components = (
+            struct.pack(">I", 32) + os.urandom(32)
+            + struct.pack(">I", 1184) + os.urandom(1184)
+            + struct.pack(">I", 16) + os.urandom(16)
+        )
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.parse_composite_server_key(three_components)
+        assert exc_info.value.phase == "encryption"
+
+    def test_wrong_x25519_size_raises_caller_error(self):
+        """Composite key with wrong X25519 component size raises CallerError."""
+        import struct
+        # X25519 is 16 bytes instead of 32
+        bad_composite = (
+            struct.pack(">I", 16) + os.urandom(16)
+            + struct.pack(">I", 1184) + os.urandom(1184)
+        )
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.parse_composite_server_key(bad_composite)
+        assert exc_info.value.phase == "encryption"
+
+    def test_wrong_mlkem_size_raises_caller_error(self):
+        """Composite key with wrong ML-KEM-768 component size raises CallerError."""
+        import struct
+        # ML-KEM-768 is 500 bytes instead of 1184
+        bad_composite = (
+            struct.pack(">I", 32) + os.urandom(32)
+            + struct.pack(">I", 500) + os.urandom(500)
+        )
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.parse_composite_server_key(bad_composite)
+        assert exc_info.value.phase == "encryption"
+
+
+class TestVerifyServerKeyFingerprint:
+    """Unit tests for ClientEncryption.verify_server_key_fingerprint.
+    Validates: Requirements 11A.1, 11A.2, 11A.4"""
+
+    def test_matching_fingerprint_passes(self):
+        """Matching SHA-256 fingerprint does not raise."""
+        import hashlib
+        import struct
+
+        x25519_pub = os.urandom(32)
+        mlkem_encap_key = os.urandom(1184)
+        composite = (
+            struct.pack(">I", len(x25519_pub)) + x25519_pub
+            + struct.pack(">I", len(mlkem_encap_key)) + mlkem_encap_key
+        )
+        fingerprint = hashlib.sha256(composite).digest()
+        # Should not raise
+        ClientEncryption.verify_server_key_fingerprint(composite, fingerprint)
+
+    def test_mismatched_fingerprint_raises_caller_error(self):
+        """Mismatched fingerprint raises CallerError with phase 'attest'."""
+        import struct
+
+        composite = (
+            struct.pack(">I", 32) + os.urandom(32)
+            + struct.pack(">I", 1184) + os.urandom(1184)
+        )
+        wrong_fingerprint = os.urandom(32)
+        with pytest.raises(CallerError) as exc_info:
+            ClientEncryption.verify_server_key_fingerprint(composite, wrong_fingerprint)
+        assert exc_info.value.phase == "attest"
+        assert "fingerprint" in exc_info.value.message.lower()
+
+
+class TestDeriveSharedKeyPQHybridKEM:
+    """Unit tests for PQ_Hybrid_KEM derive_shared_key.
+    Validates: Requirements 13.1, 13.6, 13.7"""
+
+    def test_valid_composite_server_key_derives_shared_key(self):
+        """Valid composite server key derives shared key successfully.
+        Validates: Requirement 13.1"""
+        from src.encryption import EncryptionManager
+
+        server_mgr = EncryptionManager()
+        client = ClientEncryption()
+        # Should not raise
+        client.derive_shared_key(server_mgr.server_public_key)
+        assert client._shared_key is not None
+        assert len(client._shared_key) == 32
+        assert client._mlkem_ciphertext is not None
+
+    def test_invalid_composite_key_format_raises_caller_error(self):
+        """Invalid composite key format raises CallerError.
+        Validates: Requirement 13.6"""
+        import struct
+
+        client = ClientEncryption()
+        # Wrong X25519 size (16 instead of 32)
+        bad_composite = (
+            struct.pack(">I", 16) + os.urandom(16)
+            + struct.pack(">I", 1184) + os.urandom(1184)
+        )
+        with pytest.raises(CallerError) as exc_info:
+            client.derive_shared_key(bad_composite)
+        assert exc_info.value.phase == "encryption"
+
+    def test_mlkem768_encapsulation_failure_raises_caller_error(self):
+        """ML-KEM-768 encapsulation failure raises CallerError.
+        Validates: Requirement 13.7"""
+        from src.encryption import EncryptionManager
+
+        server_mgr = EncryptionManager()
+        client = ClientEncryption()
+
+        # Mock MlKemPublic.encapsulate to raise an exception
+        with patch("call_remote_executor.MlKemPublic") as mock_mlkem_cls:
+            mock_instance = mock_mlkem_cls.return_value
+            mock_instance.decode_key.return_value = None
+            mock_instance.encapsulate.side_effect = RuntimeError("ML-KEM-768 encapsulation failed")
+
+            with pytest.raises(CallerError) as exc_info:
+                client.derive_shared_key(server_mgr.server_public_key)
+            assert exc_info.value.phase == "encryption"
+            assert "encapsulation" in exc_info.value.message.lower() or "ml-kem" in exc_info.value.message.lower()
+
+
+class TestCompositeClientPublicKeyBytes:
+    """Unit tests for composite client_public_key_bytes property.
+    Validates: Requirements 12.3, 14.4"""
+
+    def test_composite_client_key_contains_length_prefixed_components(self):
+        """Composite client key contains length-prefixed X25519 pub + ML-KEM-768 ciphertext.
+        Validates: Requirement 12.3"""
+        import struct
+        from src.encryption import EncryptionManager
+
+        server_mgr = EncryptionManager()
+        client = ClientEncryption()
+        client.derive_shared_key(server_mgr.server_public_key)
+
+        composite = client.client_public_key_bytes
+
+        # Parse the composite key
+        offset = 0
+        # First component: X25519 public key
+        (x25519_len,) = struct.unpack(">I", composite[offset:offset + 4])
+        offset += 4
+        assert x25519_len == 32
+        x25519_pub = composite[offset:offset + x25519_len]
+        offset += x25519_len
+        assert len(x25519_pub) == 32
+
+        # Second component: ML-KEM-768 ciphertext
+        (mlkem_ct_len,) = struct.unpack(">I", composite[offset:offset + 4])
+        offset += 4
+        assert mlkem_ct_len == 1088
+        mlkem_ct = composite[offset:offset + mlkem_ct_len]
+        offset += mlkem_ct_len
+        assert len(mlkem_ct) == 1088
+
+        # No trailing bytes
+        assert offset == len(composite)
+
+    def test_client_public_key_bytes_before_derive_raises_caller_error(self):
+        """Calling client_public_key_bytes before derive_shared_key raises CallerError.
+        Validates: Requirement 14.4"""
+        client = ClientEncryption()
+        with pytest.raises(CallerError) as exc_info:
+            _ = client.client_public_key_bytes
+        assert exc_info.value.phase == "encryption"
+
+
 class TestNonceVerificationEdgeCases:
     """Unit tests for nonce verification edge cases.
     Validates: Requirements 3.13, 5.14, 11.12"""

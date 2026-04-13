@@ -827,38 +827,38 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Verify both sides produce identical 32-byte shared keys
     - **Validates: Requirements 13.1, 13.2**
 
-- [ ] 46. Write unit tests for PQ_Hybrid_KEM edge cases
-  - [ ] 46.1 Write unit tests for `parse_composite_server_key`
+- [x] 46. Write unit tests for PQ_Hybrid_KEM edge cases
+  - [x] 46.1 Write unit tests for `parse_composite_server_key`
     - Test valid composite key (32-byte X25519 + 1184-byte ML-KEM-768) parses correctly
     - Test truncated key raises `CallerError`
     - Test key with wrong number of components raises `CallerError`
     - Test key with wrong component sizes raises `CallerError`
     - _Requirements: 11A.5, 13.6_
 
-  - [ ] 46.2 Write unit tests for `verify_server_key_fingerprint`
+  - [x] 46.2 Write unit tests for `verify_server_key_fingerprint`
     - Test matching fingerprint passes
     - Test mismatched fingerprint raises `CallerError`
     - _Requirements: 11A.1, 11A.2, 11A.4_
 
-  - [ ] 46.3 Write unit tests for PQ_Hybrid_KEM `derive_shared_key`
+  - [x] 46.3 Write unit tests for PQ_Hybrid_KEM `derive_shared_key`
     - Test valid composite server key derives shared key successfully
     - Test invalid composite key format raises `CallerError`
     - Test ML-KEM-768 encapsulation failure raises `CallerError`
     - _Requirements: 13.1, 13.6, 13.7_
 
-  - [ ] 46.4 Write unit tests for composite `client_public_key_bytes`
+  - [x] 46.4 Write unit tests for composite `client_public_key_bytes`
     - Test composite client key contains length-prefixed X25519 pub + ML-KEM-768 ciphertext
     - Test calling before `derive_shared_key` raises `CallerError`
     - _Requirements: 12.3, 14.4_
 
-  - [ ] 46.5 Update existing unit tests for PQ_Hybrid_KEM compatibility
+  - [x] 46.5 Update existing unit tests for PQ_Hybrid_KEM compatibility
     - Update all tests that mock `ClientEncryption.derive_shared_key` to pass composite key bytes
     - Update all tests that check `client_public_key_bytes` to expect composite format
     - Update all tests that mock `/attest` response to include `server_public_key` field
     - Update all tests that check HKDF info label from `b"hpke-shared-key"` to `b"pq-hybrid-shared-key"`
     - _Requirements: 11A.1, 12.3, 13.1, 13.3_
 
-- [ ] 47. Final checkpoint - Ensure all PQ_Hybrid_KEM tests pass
+- [x] 47. Final checkpoint - Ensure all PQ_Hybrid_KEM tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
