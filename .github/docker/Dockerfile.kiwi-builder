@@ -19,6 +19,12 @@ RUN dnf install -y \
     aws-nitro-tpm-tools \
     python3.11 \
     python3.11-pip \
+    python3.11-devel \
+    gcc \
+    make \
+    autoconf \
+    automake \
+    libtool \
     && dnf clean all
 
 # Create output directory for build artifacts

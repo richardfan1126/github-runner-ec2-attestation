@@ -112,8 +112,23 @@ if [ -z "${DEPS}" ]; then
 fi
 echo "Dependencies: ${DEPS}"
 
-echo "Pre-downloading Python dependency wheels..."
+# Separate wolfcrypt from other dependencies.
+# wolfcrypt>=5.x only publishes source distributions (no pre-built wheels),
+# so it must be built from source inside the Docker builder container which
+# has the correct target architecture and compilers (gcc, cargo, etc.).
+BINARY_DEPS=""
+WOLFCRYPT_DEP=""
+for dep in ${DEPS}; do
+    if echo "${dep}" | grep -qi "^wolfcrypt"; then
+        WOLFCRYPT_DEP="${dep}"
+    else
+        BINARY_DEPS="${BINARY_DEPS} ${dep}"
+    fi
+done
+
 mkdir -p "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels"
+
+echo "Pre-downloading binary dependency wheels..."
 pip3 download \
     --dest "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels" \
     --python-version "${TARGET_PYTHON_VERSION}" \
@@ -124,7 +139,28 @@ pip3 download \
     --platform any \
     --implementation cp \
     --abi cp311 \
-    ${DEPS}
+    ${BINARY_DEPS}
+
+# Download wolfcrypt source distribution and build a wheel inside the builder
+# container so it is compiled for the correct target (x86_64 AL2023 / cp311).
+if [ -n "${WOLFCRYPT_DEP}" ]; then
+    echo "Downloading wolfcrypt source distribution..."
+    WOLFCRYPT_SRC_DIR=$(mktemp -d)
+    pip3 download \
+        --dest "${WOLFCRYPT_SRC_DIR}" \
+        --no-binary=:all: \
+        "${WOLFCRYPT_DEP}"
+
+    echo "Building wolfcrypt wheel inside builder container..."
+    docker run --rm \
+        -v "${WOLFCRYPT_SRC_DIR}:/wolfcrypt-src" \
+        -v "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/wheels:/wheels-out" \
+        kiwi-builder:latest \
+        bash -c "pip3.11 install cffi wheel setuptools && pip3.11 wheel --no-deps --wheel-dir /wheels-out /wolfcrypt-src/wolfcrypt-*.tar.gz"
+
+    rm -rf "${WOLFCRYPT_SRC_DIR}"
+    echo "✓ wolfcrypt wheel built successfully"
+fi
 
 echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
 
