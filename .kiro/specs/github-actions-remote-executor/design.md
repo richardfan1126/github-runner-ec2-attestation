@@ -2,7 +2,7 @@
 
 ## Overview
 
-The GitHub Actions Remote Executor is an HTTP server that runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts inside ephemeral Docker containers asynchronously while allowing clients to poll for output and status. Each script execution runs in a newly created Docker container that is destroyed after completion, ensuring complete isolation between executions. All request and response payloads on protected endpoints are encrypted using HPKE (Hybrid Public Key Encryption), with the server's public key attested via the NitroTPM to establish trust.
+The GitHub Actions Remote Executor is an HTTP server that runs on an Attestable EC2 instance with NitroTPM, providing a secure and attestable environment for executing scripts from GitHub repositories. The system receives execution requests from GitHub Actions workflows, generates cryptographic attestation documents proving the execution environment, and executes scripts inside ephemeral Docker containers asynchronously while allowing clients to poll for output and status. Each script execution runs in a newly created Docker container that is destroyed after completion, ensuring complete isolation between executions. All request and response payloads on protected endpoints are encrypted using PQ_Hybrid_KEM (post-quantum hybrid key encapsulation combining X25519 ECDH with ML-KEM-768), with the server's composite public key attested via the NitroTPM to establish trust.
 
 This design document covers five major aspects of the system:
 
@@ -23,7 +23,7 @@ This design document covers five major aspects of the system:
 3. **Ephemeral Docker Container Isolation**: Each script execution runs inside a newly created Docker container from a configured Container_Image; containers are never reused and are destroyed after completion, failure, or timeout
 4. **Attestable Environment**: NitroTPM-based attestation on the Attestable EC2 instance provides cryptographic proof of the execution environment
 5. **Stateless Request Handling**: Each request is independent, with execution state stored separately
-6. **HPKE Encrypted Communication**: All request and response payloads on /execute and /execution/{id}/output are encrypted using HPKE. The server generates a keypair at startup (held in memory only), attests the public key via /attest, and derives per-execution shared keys for symmetric encryption of all subsequent communication. OIDC tokens are transmitted inside the encrypted payload rather than in HTTP headers.
+6. **PQ Hybrid Encrypted Communication**: All request and response payloads on /execute and /execution/{id}/output are encrypted using PQ_Hybrid_KEM (X25519 + ML-KEM-768). The server generates a composite keypair at startup (held in memory only), attests the public key via /attest (SHA-256 fingerprint in the attestation document's public_key field, full composite key in the JSON response body), and derives per-execution shared keys via HKDF-SHA256 combining both X25519 ECDH and ML-KEM-768 shared secrets for symmetric encryption of all subsequent communication. OIDC tokens are transmitted inside the encrypted payload rather than in HTTP headers.
 
 ### Architecture Goals
 
@@ -111,10 +111,10 @@ The system consists of the following major components:
 - Implements rate limiting per source IP
 
 **Encryption Manager**
-- Generates a Server_Keypair (suitable for HPKE key agreement) at server startup and holds it in memory for the server's entire lifetime; the keypair is never persisted to disk
-- Uses the `cryptography` library for key generation and HPKE operations
-- Provides the Server_Public_Key for inclusion in /attest attestation documents
-- Derives a Shared_Key from the Client_Public_Key (sent unencrypted by the client) and the Server_Keypair via HPKE for each /execute request
+- Generates a Server_Keypair (composite: X25519 key pair + ML-KEM-768 key pair) at server startup and holds it in memory for the server's entire lifetime; the keypair is never persisted to disk
+- Uses the `cryptography` library for X25519 key generation and ECDH, and the `wolfcrypt-py` library (via `wolfcrypt.ciphers` module: `MlKemType`, `MlKemPrivate`, `MlKemPublic`) for ML-KEM-768 key generation and encapsulation/decapsulation (FIPS 203)
+- Provides the Server_Public_Key (length-prefixed concatenation of 32-byte X25519 public key + 1184-byte ML-KEM-768 encapsulation key) for inclusion in /attest JSON response body; a SHA-256 fingerprint of the composite key is placed in the attestation document's public_key field because the composite key exceeds the 1024-byte field limit
+- Derives a Shared_Key from the Client_Public_Key (containing the client's X25519 public key + ML-KEM-768 ciphertext, sent unencrypted) and the Server_Keypair via PQ_Hybrid_KEM for each /execute request: performs X25519 ECDH and ML-KEM-768 decapsulation, then combines both shared secrets via HKDF-SHA256 with domain-separation label b"pq-hybrid-shared-key"
 - Decrypts incoming /execute request payloads using the derived Shared_Key
 - Stores the Shared_Key in an Encryption_Context keyed by Execution_ID; the context is held in memory only and never persisted to disk
 - Encrypts /execute response payloads using the Shared_Key from the Encryption_Context
@@ -122,19 +122,20 @@ The system consists of the following major components:
 - Encrypts /execution/{id}/output response payloads using the Shared_Key from the Encryption_Context
 - Removes the Encryption_Context when the execution record is cleaned up
 - Does NOT encrypt responses for /attest, /health, or /metrics endpoints
-- Logs Server_Keypair generation at startup at INFO level without logging private key material
+- Logs Server_Keypair generation at startup at INFO level without logging private key material or decapsulation key material
 
 **Attest Handler**
 - Handles GET /attest requests (unauthenticated)
 - Accepts an optional `nonce` query parameter
-- Generates an Attestation_Document with the Server_Public_Key in the `public_key` field and without user_data
-- Does NOT include user_data in the attestation document (only public_key and optional nonce are included)
+- Computes a SHA-256 fingerprint of the serialized Server_Public_Key (composite key) and includes the fingerprint in the `public_key` field of the Attestation_Document, because the composite key (1216+ bytes) exceeds the 1024-byte public_key field limit
+- Returns a JSON response body containing both the base64-encoded Attestation_Document and the base64-encoded serialized Server_Public_Key as separate fields
+- Does NOT include user_data in the attestation document (only public_key fingerprint and optional nonce are included)
 - Returns the Attestation_Document in base64 encoding, unencrypted
 - Returns HTTP 500 if attestation generation fails
 
 **Request Handler**
 - Receives encrypted /execute request payloads
-- Delegates decryption to the Encryption Manager using the Client_Public_Key from the request
+- Delegates decryption to the Encryption Manager using the Client_Public_Key (containing client's X25519 public key + ML-KEM-768 ciphertext) from the request
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
 - Extracts the optional `nonce` from the decrypted request body for inclusion in the attestation document
 - Validates the decrypted request using the Request Validator
@@ -184,7 +185,7 @@ The system consists of the following major components:
 **Attestation Generator**
 - Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
-- When generating for the /attest endpoint: includes the Server_Public_Key in the `public_key` field of the attestation document, but does NOT include user_data (no `--user-data` flag is passed to nitro-tpm-attest)
+- When generating for the /attest endpoint: computes a SHA-256 fingerprint of the Server_Public_Key (composite key) and includes the fingerprint in the `public_key` field of the attestation document (because the composite key exceeds the 1024-byte field limit), but does NOT include user_data (no `--user-data` flag is passed to nitro-tpm-attest)
 - When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata
 - Accepts an optional nonce parameter; when provided, passes it to nitro-tpm-attest for inclusion in the attestation document
 - Signs documents using NitroTPM cryptographic capabilities
@@ -246,13 +247,13 @@ The system consists of the following major components:
 
 1. Client sends GET request to `/attest` with optional `nonce` query parameter
 2. No authentication required
-3. Attestation Generator creates attestation document with Server_Public_Key in the `public_key` field, optional nonce, and no user_data
-4. Response returned with base64-encoded attestation document (unencrypted)
+3. Attestation Generator creates attestation document with SHA-256 fingerprint of the Server_Public_Key (composite key) in the `public_key` field, optional nonce, and no user_data
+4. Response returned with base64-encoded attestation document and base64-encoded Server_Public_Key as separate JSON fields (unencrypted)
 
 **Execution Request Flow:**
 
-1. Client sends POST request to `/execute` with encrypted payload and unencrypted Client_Public_Key
-2. Encryption Manager derives Shared_Key from Client_Public_Key and Server_Keypair via HPKE
+1. Client sends POST request to `/execute` with encrypted payload and unencrypted Client_Public_Key (containing client's X25519 public key + ML-KEM-768 ciphertext, length-prefixed)
+2. Encryption Manager parses the Client_Public_Key to extract the client's X25519 public key and ML-KEM-768 ciphertext, performs X25519 ECDH and ML-KEM-768 decapsulation using the Server_Keypair, and combines both shared secrets via HKDF-SHA256 with domain-separation label b"pq-hybrid-shared-key" to derive the Shared_Key
 3. Encryption Manager decrypts the request payload using the derived Shared_Key
 4. Request Handler extracts OIDC_Token from decrypted body `oidc_token` field
 5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
@@ -280,7 +281,7 @@ The system consists of the following major components:
 9. If complete, response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code
 10. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
 11. Response payload encrypted with Shared_Key and returned
-12. Client decrypts response using the same Shared_Key derived during HPKE key exchange
+12. Client decrypts response using the same Shared_Key derived during PQ_Hybrid_KEM key exchange
 13. Client repeats polling until execution completes
 14. Client can verify output integrity by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
 
@@ -294,7 +295,7 @@ The system consists of the following major components:
 - Output collection uses buffered writes to avoid blocking
 - Maximum concurrent Execution_Containers configurable to prevent resource exhaustion
 - Docker daemon manages container lifecycle and resource isolation
-- Server_Keypair generated once at startup and shared across all concurrent requests (read-only after initialization)
+- Server_Keypair (composite X25519 + ML-KEM-768) generated once at startup and shared across all concurrent requests (read-only after initialization)
 
 ## Components and Interfaces
 
@@ -302,7 +303,7 @@ The system consists of the following major components:
 
 #### GET /attest
 
-Returns an attestation document containing the Server_Public_Key. Unauthenticated. The attestation document does NOT include user_data — only `public_key` and optionally `nonce` are included.
+Returns an attestation document containing a SHA-256 fingerprint of the Server_Public_Key in the public_key field, alongside the full composite Server_Public_Key in the JSON response body. Unauthenticated. The attestation document does NOT include user_data — only `public_key` (fingerprint) and optionally `nonce` are included.
 
 **Query Parameters:**
 - `nonce` (optional): Client-provided nonce for attestation freshness verification
@@ -310,28 +311,29 @@ Returns an attestation document containing the Server_Public_Key. Unauthenticate
 **Response (200 OK):**
 ```json
 {
-  "attestation_document": "base64-encoded-cbor"
+  "attestation_document": "base64-encoded-cbor",
+  "server_public_key": "base64-encoded-composite-key"
 }
 ```
 
-The attestation document's `public_key` field contains the Server_Public_Key. The attestation document does NOT contain user_data. The response is NOT encrypted.
+The attestation document's `public_key` field contains a SHA-256 fingerprint of the Server_Public_Key (because the composite key exceeds the 1024-byte field limit). The full Server_Public_Key (length-prefixed concatenation of X25519 public key + ML-KEM-768 encapsulation key) is returned as a separate base64-encoded field in the JSON body. The client verifies the key by computing SHA-256 of the received composite key and comparing against the fingerprint in the attestation document. The attestation document does NOT contain user_data. The response is NOT encrypted.
 
 **Error Responses:**
 - 500 Internal Server Error: Attestation generation failure
 
 #### POST /execute
 
-Initiates script execution. Request and response payloads are HPKE-encrypted.
+Initiates script execution. Request and response payloads are encrypted using PQ_Hybrid_KEM (X25519 + ML-KEM-768).
 
 **Request Body (outer, unencrypted envelope):**
 ```json
 {
   "encrypted_payload": "base64-encoded-ciphertext",
-  "client_public_key": "base64-encoded-client-public-key"
+  "client_public_key": "base64-encoded-length-prefixed-x25519-pubkey-and-mlkem768-ciphertext"
 }
 ```
 
-**Decrypted Payload (inner, after HPKE decryption):**
+**Decrypted Payload (inner, after PQ_Hybrid_KEM decryption):**
 ```json
 {
   "repository_url": "https://github.com/owner/repo",
@@ -356,7 +358,7 @@ The response body is an encrypted payload. After decryption by the client:
 The attestation document in the /execute response does NOT include the Server_Public_Key in the `public_key` field.
 
 **Error Responses:**
-- 400 Bad Request: Decryption failure, malformed request, or validation failure
+- 400 Bad Request: Decryption failure, malformed request, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), or validation failure
 - 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
 - 403 Forbidden: Valid OIDC token from an unauthorized repository
 - 404 Not Found: Repository, commit, or file not found
@@ -468,23 +470,35 @@ Metrics endpoint for monitoring.
 
 ```python
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from wolfcrypt.ciphers import MlKemType, MlKemPrivate, MlKemPublic
 
 class EncryptionManager:
     def __init__(self):
-        """Generate Server_Keypair at initialization and hold in memory."""
+        """Generate composite Server_Keypair (X25519 + ML-KEM-768) at initialization and hold in memory."""
         pass
 
     @property
     def server_public_key(self) -> bytes:
-        """Return the serialized Server_Public_Key."""
+        """Return the serialized Server_Public_Key as length-prefixed concatenation
+        of 32-byte X25519 public key + 1184-byte ML-KEM-768 encapsulation key.
+        Each component is preceded by a 4-byte big-endian length prefix."""
+        pass
+
+    @property
+    def server_public_key_fingerprint(self) -> bytes:
+        """Return the SHA-256 fingerprint of the serialized Server_Public_Key.
+        Used in the attestation document's public_key field because the composite
+        key exceeds the 1024-byte field limit."""
         pass
 
     def decrypt_request(self, encrypted_payload: bytes, client_public_key: bytes) -> tuple[dict, bytes]:
         """
-        Derive Shared_Key via HPKE from Client_Public_Key and Server_Keypair,
-        then decrypt the request payload.
+        Parse Client_Public_Key (length-prefixed X25519 public key + ML-KEM-768 ciphertext),
+        perform X25519 ECDH and ML-KEM-768 decapsulation using Server_Keypair,
+        combine both shared secrets via HKDF-SHA256 with label b"pq-hybrid-shared-key",
+        then decrypt the request payload using the derived Shared_Key.
         Returns (decrypted_payload_dict, shared_key_bytes).
-        Raises ValueError on decryption failure.
+        Raises ValueError on decryption failure or invalid Client_Public_Key.
         """
         pass
 
@@ -592,8 +606,10 @@ class AttestationGenerator:
             metadata: Execution metadata to include in user_data. When None (e.g., for /attest),
                       user_data is omitted entirely from the attestation document.
             nonce: Optional client-provided nonce for freshness verification
-            public_key: Optional Server_Public_Key to include in the public_key field.
-                        Only provided when generating for the /attest endpoint.
+            public_key: Optional SHA-256 fingerprint of the Server_Public_Key to include
+                        in the public_key field. Only provided when generating for the
+                        /attest endpoint. The fingerprint is used because the full composite
+                        key (1216+ bytes) exceeds the 1024-byte public_key field limit.
         """
         pass
     
@@ -809,8 +825,9 @@ class CloneResult:
 ```python
 @dataclass
 class EncryptedRequest:
-    encrypted_payload: bytes  # HPKE-encrypted ciphertext
-    client_public_key: bytes  # Unencrypted Client_Public_Key for HPKE key derivation
+    encrypted_payload: bytes  # AES-256-GCM encrypted ciphertext
+    client_public_key: bytes  # Unencrypted Client_Public_Key: length-prefixed concatenation of
+                              # client's X25519 public key (32 bytes) + ML-KEM-768 ciphertext (1088 bytes)
 ```
 
 ### DecryptedExecuteRequest
@@ -842,7 +859,7 @@ class DecryptedOutputRequest:
 @dataclass
 class EncryptionContext:
     execution_id: str
-    shared_key: bytes  # HPKE-derived symmetric key, held in memory only
+    shared_key: bytes  # PQ_Hybrid_KEM-derived symmetric key (X25519 ECDH + ML-KEM-768 via HKDF-SHA256), held in memory only
 ```
 
 
@@ -1284,9 +1301,9 @@ class EncryptionContext:
 
 ### Property 122: Server Keypair Consistency
 
-*For any* two requests to the /attest endpoint during the same server lifetime, the Server_Public_Key included in the attestation documents should be identical.
+*For any* two requests to the /attest endpoint during the same server lifetime, the Server_Public_Key (composite X25519 + ML-KEM-768 key) included in the JSON response body should be identical, and the SHA-256 fingerprint in the attestation document's public_key field should be identical.
 
-**Validates: Requirements 36.3, 37.4**
+**Validates: Requirements 36.3, 37.4, 37.6**
 
 ### Property 123: Attest Endpoint No Authentication
 
@@ -1294,15 +1311,15 @@ class EncryptionContext:
 
 **Validates: Requirements 37.2, 2.21**
 
-### Property 124: Attest Attestation Contains Server Public Key
+### Property 124: Attest Attestation Contains Server Public Key Fingerprint
 
-*For any* request to the /attest endpoint, the generated Attestation_Document should include the Server_Public_Key in the `public_key` field.
+*For any* request to the /attest endpoint, the generated Attestation_Document should include a SHA-256 fingerprint of the Server_Public_Key in the `public_key` field (because the composite key exceeds the 1024-byte field limit), and the JSON response body should include the full composite Server_Public_Key as a separate field.
 
-**Validates: Requirements 37.4, 39.1**
+**Validates: Requirements 37.4, 37.6, 39.1, 39.3**
 
 ### Property 125: Non-Attest Attestation Excludes Server Public Key
 
-*For any* attestation document generated for the /execute or /execution/{id}/output endpoints, the document should NOT include the Server_Public_Key in the `public_key` field.
+*For any* attestation document generated for the /execute or /execution/{id}/output endpoints, the document should NOT include the Server_Public_Key fingerprint in the `public_key` field.
 
 **Validates: Requirements 37.9, 39.2**
 
@@ -1314,15 +1331,15 @@ class EncryptionContext:
 
 ### Property 127: Server Public Key Serialization Round-Trip
 
-*For any* Server_Public_Key, serializing it into the attestation document's `public_key` field and then extracting and deserializing it should produce a key that is usable for HPKE key exchange and equivalent to the original.
+*For any* Server_Public_Key (composite X25519 + ML-KEM-768), serializing it as a length-prefixed concatenation, computing its SHA-256 fingerprint, and then extracting the composite key from the /attest JSON response body and recomputing the fingerprint should produce the same fingerprint as found in the attestation document's public_key field, and the deserialized key components should be usable for PQ_Hybrid_KEM key exchange.
 
-**Validates: Requirements 39.3, 39.4**
+**Validates: Requirements 36.6, 37.6, 37.11, 39.3, 39.4**
 
-### Property 128: HPKE Encrypt-Decrypt Round-Trip for Execute
+### Property 128: PQ Hybrid Encrypt-Decrypt Round-Trip for Execute
 
-*For any* valid execution request payload, encrypting it with a client-derived Shared_Key (via HPKE from Client_Keypair and Server_Public_Key) and then having the server decrypt it (via HPKE from Client_Public_Key and Server_Keypair) should produce the original payload.
+*For any* valid execution request payload, encrypting it with a client-derived Shared_Key (via PQ_Hybrid_KEM: X25519 ECDH + ML-KEM-768 encapsulation against the Server_Public_Key, combined via HKDF-SHA256 with label b"pq-hybrid-shared-key") and then having the server decrypt it (via X25519 ECDH + ML-KEM-768 decapsulation using the Server_Keypair, combined via the same HKDF-SHA256) should produce the original payload.
 
-**Validates: Requirements 40.1, 40.3, 40.4, 40.8**
+**Validates: Requirements 40.1, 40.3, 40.4, 40.8, 40.11**
 
 ### Property 129: Decryption Failure Returns HTTP 400
 
@@ -1344,13 +1361,13 @@ class EncryptionContext:
 
 ### Property 132: Execute Response Encryption Round-Trip
 
-*For any* /execute response payload, the server encrypts it with the Shared_Key and the client decrypts it with the same Shared_Key, producing the original response content (execution_id, attestation_document, status).
+*For any* /execute response payload, the server encrypts it with the Shared_Key (derived via PQ_Hybrid_KEM) and the client decrypts it with the same Shared_Key, producing the original response content (execution_id, attestation_document, status).
 
 **Validates: Requirements 41.3, 42.1, 42.8**
 
 ### Property 133: Output Request-Response Encryption Round-Trip
 
-*For any* /execution/{id}/output request and response, the client encrypts the request with the Shared_Key, the server decrypts it, processes it, encrypts the response with the same Shared_Key, and the client decrypts the response — producing the original request and response content.
+*For any* /execution/{id}/output request and response, the client encrypts the request with the Shared_Key (derived via PQ_Hybrid_KEM), the server decrypts it, processes it, encrypts the response with the same Shared_Key, and the client decrypts the response — producing the original request and response content.
 
 **Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**
 
@@ -1368,7 +1385,7 @@ class EncryptionContext:
 
 ### Property 136: Attest Attestation Excludes User Data
 
-*For any* request to the /attest endpoint, the generated Attestation_Document should NOT include user_data. Only the `public_key` field (containing the Server_Public_Key) and optionally the `nonce` should be present in the attestation document.
+*For any* request to the /attest endpoint, the generated Attestation_Document should NOT include user_data. Only the `public_key` field (containing the SHA-256 fingerprint of the Server_Public_Key) and optionally the `nonce` should be present in the attestation document.
 
 **Validates: Requirements 37.10**
 
@@ -1377,7 +1394,7 @@ class EncryptionContext:
 The system handles errors in the following categories:
 
 1. **Client Errors (4xx)**
-   - 400 Bad Request: Malformed requests, validation failures, HPKE decryption failures, missing Encryption_Context for execution_id
+   - 400 Bad Request: Malformed requests, validation failures, PQ_Hybrid_KEM decryption failures, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), missing Encryption_Context for execution_id
    - 401 Unauthorized: Missing/invalid/expired OIDC tokens (from decrypted body), JWT signature verification failures, invalid iss or aud claims
    - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories)
    - 404 Not Found: Repository, commit, file, or execution ID not found
@@ -1424,8 +1441,8 @@ All error responses follow a consistent JSON structure:
 - Cache JWKS and refresh on unknown key ID to handle key rotation
 - Log authentication failures with claim details (excluding the token itself)
 
-**HPKE Encryption Errors**
-- Return 400 for /execute requests where HPKE decryption fails (invalid Client_Public_Key, corrupted ciphertext, wrong key)
+**PQ Hybrid Encryption Errors**
+- Return 400 for /execute requests where PQ_Hybrid_KEM decryption fails (invalid Client_Public_Key with invalid X25519 or ML-KEM-768 components, corrupted ciphertext, wrong key)
 - Return 400 for /execution/{id}/output requests where no Encryption_Context exists for the execution_id
 - Return 400 for /execution/{id}/output requests where decryption with the stored Shared_Key fails
 - Log decryption failures with execution_id context (excluding key material)
@@ -1527,7 +1544,7 @@ def test_execution_id_uniqueness(requests):
     execution_ids = [generate_execution_id(req) for req in requests]
     assert len(execution_ids) == len(set(execution_ids))
 
-# Feature: github-actions-remote-executor, Property 128: HPKE Encrypt-Decrypt Round-Trip for Execute
+# Feature: github-actions-remote-executor, Property 128: PQ Hybrid Encrypt-Decrypt Round-Trip for Execute
 @given(st.fixed_dictionaries({
     'repository_url': st.from_regex(r'https://github\.com/[a-z]+/[a-z]+', fullmatch=True),
     'commit_hash': st.from_regex(r'[0-9a-f]{40}', fullmatch=True),
@@ -1535,13 +1552,15 @@ def test_execution_id_uniqueness(requests):
     'github_token': st.text(min_size=1, max_size=100),
     'oidc_token': st.text(min_size=1, max_size=500),
 }))
-def test_hpke_encrypt_decrypt_round_trip(payload):
-    """For any valid execution request payload, HPKE encrypt then decrypt should produce the original"""
+def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
+    """For any valid execution request payload, PQ hybrid encrypt then decrypt should produce the original"""
     encryption_manager = EncryptionManager()
     server_pub_key = encryption_manager.server_public_key
-    # Client side: derive shared key and encrypt
+    # Client side: parse composite key, perform X25519 ECDH + ML-KEM-768 encapsulation,
+    # combine via HKDF-SHA256, encrypt payload
     encrypted, client_pub_key = client_encrypt(payload, server_pub_key)
-    # Server side: derive same shared key and decrypt
+    # Server side: parse client_pub_key, perform X25519 ECDH + ML-KEM-768 decapsulation,
+    # combine via HKDF-SHA256, decrypt payload
     decrypted, shared_key = encryption_manager.decrypt_request(encrypted, client_pub_key)
     assert decrypted == payload
 ```
@@ -1567,20 +1586,20 @@ def test_hpke_encrypt_decrypt_round_trip(payload):
 - Test 401 vs 403 distinction: invalid tokens → 401, valid token from unauthorized repo → 403
 - Test /health and /attest endpoint accessibility without authentication
 
-**HPKE Encryption Testing**
-- Unit tests: Server keypair generation at startup, keypair held in memory only, HPKE key derivation, encrypt/decrypt round-trip, decryption failure handling, Encryption_Context storage and cleanup
+**PQ Hybrid Encryption Testing**
+- Unit tests: Composite server keypair generation (X25519 + ML-KEM-768) at startup, keypair held in memory only, PQ_Hybrid_KEM key derivation (X25519 ECDH + ML-KEM-768 decapsulation + HKDF-SHA256), encrypt/decrypt round-trip, decryption failure handling, Encryption_Context storage and cleanup, length-prefixed serialization/deserialization of composite keys, SHA-256 fingerprint computation
 - Property tests:
   - Server keypair consistency across requests (Property 122)
-  - HPKE encrypt-decrypt round-trip for /execute (Property 128)
+  - PQ Hybrid encrypt-decrypt round-trip for /execute (Property 128)
   - Execute response encryption round-trip (Property 132)
   - Output request-response encryption round-trip (Property 133)
   - Decryption failure returns HTTP 400 (Property 129)
   - OIDC token extracted from decrypted body (Property 130)
   - Encryption context lifecycle (Property 131)
   - Missing encryption context returns HTTP 400 (Property 134)
-  - Server public key serialization round-trip (Property 127)
+  - Server public key serialization round-trip with SHA-256 fingerprint verification (Property 127)
   - Nonce passthrough in attestation (Property 126)
-  - Attest attestation contains server public key (Property 124)
+  - Attest attestation contains server public key fingerprint (Property 124)
   - Non-attest attestation excludes server public key (Property 125)
   - Encryption exemption for non-context endpoints (Property 135)
   - Attest attestation excludes user data (Property 136)
@@ -1599,8 +1618,8 @@ def test_hpke_encrypt_decrypt_round_trip(payload):
 - Property tests: Random output sizes, offset values, concurrent access
 
 **Security Testing**
-- Unit tests: Path traversal attempts, token handling, Docker container security constraints, HPKE key generation, Shared_Key not persisted to disk, Server_Keypair not persisted to disk, private key material not logged
-- Property tests: Random input validation scenarios, container isolation verification, HPKE encrypt/decrypt round-trips with random payloads, decryption failure on corrupted ciphertext
+- Unit tests: Path traversal attempts, token handling, Docker container security constraints, PQ_Hybrid_KEM composite key generation, Shared_Key not persisted to disk, Server_Keypair not persisted to disk, private key material and decapsulation key material not logged
+- Property tests: Random input validation scenarios, container isolation verification, PQ_Hybrid_KEM encrypt/decrypt round-trips with random payloads, decryption failure on corrupted ciphertext
 
 **Configuration Testing**
 - Unit tests: Specific missing config, invalid values
@@ -1609,7 +1628,7 @@ def test_hpke_encrypt_decrypt_round_trip(payload):
 ### Integration Testing
 
 **End-to-End Scenarios**:
-1. Complete execution flow: attest → HPKE key exchange → encrypted request → attestation → container creation → execution → encrypted output retrieval → container removal
+1. Complete execution flow: attest → PQ_Hybrid_KEM key exchange → encrypted request → attestation → container creation → execution → encrypted output retrieval → container removal
 2. Error scenarios: decryption failure, authentication failure, timeout, file not found, Docker daemon unavailable, missing encryption context
 3. Concurrent execution: multiple simultaneous encrypted requests in separate Docker containers
 4. Rate limiting: exceeding limits from single IP
@@ -1646,12 +1665,12 @@ def test_hpke_encrypt_decrypt_round_trip(payload):
 - Token extraction attempts
 - Resource exhaustion attacks
 - Input validation bypass attempts
-- HPKE replay attacks (reusing encrypted payloads)
+- PQ_Hybrid_KEM replay attacks (reusing encrypted payloads)
 - Encryption context manipulation (using wrong execution_id)
 - Unencrypted request injection on encrypted endpoints
 
 **Compliance Testing**:
-- Verify no sensitive data in logs (including private key material and Shared_Keys)
+- Verify no sensitive data in logs (including private key material, decapsulation key material, and Shared_Keys)
 - Verify no sensitive data in error responses
 - Verify proper cleanup of temporary files
 - Verify attestation signature validity
@@ -1923,6 +1942,8 @@ The project maintains two separate Python dependency configurations to ensure th
   - uvicorn: ASGI server for running FastAPI
   - requests: HTTP client for GitHub API calls
   - docker: Docker SDK for Python, used to manage Execution_Containers (create, run, remove)
+  - cryptography: Provides X25519 key generation, ECDH key exchange, HKDF-SHA256 key derivation, and AES-256-GCM symmetric encryption
+  - wolfcrypt-py: ML-KEM-768 post-quantum key encapsulation (FIPS 203) for PQ_Hybrid_KEM key exchange via `wolfcrypt.ciphers` module (`MlKemType`, `MlKemPrivate`, `MlKemPublic`)
   - PyJWT[crypto]: JWT decoding and JWKS-based signature verification for OIDC token validation (includes cryptography dependency)
 - Development/testing dependencies:
   - hypothesis: Property-based testing library
@@ -1965,7 +1986,7 @@ The Python dependency installation is split across two phases:
 
 3. **Installation Verification:**
    - The config.sh script verifies critical packages are importable
-   - Example: `python3.11 -c "import fastapi"`, `python3.11 -c "import uvicorn"`, `python3.11 -c "import requests"`, `python3.11 -c "import docker"`, `python3.11 -c "import jwt"`
+   - Example: `python3.11 -c "import fastapi"`, `python3.11 -c "import uvicorn"`, `python3.11 -c "import requests"`, `python3.11 -c "import docker"`, `python3.11 -c "import jwt"`, `python3.11 -c "import wolfcrypt"`
    - If verification fails, the KIWI build fails with an error
    - Successful verification is logged for build audit trail
 
@@ -2994,6 +3015,8 @@ If automated cleanup fails:
 - uvicorn: ASGI server
 - requests: HTTP client for GitHub API
 - docker: Docker SDK for Python, used to manage Execution_Containers
+- cryptography: X25519 key generation, ECDH, HKDF-SHA256, AES-256-GCM for PQ_Hybrid_KEM
+- wolfcrypt-py: ML-KEM-768 post-quantum key encapsulation (FIPS 203) via `wolfcrypt.ciphers` module (`MlKemType`, `MlKemPrivate`, `MlKemPublic`)
 - PyJWT[crypto]: JWT decoding and JWKS-based signature verification for OIDC token validation
 - Development/test dependencies (hypothesis, pytest, pytest-asyncio, httpx) if included
 - Script dependencies from scripts/pyproject.toml (boto3, paramiko) are NOT installed in the image
@@ -3013,7 +3036,7 @@ The KIWI image build process installs Python dependencies using a two-phase appr
 
 3. **Installation Verification:**
    - After installation, the script verifies that key packages are importable
-   - Checks that fastapi, uvicorn, requests, docker, and jwt (PyJWT) are available
+   - Checks that fastapi, uvicorn, requests, docker, jwt (PyJWT), and wolfcrypt are available
    - Logs installation results for debugging
 
 4. **System Python Environment:**
@@ -3037,10 +3060,10 @@ The dependency installation is split across two scripts:
   - Enables the Docker service using `systemctl enable docker`
   - Verifies pre-downloaded wheels exist at /tmp/kiwi-build/wheels/
   - Installs from local wheels using `pip3 install --no-index --find-links`
-  - Verifies critical packages are importable (fastapi, uvicorn, requests, docker, jwt)
+  - Verifies critical packages are importable (fastapi, uvicorn, requests, docker, jwt, wolfcrypt)
   - Loads the Container_Image tar archive into the local Docker image store using `docker load`
   - Installs from local wheels using `pip3 install --no-index --find-links`
-  - Verifies critical packages are importable (fastapi, uvicorn, requests, docker, jwt)
+  - Verifies critical packages are importable (fastapi, uvicorn, requests, docker, jwt, wolfcrypt)
 
 This approach ensures that the remote executor service has all required dependencies available when the AMI is launched, without requiring network access during the KIWI image build phase.
 
@@ -4505,7 +4528,7 @@ Save Infrastructure State (infrastructure_state.json)
 
 ### HTTP-Only Access (Default)
 
-By default, the target instance has no SSH access. Unlike the build instance (which requires SSH for tool installation and AMI conversion), the deployed instance is accessed exclusively through the Remote Executor HTTP API on port 8080, which is open to the world (0.0.0.0/0). Authentication is handled at the application layer via OIDC tokens and HPKE encryption. When debug SSH access is enabled, port 22 is additionally opened from the deployer's IP — see [PART 5: DEBUG DESIGN](#part-5-debug-design) for details.
+By default, the target instance has no SSH access. Unlike the build instance (which requires SSH for tool installation and AMI conversion), the deployed instance is accessed exclusively through the Remote Executor HTTP API on port 8080, which is open to the world (0.0.0.0/0). Authentication is handled at the application layer via OIDC tokens and PQ_Hybrid_KEM encryption (X25519 + ML-KEM-768). When debug SSH access is enabled, port 22 is additionally opened from the deployer's IP — see [PART 5: DEBUG DESIGN](#part-5-debug-design) for details.
 
 ### IMDSv2 Enforcement
 

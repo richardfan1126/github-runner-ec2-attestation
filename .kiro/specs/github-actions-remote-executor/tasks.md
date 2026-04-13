@@ -2218,6 +2218,170 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 112. Final checkpoint - Ensure all updated tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 113. Add wolfcrypt-py dependency and update KIWI config verification
+  - [ ] 113.1 Add wolfcrypt-py to pyproject.toml dependencies
+    - Add `wolfcrypt-py` to the `dependencies` list in pyproject.toml alongside existing packages
+    - _Requirements: 12.9, 36.4_
+
+  - [ ] 113.2 Update kiwi-descriptions/config.sh to verify wolfcrypt is importable
+    - Add `python3.11 -c "import wolfcrypt" || { echo "ERROR: wolfcrypt not importable"; exit 1; }` after the existing critical package verification lines
+    - _Requirements: 12.21_
+
+- [ ] 114. Rewrite EncryptionManager for PQ Hybrid KEM (X25519 + ML-KEM-768)
+  - [ ] 114.1 Rewrite EncryptionManager.__init__ to generate composite Server_Keypair
+    - Replace the single X25519 keypair generation with composite keypair: generate an X25519 key pair using `cryptography` and an ML-KEM-768 key pair using `wolfcrypt.ciphers.MlKemPrivate.make_key(MlKemType.ML_KEM_768)`
+    - Store both private keys (X25519 private key + ML-KEM-768 decapsulation key) in memory
+    - Serialize the composite Server_Public_Key as length-prefixed concatenation: 4-byte big-endian length prefix + 32-byte X25519 public key + 4-byte big-endian length prefix + 1184-byte ML-KEM-768 encapsulation key
+    - Log keypair generation at INFO level without logging private key or decapsulation key material
+    - _Requirements: 36.1, 36.2, 36.3, 36.4, 36.5, 36.6_
+
+  - [ ] 114.2 Implement server_public_key property with length-prefixed serialization
+    - Return the serialized composite Server_Public_Key (length-prefixed X25519 pubkey + ML-KEM-768 encapsulation key)
+    - _Requirements: 36.6_
+
+  - [ ] 114.3 Implement server_public_key_fingerprint property
+    - Compute and return SHA-256 digest of the serialized Server_Public_Key
+    - This fingerprint is used in the attestation document's public_key field because the composite key exceeds the 1024-byte field limit
+    - _Requirements: 39.1, 39.3_
+
+  - [ ] 114.4 Rewrite decrypt_request for PQ_Hybrid_KEM key derivation
+    - Parse the Client_Public_Key (length-prefixed: 4-byte big-endian length + X25519 public key + 4-byte big-endian length + ML-KEM-768 ciphertext)
+    - Perform X25519 ECDH using the server's X25519 private key and the client's X25519 public key
+    - Perform ML-KEM-768 decapsulation using the server's ML-KEM-768 decapsulation key and the client's ML-KEM-768 ciphertext
+    - Combine both shared secrets via HKDF-SHA256 with info label `b"pq-hybrid-shared-key"` to derive the 256-bit Shared_Key
+    - Decrypt the encrypted payload using AES-256-GCM with the derived Shared_Key
+    - Return (decrypted_dict, shared_key_bytes)
+    - Raise ValueError on invalid Client_Public_Key (bad X25519 or ML-KEM-768 components) or decryption failure
+    - _Requirements: 40.1, 40.2, 40.3, 40.4, 40.5, 40.6, 40.11_
+
+  - [ ] 114.5 Update HKDF info label from b"hpke-shared-key" to b"pq-hybrid-shared-key"
+    - Change the `_HKDF_INFO` constant to `b"pq-hybrid-shared-key"` for domain separation
+    - _Requirements: 40.11_
+
+- [ ] 115. Checkpoint - Ensure EncryptionManager compiles and basic tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 116. Update /attest endpoint for composite key response
+  - [ ] 116.1 Update /attest handler to return composite Server_Public_Key in JSON body
+    - Return JSON with `attestation_document` (base64-encoded CBOR) and `server_public_key` (base64-encoded composite key)
+    - Pass the SHA-256 fingerprint (from `encryption_manager.server_public_key_fingerprint`) as the `public_key` parameter to `generate_attestation`
+    - _Requirements: 37.4, 37.6, 39.1_
+
+  - [ ] 116.2 Verify /attest attestation document includes fingerprint, not full key
+    - Ensure the attestation document's public_key field contains the SHA-256 fingerprint of the composite Server_Public_Key, not the full key
+    - Ensure the attestation document does NOT include user_data
+    - _Requirements: 37.9, 37.10, 39.1, 39.3_
+
+- [ ] 117. Update /execute endpoint for new Client_Public_Key format
+  - [ ] 117.1 Update /execute handler to pass length-prefixed Client_Public_Key to decrypt_request
+    - The client_public_key field now contains a length-prefixed concatenation of the client's X25519 public key + ML-KEM-768 ciphertext (instead of a raw 32-byte X25519 key)
+    - No handler changes needed beyond ensuring the base64-decoded bytes are passed directly to `decrypt_request` (the new `decrypt_request` handles parsing internally)
+    - _Requirements: 40.2, 40.3_
+
+- [ ] 118. Update encryption_test_helpers.py for PQ Hybrid KEM
+  - [ ] 118.1 Rewrite EncryptionTestContext for composite key exchange
+    - Generate a client X25519 key pair and perform X25519 ECDH against the server's X25519 public key (extracted from the composite Server_Public_Key)
+    - Perform ML-KEM-768 encapsulation against the server's ML-KEM-768 encapsulation key (extracted from the composite Server_Public_Key)
+    - Combine both shared secrets via HKDF-SHA256 with info label `b"pq-hybrid-shared-key"` to derive the Shared_Key
+    - Build the client_public_key as length-prefixed concatenation of the client's X25519 public key + ML-KEM-768 ciphertext
+    - Update `_encrypt_with_shared_key` to use the new Shared_Key
+    - _Requirements: 40.1, 40.2, 40.11_
+
+  - [ ] 118.2 Update make_encrypted_execute_request to use composite client_public_key
+    - Ensure the `client_public_key` field in the outer JSON uses the length-prefixed composite value
+    - _Requirements: 40.2_
+
+- [ ] 119. Update all existing encryption property tests for PQ Hybrid KEM
+  - [ ] 119.1 Update test_encryption_properties.py for PQ Hybrid round-trip
+    - Update existing HPKE-based property tests to use PQ Hybrid KEM (X25519 + ML-KEM-768)
+    - Update HKDF info label references from `b"hpke-shared-key"` to `b"pq-hybrid-shared-key"`
+    - Ensure all property tests use the new composite key format
+    - _Requirements: 40.1, 40.3, 40.4, 40.11_
+
+  - [ ] 119.2 Write property test for Server Keypair Consistency
+    - **Property 122: Server Keypair Consistency**
+    - For any two calls to `server_public_key` on the same EncryptionManager instance, the composite key and its SHA-256 fingerprint should be identical
+    - **Validates: Requirements 36.3, 37.4, 37.6**
+
+  - [ ] 119.3 Write property test for Server Public Key Serialization Round-Trip
+    - **Property 127: Server Public Key Serialization Round-Trip**
+    - For any Server_Public_Key, serializing as length-prefixed concatenation, computing SHA-256 fingerprint, then deserializing and recomputing fingerprint should produce the same result; deserialized components should be usable for PQ_Hybrid_KEM key exchange
+    - **Validates: Requirements 36.6, 37.6, 37.11, 39.3, 39.4**
+
+  - [ ] 119.4 Write property test for PQ Hybrid Encrypt-Decrypt Round-Trip for Execute
+    - **Property 128: PQ Hybrid Encrypt-Decrypt Round-Trip for Execute**
+    - For any valid execution request payload, client-side PQ_Hybrid_KEM encryption followed by server-side decryption should produce the original payload
+    - **Validates: Requirements 40.1, 40.3, 40.4, 40.8, 40.11**
+
+  - [ ] 119.5 Write property test for Decryption Failure Returns HTTP 400
+    - **Property 129: Decryption Failure Returns HTTP 400**
+    - For any request with invalid encrypted payload (random bytes, wrong key, corrupted ciphertext), the server should return HTTP 400
+    - **Validates: Requirements 40.5, 42.7**
+
+  - [ ] 119.6 Write property test for Execute Response Encryption Round-Trip
+    - **Property 132: Execute Response Encryption Round-Trip**
+    - For any /execute response payload, server encrypts with Shared_Key and client decrypts with same Shared_Key, producing original content
+    - **Validates: Requirements 41.3, 42.1, 42.8**
+
+  - [ ] 119.7 Write property test for Output Request-Response Encryption Round-Trip
+    - **Property 133: Output Request-Response Encryption Round-Trip**
+    - For any /execution/{id}/output request and response, client encrypts request, server decrypts, processes, encrypts response, client decrypts — producing original content
+    - **Validates: Requirements 41.4, 41.5, 42.2, 42.3, 42.4, 42.8**
+
+- [ ] 120. Update all existing encryption unit tests for PQ Hybrid KEM
+  - [ ] 120.1 Update test_encryption_unit.py for composite keypair
+    - Update unit tests to verify composite keypair generation (X25519 + ML-KEM-768)
+    - Test length-prefixed serialization/deserialization of composite keys
+    - Test SHA-256 fingerprint computation of composite Server_Public_Key
+    - Test PQ_Hybrid_KEM key derivation (X25519 ECDH + ML-KEM-768 decapsulation + HKDF-SHA256)
+    - Test encrypt/decrypt round-trip with PQ hybrid derived Shared_Key
+    - Test decryption failure with invalid Client_Public_Key (bad X25519 or ML-KEM-768 components)
+    - Test Encryption_Context storage and cleanup (unchanged logic, but verify with PQ-derived keys)
+    - _Requirements: 36.1, 36.4, 36.6, 39.1, 39.3, 40.1, 40.3, 40.4, 40.5, 40.6, 40.11_
+
+  - [ ] 120.2 Update test_encryption_context_lifecycle_properties.py for PQ Hybrid KEM
+    - Update Encryption_Context lifecycle tests to use PQ hybrid derived Shared_Keys
+    - **Property 131: Encryption Context Lifecycle**
+    - **Validates: Requirements 41.1, 41.2, 41.6**
+
+  - [ ] 120.3 Update test_encryption_exemption_properties.py for PQ Hybrid KEM
+    - Verify /attest, /health, /metrics still return unencrypted responses with PQ hybrid EncryptionManager
+    - **Property 135: Encryption Exemption for Non-Context Endpoints**
+    - **Validates: Requirements 43.1, 43.2, 43.3, 43.4**
+
+- [ ] 121. Update /attest endpoint property tests for PQ Hybrid KEM
+  - [ ] 121.1 Update test_attest_endpoint_properties.py for composite key response
+    - Update tests to verify /attest returns JSON with `server_public_key` (base64-encoded composite key) and `attestation_document`
+    - **Property 123: Attest Endpoint No Authentication**
+    - **Property 124: Attest Attestation Contains Server Public Key Fingerprint**
+    - **Property 125: Non-Attest Attestation Excludes Server Public Key**
+    - **Property 126: Nonce Passthrough in Attestation**
+    - **Property 136: Attest Attestation Excludes User Data**
+    - **Validates: Requirements 37.2, 37.4, 37.5, 37.6, 37.9, 37.10, 39.1, 39.2, 39.3, 2.21**
+
+- [ ] 122. Update /execute and /output endpoint property tests for PQ Hybrid KEM
+  - [ ] 122.1 Update test_execute_encryption_properties.py for PQ Hybrid KEM
+    - Update all /execute encryption property tests to use PQ Hybrid KEM key exchange
+    - Update EncryptionTestContext usage to use composite keys
+    - **Property 130: OIDC Token Extracted from Decrypted Body**
+    - **Property 134: Missing Encryption Context Returns HTTP 400**
+    - **Validates: Requirements 40.6, 40.9, 42.6, 2.1, 2.2**
+
+- [ ] 123. Update integration tests for PQ Hybrid KEM
+  - [ ] 123.1 Update integration tests for end-to-end PQ hybrid encrypted flow
+    - Update integration tests to use PQ Hybrid KEM key exchange for /execute and /execution/{id}/output
+    - Verify attestation documents, execution results, and output integrity through PQ hybrid encryption
+    - _Requirements: 36.1, 37.1, 40.1, 41.1, 42.1, 42.4_
+
+  - [ ] 123.2 Update integration tests for error scenarios with PQ Hybrid KEM
+    - Test decryption failure on /execute with wrong PQ hybrid key
+    - Test invalid Client_Public_Key (bad ML-KEM-768 ciphertext)
+    - Test missing Encryption_Context on /execution/{id}/output
+    - _Requirements: 40.5, 40.6, 42.6, 42.7_
+
+- [ ] 124. Final checkpoint - Ensure all PQ Hybrid KEM tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -2278,8 +2442,11 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Cleanup script uses subprocess to invoke Terraform and boto3 for AWS API calls (deregister AMI, describe resources)
 - Cleanup verification checks for EC2 instances, AMIs, and EBS snapshots using project-specific tags and resource IDs
 - HPKE encrypted communication (tasks 91-104) adds end-to-end encryption for /execute and /execution/{id}/output using Hybrid Public Key Encryption (RFC 9180)
-- The `cryptography` library (already included via PyJWT[crypto]) provides HPKE and X25519 key generation support
-- Server_Keypair is generated once at startup and held in memory; never persisted to disk
+- PQ Hybrid KEM migration (tasks 113-124) replaces HPKE with PQ_Hybrid_KEM (X25519 + ML-KEM-768) for post-quantum resistance; the `wolfcrypt-py` package (via `wolfcrypt.ciphers` module: `MlKemType`, `MlKemPrivate`, `MlKemPublic`) provides FIPS 203 ML-KEM-768 key generation, encapsulation, and decapsulation
+- The `cryptography` library (already included via PyJWT[crypto]) provides X25519 key generation support; `wolfcrypt-py` provides ML-KEM-768 support
+- Server_Keypair is a composite key (X25519 + ML-KEM-768) generated once at startup and held in memory; never persisted to disk
+- Server_Public_Key is serialized as length-prefixed concatenation (4-byte big-endian length + component bytes) of X25519 public key (32 bytes) + ML-KEM-768 encapsulation key (1184 bytes)
+- SHA-256 fingerprint of the composite Server_Public_Key is used in attestation documents because the composite key exceeds the 1024-byte public_key field limit
 - /attest is the only endpoint that includes Server_Public_Key in attestation documents; /execute and /output attestations exclude it
 - /attest attestation documents do NOT include user_data — only public_key and optional nonce are included
 - OIDC tokens move from Authorization header to encrypted request body `oidc_token` field on /execute and /execution/{id}/output
