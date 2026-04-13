@@ -424,14 +424,19 @@ class RemoteExecutorCaller:
         return data
 
     def attest(self) -> bytes:
-        """GET /attest?nonce={nonce} - retrieve server attestation and public key.
+        """GET /attest?nonce={nonce} - retrieve server attestation and composite public key.
 
         Validates the returned attestation document (COSE Sign1 + PKI + PCR + nonce).
-        Extracts the Server_Public_Key from the attestation's public_key field.
-        Initializes self._encryption (ClientEncryption) and derives the Shared_Key.
+        Extracts the composite Server_Public_Key from the `server_public_key` field
+        in the JSON response body (base64-encoded).
+        Verifies the SHA-256 fingerprint of the composite key matches the `public_key`
+        field in the attestation document.
+        Initializes self._encryption (ClientEncryption) and derives the Shared_Key
+        via PQ_Hybrid_KEM.
 
-        Returns the raw server public key bytes.
-        Raises CallerError on validation failure, missing public_key, or connection error.
+        Returns the raw composite server public key bytes.
+        Raises CallerError on validation failure, missing fields, fingerprint mismatch,
+        or connection error.
         """
         nonce = self.generate_nonce()
         url = f"{self.server_url}/attest"
@@ -463,27 +468,45 @@ class RemoteExecutorCaller:
         data = response.json()
         attestation_b64 = data.get("attestation_document", "")
 
+        # Extract composite server public key from JSON response
+        server_public_key_b64 = data.get("server_public_key")
+        if not server_public_key_b64:
+            raise CallerError(
+                message="Attest response missing server_public_key field",
+                phase="attest",
+                details={"response_fields": list(data.keys())},
+            )
+        try:
+            composite_key_bytes = base64.b64decode(server_public_key_b64)
+        except Exception as exc:
+            raise CallerError(
+                message=f"Failed to base64-decode server_public_key: {exc}",
+                phase="attest",
+                details={"error": str(exc)},
+            )
+
         # Validate attestation (COSE Sign1 + PKI + PCR + nonce)
         payload_doc = self.validate_attestation(attestation_b64, expected_nonce=nonce)
 
-        # Extract server public key
-        server_public_key = payload_doc.get("public_key")
-        if not server_public_key:
+        # Verify composite key fingerprint against attestation public_key field
+        attestation_fingerprint = payload_doc.get("public_key")
+        if not attestation_fingerprint:
             raise CallerError(
-                message="Attestation document missing public_key field",
+                message="Attestation document missing public_key field for fingerprint verification",
                 phase="attest",
                 details={"attestation_fields": list(payload_doc.keys())},
             )
+        ClientEncryption.verify_server_key_fingerprint(composite_key_bytes, attestation_fingerprint)
 
-        # Initialize encryption and derive shared key
+        # Initialize encryption and derive shared key using composite key
         self._encryption = ClientEncryption()
-        self._encryption.derive_shared_key(server_public_key)
+        self._encryption.derive_shared_key(composite_key_bytes)
 
         # Store nonce for later reference
         self._attest_nonce = nonce
 
-        logger.info("Server attestation validated, HPKE key exchange complete")
-        return server_public_key
+        logger.info("Server attestation validated, PQ_Hybrid_KEM key exchange complete")
+        return composite_key_bytes
 
     def execute(
         self,

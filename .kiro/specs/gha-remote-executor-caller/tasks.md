@@ -759,24 +759,24 @@ Implement the client-side caller for the Remote Executor system: a Python script
     - Raise `CallerError` if `derive_shared_key` has not been called (no ML-KEM-768 ciphertext available)
     - _Requirements: 12.3, 14.4, 14.6_
 
-- [ ] 43. Update `attest` method for composite key and fingerprint verification
-  - [ ] 43.1 Update `attest` method to handle new `/attest` response format
+- [x] 43. Update `attest` method for composite key and fingerprint verification
+  - [x] 43.1 Update `attest` method to handle new `/attest` response format
     - Extract both `attestation_document` and `server_public_key` from JSON response
     - Base64-decode `server_public_key` to get composite key bytes
     - Raise `CallerError(phase="attest")` if `server_public_key` field is missing
     - _Requirements: 11.4, 11A.1, 11A.3_
 
-  - [ ] 43.2 Add fingerprint verification to `attest` method
+  - [x] 43.2 Add fingerprint verification to `attest` method
     - After validating attestation, extract `public_key` field from attestation payload (now contains SHA-256 fingerprint)
     - Call `ClientEncryption.verify_server_key_fingerprint(composite_key_bytes, attestation_fingerprint)`
     - Raise `CallerError(phase="attest")` on fingerprint mismatch
     - _Requirements: 11A.2, 11A.4_
 
-  - [ ] 43.3 Update `attest` to pass composite key to `derive_shared_key`
+  - [x] 43.3 Update `attest` to pass composite key to `derive_shared_key`
     - Pass the full composite key bytes to `ClientEncryption.derive_shared_key()` instead of raw X25519 bytes
     - _Requirements: 13.1, 13.2_
 
-  - [ ] 43.4 Write unit tests for updated attest method
+  - [x] 43.4 Write unit tests for updated attest method
     - Test attest extracts `server_public_key` from JSON response (Req 11.4)
     - Test missing `server_public_key` in JSON response raises `CallerError` (Req 11A.3)
     - Test fingerprint mismatch raises `CallerError` (Req 11A.4)

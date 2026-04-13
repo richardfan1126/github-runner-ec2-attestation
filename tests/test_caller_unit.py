@@ -972,17 +972,33 @@ class TestNonceVerificationEdgeCases:
 
 class TestAttestMethod:
     """Unit tests for the attest method.
-    Validates: Requirements 11.2, 11.3, 11.7, 11.8, 11.9"""
+    Validates: Requirements 11.2, 11.3, 11.4, 11.7, 11.8, 11.9, 11A.1, 11A.2, 11A.3, 11A.4, 13.1, 13.6"""
 
-    def _make_attest_response(self, payload_dict: dict) -> dict:
-        """Build a mock /attest JSON response with a COSE Sign1 attestation document."""
+    def _make_composite_key(self, x25519_pub: bytes | None = None, mlkem_encap_key: bytes | None = None) -> bytes:
+        """Build a length-prefixed composite server key."""
+        import struct
+        if x25519_pub is None:
+            x25519_pub = os.urandom(32)
+        if mlkem_encap_key is None:
+            mlkem_encap_key = os.urandom(1184)
+        return (
+            struct.pack(">I", len(x25519_pub)) + x25519_pub
+            + struct.pack(">I", len(mlkem_encap_key)) + mlkem_encap_key
+        )
+
+    def _make_attest_response(self, payload_dict: dict, composite_key_bytes: bytes | None = None) -> dict:
+        """Build a mock /attest JSON response with attestation document and server_public_key."""
         payload_bytes = cbor2.dumps(payload_dict)
         protected_header = cbor2.dumps({1: -35})
         cose_array = [protected_header, {}, payload_bytes, b'\x00' * 96]
         b64 = base64.b64encode(cbor2.dumps(cose_array)).decode("ascii")
-        return {"attestation_document": b64}
+        result = {"attestation_document": b64}
+        if composite_key_bytes is not None:
+            result["server_public_key"] = base64.b64encode(composite_key_bytes).decode("ascii")
+        return result
 
-    def _make_valid_payload(self, nonce: str, public_key: bytes = b'\x01' * 32) -> dict:
+    def _make_valid_payload(self, nonce: str, fingerprint: bytes = b'\x01' * 32) -> dict:
+        """Build a valid attestation payload. public_key is now a SHA-256 fingerprint."""
         return {
             "module_id": "test-module",
             "digest": "SHA384",
@@ -991,19 +1007,20 @@ class TestAttestMethod:
             "certificate": b'\x00' * 32,
             "cabundle": [b'\x00' * 32],
             "nonce": nonce,
-            "public_key": public_key,
+            "public_key": fingerprint,
         }
 
-    def test_successful_attest_extracts_public_key_and_initializes_encryption(self):
-        """Successful attest extracts server public key and initializes encryption.
-        Validates: Requirements 11.4, 11.5, 11.6, 12.1, 13.1"""
+    def test_successful_attest_extracts_server_public_key_from_json_response(self):
+        """Successful attest extracts server_public_key from JSON response and initializes encryption.
+        Validates: Requirements 11.4, 11A.1, 11A.2, 13.1"""
+        import hashlib
         caller = _make_caller()
-        server_pub_key = os.urandom(32)
+        composite_key = self._make_composite_key()
+        fingerprint = hashlib.sha256(composite_key).digest()
 
-        # We need to mock generate_nonce, requests.get, and validate_attestation
         fixed_nonce = "a1b2c3d4" * 8
-        payload = self._make_valid_payload(fixed_nonce, public_key=server_pub_key)
-        mock_response_data = self._make_attest_response(payload)
+        payload = self._make_valid_payload(fixed_nonce, fingerprint=fingerprint)
+        mock_response_data = self._make_attest_response(payload, composite_key)
 
         with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
             with patch("call_remote_executor.requests.get") as mock_get:
@@ -1012,21 +1029,43 @@ class TestAttestMethod:
                 mock_resp.json.return_value = mock_response_data
 
                 with patch.object(caller, "validate_attestation", return_value=payload):
-                    result = caller.attest()
+                    with patch.object(ClientEncryption, "derive_shared_key"):
+                        result = caller.attest()
 
-        assert result == server_pub_key
+        assert result == composite_key
         assert caller._attest_nonce == fixed_nonce
         assert hasattr(caller, "_encryption")
         assert isinstance(caller._encryption, ClientEncryption)
 
-    def test_missing_public_key_raises_caller_error(self):
-        """Missing public_key in attestation raises CallerError with phase 'attest'.
-        Validates: Requirement 11.7"""
+    def test_missing_server_public_key_in_json_raises_caller_error(self):
+        """Missing server_public_key in JSON response raises CallerError with phase 'attest'.
+        Validates: Requirement 11A.3"""
         caller = _make_caller()
         fixed_nonce = "a1b2c3d4" * 8
         payload = self._make_valid_payload(fixed_nonce)
-        payload.pop("public_key")  # Remove public_key
-        mock_response_data = self._make_attest_response(payload)
+        # Build response WITHOUT server_public_key field
+        mock_response_data = self._make_attest_response(payload, composite_key_bytes=None)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with pytest.raises(CallerError) as exc_info:
+                    caller.attest()
+                assert exc_info.value.phase == "attest"
+                assert "server_public_key" in exc_info.value.message.lower()
+
+    def test_missing_public_key_fingerprint_in_attestation_raises_caller_error(self):
+        """Missing public_key (fingerprint) in attestation payload raises CallerError.
+        Validates: Requirement 11.7"""
+        caller = _make_caller()
+        composite_key = self._make_composite_key()
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce)
+        payload.pop("public_key")  # Remove fingerprint field
+        mock_response_data = self._make_attest_response(payload, composite_key)
 
         with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
             with patch("call_remote_executor.requests.get") as mock_get:
@@ -1040,14 +1079,15 @@ class TestAttestMethod:
                     assert exc_info.value.phase == "attest"
                     assert "public_key" in exc_info.value.message.lower()
 
-    def test_null_public_key_raises_caller_error(self):
-        """Null public_key in attestation raises CallerError with phase 'attest'.
+    def test_null_public_key_fingerprint_in_attestation_raises_caller_error(self):
+        """Null public_key (fingerprint) in attestation payload raises CallerError.
         Validates: Requirement 11.7"""
         caller = _make_caller()
+        composite_key = self._make_composite_key()
         fixed_nonce = "a1b2c3d4" * 8
         payload = self._make_valid_payload(fixed_nonce)
         payload["public_key"] = None
-        mock_response_data = self._make_attest_response(payload)
+        mock_response_data = self._make_attest_response(payload, composite_key)
 
         with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
             with patch("call_remote_executor.requests.get") as mock_get:
@@ -1059,6 +1099,83 @@ class TestAttestMethod:
                     with pytest.raises(CallerError) as exc_info:
                         caller.attest()
                     assert exc_info.value.phase == "attest"
+
+    def test_fingerprint_mismatch_raises_caller_error(self):
+        """Fingerprint mismatch between composite key and attestation raises CallerError.
+        Validates: Requirement 11A.4"""
+        caller = _make_caller()
+        composite_key = self._make_composite_key()
+        wrong_fingerprint = os.urandom(32)  # Random bytes, won't match SHA-256 of composite_key
+
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce, fingerprint=wrong_fingerprint)
+        mock_response_data = self._make_attest_response(payload, composite_key)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    with pytest.raises(CallerError) as exc_info:
+                        caller.attest()
+                    assert exc_info.value.phase == "attest"
+                    assert "fingerprint" in exc_info.value.message.lower()
+
+    def test_fingerprint_match_proceeds_to_key_derivation(self):
+        """Matching fingerprint proceeds to derive_shared_key call.
+        Validates: Requirement 11A.2"""
+        import hashlib
+        caller = _make_caller()
+        composite_key = self._make_composite_key()
+        fingerprint = hashlib.sha256(composite_key).digest()
+
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce, fingerprint=fingerprint)
+        mock_response_data = self._make_attest_response(payload, composite_key)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    with patch.object(ClientEncryption, "derive_shared_key") as mock_derive:
+                        caller.attest()
+                        mock_derive.assert_called_once_with(composite_key)
+
+    def test_invalid_composite_key_format_raises_caller_error(self):
+        """Invalid composite key format (wrong component sizes) raises CallerError.
+        Validates: Requirement 13.6"""
+        import hashlib
+        import struct
+        caller = _make_caller()
+        # Build an invalid composite key: wrong X25519 size (16 bytes instead of 32)
+        bad_x25519 = os.urandom(16)
+        mlkem_key = os.urandom(1184)
+        bad_composite = (
+            struct.pack(">I", len(bad_x25519)) + bad_x25519
+            + struct.pack(">I", len(mlkem_key)) + mlkem_key
+        )
+        fingerprint = hashlib.sha256(bad_composite).digest()
+
+        fixed_nonce = "a1b2c3d4" * 8
+        payload = self._make_valid_payload(fixed_nonce, fingerprint=fingerprint)
+        mock_response_data = self._make_attest_response(payload, bad_composite)
+
+        with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
+            with patch("call_remote_executor.requests.get") as mock_get:
+                mock_resp = mock_get.return_value
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_response_data
+
+                with patch.object(caller, "validate_attestation", return_value=payload):
+                    with pytest.raises(CallerError) as exc_info:
+                        caller.attest()
+                    # derive_shared_key calls parse_composite_server_key which validates sizes
+                    assert exc_info.value.phase in ("attest", "encryption")
 
     def test_connection_error_raises_caller_error(self):
         """Connection error raises CallerError with phase 'attest'.
@@ -1086,12 +1203,14 @@ class TestAttestMethod:
     def test_attest_does_not_include_authorization_header(self):
         """Attest request does not include Authorization header or auth credentials.
         Validates: Requirement 11.2"""
+        import hashlib
         caller = _make_caller()
         caller._oidc_token = "should-not-be-sent"
-        server_pub_key = os.urandom(32)
+        composite_key = self._make_composite_key()
+        fingerprint = hashlib.sha256(composite_key).digest()
         fixed_nonce = "a1b2c3d4" * 8
-        payload = self._make_valid_payload(fixed_nonce, public_key=server_pub_key)
-        mock_response_data = self._make_attest_response(payload)
+        payload = self._make_valid_payload(fixed_nonce, fingerprint=fingerprint)
+        mock_response_data = self._make_attest_response(payload, composite_key)
 
         with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
             with patch("call_remote_executor.requests.get") as mock_get:
@@ -1100,26 +1219,26 @@ class TestAttestMethod:
                 mock_resp.json.return_value = mock_response_data
 
                 with patch.object(caller, "validate_attestation", return_value=payload):
-                    caller.attest()
+                    with patch.object(ClientEncryption, "derive_shared_key"):
+                        caller.attest()
 
                 # Verify the GET call did not include auth headers
                 call_kwargs = mock_get.call_args
-                # requests.get was called with positional url and keyword params/timeout
-                # There should be no 'headers' kwarg with Authorization
                 if "headers" in (call_kwargs.kwargs if call_kwargs.kwargs else {}):
                     headers = call_kwargs.kwargs["headers"]
                     assert "Authorization" not in headers
-                # Also verify no auth kwarg
                 assert "auth" not in (call_kwargs.kwargs if call_kwargs.kwargs else {})
 
     def test_nonce_included_as_query_parameter(self):
         """Nonce is included as query parameter in the /attest request.
         Validates: Requirement 11.3"""
+        import hashlib
         caller = _make_caller()
-        server_pub_key = os.urandom(32)
+        composite_key = self._make_composite_key()
+        fingerprint = hashlib.sha256(composite_key).digest()
         fixed_nonce = "test-nonce-12345678"
-        payload = self._make_valid_payload(fixed_nonce, public_key=server_pub_key)
-        mock_response_data = self._make_attest_response(payload)
+        payload = self._make_valid_payload(fixed_nonce, fingerprint=fingerprint)
+        mock_response_data = self._make_attest_response(payload, composite_key)
 
         with patch.object(RemoteExecutorCaller, "generate_nonce", return_value=fixed_nonce):
             with patch("call_remote_executor.requests.get") as mock_get:
@@ -1128,7 +1247,8 @@ class TestAttestMethod:
                 mock_resp.json.return_value = mock_response_data
 
                 with patch.object(caller, "validate_attestation", return_value=payload):
-                    caller.attest()
+                    with patch.object(ClientEncryption, "derive_shared_key"):
+                        caller.attest()
 
                 call_kwargs = mock_get.call_args
                 assert call_kwargs.kwargs.get("params") == {"nonce": fixed_nonce}
