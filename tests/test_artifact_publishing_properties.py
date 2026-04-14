@@ -478,7 +478,7 @@ def test_workflow_file_structure():
     assert "GITHUB_TOKEN" in content, "Workflow must use GitHub token"
     
     # Validate attestation step
-    assert "attest-build-provenance@" in content, "Workflow must generate attestation"
+    assert "actions/attest@" in content or "attest-build-provenance@" in content, "Workflow must generate attestation"
     assert "subject-name" in content, "Attestation must include subject-name"
     assert "subject-digest" in content, "Attestation must include subject-digest"
     assert "push-to-registry: true" in content, "Attestation must be pushed to registry"
