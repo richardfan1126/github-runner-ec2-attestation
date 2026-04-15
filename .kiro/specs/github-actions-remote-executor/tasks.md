@@ -2382,6 +2382,48 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 124. Final checkpoint - Ensure all PQ Hybrid KEM tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 125. Move output attestation generation to run on every poll response
+  - [ ] 125.1 Update /execution/{id}/output handler in src/server.py to generate Output_Attestation_Document on every poll
+    - Move the output attestation generation block OUTSIDE the `if output_data.complete:` conditional so it executes for every poll response where output_data is available
+    - The canonical Script_Output concatenation (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`) must be computed for every poll, not just when complete
+    - When output_data is None (no output buffer yet), generate attestation using empty stdout, empty stderr, and None exit_code
+    - The `else` branch (no output yet) must also generate an Output_Attestation_Document with the empty Script_Output
+    - Ensure `output_attestation_document` field is present in every poll response regardless of execution status (running, completed, failed, timed_out)
+    - Ensure `attestation_error` field is included when attestation generation fails, with `output_attestation_document` set to null
+    - _Requirements: 6.4, 6.7, 6.8, 6.9, 6.11_
+
+- [ ] 126. Update property tests for output attestation on every poll
+  - [ ] 126.1 Update property test for Output Attestation Digest Integrity
+    - **Property 44: Output Attestation Digest Integrity**
+    - Update test to verify that the Output_Attestation_Document is generated on every poll response, not just when execution is complete
+    - Test with execution statuses: running, completed, failed, timed_out
+    - Verify the SHA-256 digest in user_data matches the current Script_Output at each poll regardless of status
+    - **Validates: Requirements 6.7, 6.9**
+
+  - [ ] 126.2 Update property test for Output Attestation Base64 Encoding
+    - **Property 45: Output Attestation Base64 Encoding**
+    - Update test to verify that output_attestation_document is a valid base64-encoded string on every poll response, not just when complete
+    - Test with execution statuses: running, completed, failed, timed_out
+    - **Validates: Requirements 6.8**
+
+  - [ ] 126.3 Update property test for Output Attestation Failure Graceful Degradation
+    - **Property 46: Output Attestation Failure Graceful Degradation**
+    - Update test to verify graceful degradation on every poll response regardless of execution status
+    - When attestation generation fails during a running/failed/timed_out poll, response must still include Script_Output with attestation_error field and output_attestation_document set to null
+    - **Validates: Requirements 6.11**
+
+- [ ] 127. Update unit tests for output endpoint attestation on every poll
+  - [ ] 127.1 Update unit tests in tests/test_server_unit.py for output attestation
+    - Add or update test cases to verify output_attestation_document is present in responses for running executions (not just completed)
+    - Add test case for failed execution status returning output_attestation_document
+    - Add test case for timed_out execution status returning output_attestation_document
+    - Add test case for early poll (no output buffer yet) returning output_attestation_document with empty Script_Output digest
+    - Verify attestation_error field is returned when attestation generation fails during non-complete polls
+    - _Requirements: 6.4, 6.7, 6.8, 6.9, 6.11_
+
+- [ ] 128. Checkpoint - Ensure all output attestation every-poll tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -2453,3 +2495,4 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - /execution/{id}/output changes from GET to POST to support encrypted request bodies
 - Encryption_Context (Shared_Key per execution_id) is stored in memory and cleaned up with execution records
 - /attest, /health, and /metrics remain unencrypted plain JSON endpoints
+- Output attestation every-poll change (tasks 125-128): Output_Attestation_Document is now generated on EVERY /execution/{id}/output poll response, not just when execution is complete; the SHA-256 digest covers the current Script_Output (stdout + stderr + exit_code) at the time of each poll regardless of execution status (running, completed, failed, timed_out)

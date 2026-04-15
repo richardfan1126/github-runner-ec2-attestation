@@ -155,8 +155,8 @@ The system consists of the following major components:
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
 - Returns completion status and exit codes
-- When execution is complete, generates an Output_Attestation_Document containing a SHA-256 digest of the Script_Output in the user_data field (without Server_Public_Key; nonce included if provided)
-- Returns Output_Attestation_Document in base64 encoding alongside Script_Output and Attestation_Document
+- On every poll response, generates an Output_Attestation_Document containing a SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) in the user_data field (without Server_Public_Key; nonce included if provided), regardless of whether execution is running, completed, failed, or timed_out
+- Returns Output_Attestation_Document in base64 encoding alongside Script_Output and Attestation_Document on every poll response
 - If Output_Attestation_Document generation fails, still returns Script_Output and Attestation_Document with an error field
 - Encrypts the response payload using the Shared_Key before returning
 
@@ -277,13 +277,13 @@ The system consists of the following major components:
 5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
 6. Output Handler retrieves execution record by ID
 7. Output Collector returns current status, output from offset, and completion flag
-8. If complete, Output Handler computes SHA-256 digest of the Script_Output and generates an Output_Attestation_Document with the digest in user_data and optional nonce (no Server_Public_Key)
-9. If complete, response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code
+8. Output Handler computes SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) and generates an Output_Attestation_Document with the digest in user_data and optional nonce (no Server_Public_Key)
+9. Response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code (if available) on every poll response regardless of execution status
 10. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
 11. Response payload encrypted with Shared_Key and returned
 12. Client decrypts response using the same Shared_Key derived during PQ_Hybrid_KEM key exchange
 13. Client repeats polling until execution completes
-14. Client can verify output integrity by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
+14. Client can verify output integrity on every poll by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
 
 ### Concurrency Model
 
@@ -381,7 +381,7 @@ After decryption:
 ```
 
 **Response (200 OK, encrypted with Shared_Key):**
-After decryption by the client:
+After decryption by the client (every poll response includes output_attestation_document):
 ```json
 {
   "execution_id": "uuid-v4",
@@ -391,7 +391,8 @@ After decryption by the client:
   "stdout_offset": 1024,
   "stderr_offset": 256,
   "complete": false,
-  "exit_code": null
+  "exit_code": null,
+  "output_attestation_document": "base64-encoded-cbor"
 }
 ```
 
@@ -412,17 +413,17 @@ When complete (after decryption):
 
 The attestation documents in the /output response do NOT include the Server_Public_Key. Attestation documents are included as-is within the encrypted payload (not separately encrypted).
 
-When complete but Output_Attestation_Document generation fails (after decryption):
+When Output_Attestation_Document generation fails (after decryption, any status):
 ```json
 {
   "execution_id": "uuid-v4",
-  "status": "completed",
+  "status": "running|completed|failed|timed_out",
   "stdout": "output text...",
   "stderr": "error text...",
   "stdout_offset": 2048,
   "stderr_offset": 512,
-  "complete": true,
-  "exit_code": 0,
+  "complete": false,
+  "exit_code": null,
   "output_attestation_document": null,
   "attestation_error": "Failed to generate output attestation document"
 }
@@ -1211,19 +1212,19 @@ class EncryptionContext:
 
 ### Property 44: Output Attestation Digest Integrity
 
-*For any* completed script execution with Script_Output, the Output_Attestation_Document's user_data field should contain a SHA-256 digest that matches the SHA-256 digest of the returned Script_Output, enabling the client to verify output integrity via round-trip comparison.
+*For any* /execution/{id}/output poll response with Script_Output (regardless of execution status), the Output_Attestation_Document's user_data field should contain a SHA-256 digest that matches the SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time), enabling the client to verify output integrity via round-trip comparison on every poll.
 
 **Validates: Requirements 6.7, 6.9**
 
 ### Property 45: Output Attestation Base64 Encoding
 
-*For any* completed script execution where Output_Attestation_Document generation succeeds, the output_attestation_document field in the response should be a valid base64-encoded string.
+*For any* /execution/{id}/output poll response where Output_Attestation_Document generation succeeds (regardless of execution status), the output_attestation_document field in the response should be a valid base64-encoded string.
 
 **Validates: Requirements 6.8**
 
 ### Property 46: Output Attestation Failure Graceful Degradation
 
-*For any* completed script execution where Output_Attestation_Document generation fails, the response should still include the Script_Output and Attestation_Document, with an attestation_error field indicating the failure reason and output_attestation_document set to null.
+*For any* /execution/{id}/output poll response where Output_Attestation_Document generation fails (regardless of execution status), the response should still include the Script_Output and Attestation_Document, with an attestation_error field indicating the failure reason and output_attestation_document set to null.
 
 **Validates: Requirements 6.11**
 
@@ -1456,7 +1457,7 @@ All error responses follow a consistent JSON structure:
 - Include health check status for attestation capability
 
 **Output Attestation Errors**
-- When Output_Attestation_Document generation fails at output retrieval time, do NOT fail the entire response
+- When Output_Attestation_Document generation fails on any poll response, do NOT fail the entire response
 - Return Script_Output and Attestation_Document normally with an attestation_error field
 - Set output_attestation_document to null in the response
 - Log the output attestation failure with execution ID context
@@ -1606,8 +1607,8 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
   - Attest endpoint no authentication (Property 123)
 
 **Output Attestation Testing**
-- Unit tests: Mock NitroTPM for output attestation generation, verify graceful degradation on failure
-- Property tests: Random Script_Output content, SHA-256 digest round-trip verification, base64 encoding validation
+- Unit tests: Mock NitroTPM for output attestation generation on every poll response (running, completed, failed, timed_out), verify graceful degradation on failure
+- Property tests: Random Script_Output content at various execution states, SHA-256 digest round-trip verification on every poll, base64 encoding validation
 
 **Execution Testing**
 - Unit tests: Specific scripts with known output, timeout scenarios, container creation/removal

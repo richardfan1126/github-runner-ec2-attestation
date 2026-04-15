@@ -43,7 +43,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Expected_Audience**: Configured audience string that the `aud` claim in the OIDC_Token must match, used to ensure the token was issued for this specific Remote Executor instance
 - **Execution_Request**: JSON payload containing script location and execution parameters
 - **Script_Output**: Captured stdout, stderr, and exit code from script execution
-- **Output_Attestation_Document**: Cryptographic attestation document generated at output retrieval time, containing a digest of the Script_Output in the user_data field, enabling the client to verify output integrity
+- **Output_Attestation_Document**: Cryptographic attestation document generated on every /execution/{id}/output poll response, containing a SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) in the user_data field, enabling the client to verify output integrity regardless of execution status
 
 ### Encryption Components
 - **PQ_Hybrid_KEM** (also known as **X25519MLKEM768**): Post-Quantum/Traditional Hybrid Key Encapsulation Mechanism combining X25519 ECDH (classical) with ML-KEM-768 (post-quantum, FIPS 203) to derive a shared secret resistant to both classical and quantum attacks; the hybrid approach ensures security even if one component is broken. The name X25519MLKEM768 follows the convention used by IETF, OpenSSL, and other implementations for this specific hybrid combination
@@ -188,16 +188,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE GHA_Server SHALL provide an HTTP GET endpoint for retrieving execution results
 2. THE GHA_Server SHALL accept the Execution_ID as a URL parameter
 3. THE GHA_Server SHALL require a valid oidc_token in the decrypted request body before returning execution results
-4. WHEN execution is in progress, THE GHA_Server SHALL return HTTP 200 OK with status "running"
-5. WHEN execution is complete, THE GHA_Server SHALL return HTTP 200 OK with Script_Output, Attestation_Document, and Output_Attestation_Document
-6. THE response SHALL include stdout, stderr, and exit code
-7. THE response SHALL include the Attestation_Document in base64 encoding
-8. WHEN execution is complete, THE Attestation_Generator SHALL generate an Output_Attestation_Document containing a SHA-256 digest of the Script_Output in the user_data field
-9. THE response SHALL include the Output_Attestation_Document in base64 encoding
-10. THE Output_Attestation_Document SHALL enable the client to verify output integrity by comparing the digest in user_data against the SHA-256 digest of the returned Script_Output
-11. IF the Execution_ID does not exist, THEN THE GHA_Server SHALL return HTTP 404 Not Found
-12. IF Output_Attestation_Document generation fails, THEN THE GHA_Server SHALL return the Script_Output and Attestation_Document with an error field indicating attestation failure
-13. THE GHA_Server SHALL retain execution results for at least 1 hour after completion
+4. WHEN the output endpoint is polled, THE GHA_Server SHALL return HTTP 200 OK with the current execution status, Script_Output, Attestation_Document, and Output_Attestation_Document regardless of whether execution is running, completed, failed, or timed_out
+5. THE response SHALL include stdout, stderr, and exit code
+6. THE response SHALL include the Attestation_Document in base64 encoding
+7. WHEN the output endpoint is polled, THE Attestation_Generator SHALL generate an Output_Attestation_Document containing a SHA-256 digest of the current Script_Output (stdout, stderr, and exit_code at that point in time) in the user_data field
+8. THE response SHALL include the Output_Attestation_Document in base64 encoding on every poll response
+9. THE Output_Attestation_Document SHALL enable the client to verify output integrity by comparing the digest in user_data against the SHA-256 digest of the returned Script_Output at the time of the poll
+10. IF the Execution_ID does not exist, THEN THE GHA_Server SHALL return HTTP 404 Not Found
+11. IF Output_Attestation_Document generation fails, THEN THE GHA_Server SHALL return the Script_Output and Attestation_Document with an error field indicating attestation failure
+12. THE GHA_Server SHALL retain execution results for at least 1 hour after completion
 
 ### Requirement 7: Error Handling and Logging
 
