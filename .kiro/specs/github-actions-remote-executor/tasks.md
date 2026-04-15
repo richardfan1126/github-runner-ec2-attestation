@@ -2392,21 +2392,21 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Ensure `attestation_error` field is included when attestation generation fails, with `output_attestation_document` set to null
     - _Requirements: 6.4, 6.7, 6.8, 6.9, 6.11_
 
-- [ ] 126. Update property tests for output attestation on every poll
-  - [ ] 126.1 Update property test for Output Attestation Digest Integrity
+- [x] 126. Update property tests for output attestation on every poll
+  - [x] 126.1 Update property test for Output Attestation Digest Integrity
     - **Property 44: Output Attestation Digest Integrity**
     - Update test to verify that the Output_Attestation_Document is generated on every poll response, not just when execution is complete
     - Test with execution statuses: running, completed, failed, timed_out
     - Verify the SHA-256 digest in user_data matches the current Script_Output at each poll regardless of status
     - **Validates: Requirements 6.7, 6.9**
 
-  - [ ] 126.2 Update property test for Output Attestation Base64 Encoding
+  - [x] 126.2 Update property test for Output Attestation Base64 Encoding
     - **Property 45: Output Attestation Base64 Encoding**
     - Update test to verify that output_attestation_document is a valid base64-encoded string on every poll response, not just when complete
     - Test with execution statuses: running, completed, failed, timed_out
     - **Validates: Requirements 6.8**
 
-  - [ ] 126.3 Update property test for Output Attestation Failure Graceful Degradation
+  - [x] 126.3 Update property test for Output Attestation Failure Graceful Degradation
     - **Property 46: Output Attestation Failure Graceful Degradation**
     - Update test to verify graceful degradation on every poll response regardless of execution status
     - When attestation generation fails during a running/failed/timed_out poll, response must still include Script_Output with attestation_error field and output_attestation_document set to null
