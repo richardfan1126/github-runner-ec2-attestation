@@ -532,22 +532,28 @@ class TestOutputEndpoint:
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
                 with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                    req_body = make_encrypted_output_request(
-                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                    )
-                    response = client.post(f"/execution/{execution_id}/output", json=req_body)
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"running_attest", None)):
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{execution_id}/output", json=req_body)
 
-                    assert response.status_code == 200
-                    data = decrypt_output_response(response.json(), ctx.shared_key)
+                        assert response.status_code == 200
+                        data = decrypt_output_response(response.json(), ctx.shared_key)
 
-                    assert data["execution_id"] == execution_id
-                    assert data["status"] == "running"
-                    assert data["stdout"] == "Line 1\nLine 2\n"
-                    assert data["stderr"] == "Warning: test\n"
-                    assert data["stdout_offset"] == 14
-                    assert data["stderr_offset"] == 14
-                    assert data["complete"] is False
-                    assert data["exit_code"] is None
+                        assert data["execution_id"] == execution_id
+                        assert data["status"] == "running"
+                        assert data["stdout"] == "Line 1\nLine 2\n"
+                        assert data["stderr"] == "Warning: test\n"
+                        assert data["stdout_offset"] == 14
+                        assert data["stderr_offset"] == 14
+                        assert data["complete"] is False
+                        assert data["exit_code"] is None
+
+                        # Verify output_attestation_document is present and valid base64
+                        assert "output_attestation_document" in data
+                        decoded = base64.b64decode(data["output_attestation_document"])
+                        assert decoded == b"running_attest"
 
     def test_completed_execution_with_exit_code(self):
         """Test output retrieval for completed execution includes exit code"""
@@ -636,6 +642,60 @@ class TestOutputEndpoint:
                         assert data["status"] == "failed"
                         assert data["exit_code"] == 1
                         assert data["complete"] is True
+
+                        # Verify output_attestation_document is present for failed status
+                        assert "output_attestation_document" in data
+                        decoded = base64.b64decode(data["output_attestation_document"])
+                        assert decoded == b"attest"
+
+    def test_timed_out_execution_with_output_attestation(self):
+        """Test output retrieval for timed_out execution includes output_attestation_document"""
+        ctx, app, client = self._setup_output_test()
+        execution_id = "test-exec-timeout"
+        ctx.encryption_manager.store_encryption_context(execution_id, ctx.shared_key)
+
+        record = ExecutionRecord(
+            execution_id=execution_id,
+            repository_url="https://github.com/test/repo",
+            commit_hash="a" * 40,
+            script_path="test.sh",
+            status=ExecutionStatus.TIMED_OUT,
+            created_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            exit_code=-1,
+            timeout_seconds=300
+        )
+
+        output_data = OutputData(
+            stdout="partial output\n",
+            stderr="",
+            stdout_offset=15,
+            stderr_offset=0,
+            complete=True,
+            exit_code=-1
+        )
+
+        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"timeout_attest", None)):
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{execution_id}/output", json=req_body)
+
+                        assert response.status_code == 200
+                        data = decrypt_output_response(response.json(), ctx.shared_key)
+
+                        assert data["status"] == "timed_out"
+                        assert data["exit_code"] == -1
+                        assert data["complete"] is True
+
+                        # Verify output_attestation_document is present for timed_out status
+                        assert "output_attestation_document" in data
+                        decoded = base64.b64decode(data["output_attestation_document"])
+                        assert decoded == b"timeout_attest"
 
     def test_execution_not_found_404(self):
         """Test 404 error for non-existent execution ID"""
@@ -739,20 +799,74 @@ class TestOutputEndpoint:
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
                 with patch.object(app.state.output_collector, 'get_output', side_effect=ValueError("No output buffer")):
-                    req_body = make_encrypted_output_request(
-                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                    )
-                    response = client.post(f"/execution/{execution_id}/output", json=req_body)
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"early_attest", None)):
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{execution_id}/output", json=req_body)
 
-                    assert response.status_code == 200
-                    data = decrypt_output_response(response.json(), ctx.shared_key)
+                        assert response.status_code == 200
+                        data = decrypt_output_response(response.json(), ctx.shared_key)
 
-                    # Should return empty output
-                    assert data["stdout"] == ""
-                    assert data["stderr"] == ""
-                    assert data["stdout_offset"] == 0
-                    assert data["stderr_offset"] == 0
-                    assert data["complete"] is False
+                        # Should return empty output
+                        assert data["stdout"] == ""
+                        assert data["stderr"] == ""
+                        assert data["stdout_offset"] == 0
+                        assert data["stderr_offset"] == 0
+                        assert data["complete"] is False
+
+                        # Verify output_attestation_document is present even with no output buffer
+                        assert "output_attestation_document" in data
+                        decoded = base64.b64decode(data["output_attestation_document"])
+                        assert decoded == b"early_attest"
+
+    def test_attestation_failure_during_running_poll(self):
+        """Test attestation_error field is returned when attestation generation fails during non-complete poll"""
+        ctx, app, client = self._setup_output_test()
+        execution_id = "test-exec-attest-fail"
+        ctx.encryption_manager.store_encryption_context(execution_id, ctx.shared_key)
+
+        record = ExecutionRecord(
+            execution_id=execution_id,
+            repository_url="https://github.com/test/repo",
+            commit_hash="a" * 40,
+            script_path="test.sh",
+            status=ExecutionStatus.RUNNING,
+            created_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc),
+            completed_at=None,
+            exit_code=None,
+            timeout_seconds=300
+        )
+
+        output_data = OutputData(
+            stdout="some output\n",
+            stderr="",
+            stdout_offset=12,
+            stderr_offset=0,
+            complete=False,
+            exit_code=None
+        )
+
+        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
+            with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
+                with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(None, "NitroTPM device not available")):
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{execution_id}/output", json=req_body)
+
+                        assert response.status_code == 200
+                        data = decrypt_output_response(response.json(), ctx.shared_key)
+
+                        assert data["status"] == "running"
+                        assert data["stdout"] == "some output\n"
+
+                        # Verify attestation failure fields
+                        assert data["output_attestation_document"] is None
+                        assert "attestation_error" in data
+                        assert data["attestation_error"] == "NitroTPM device not available"
 
 
 class TestConcurrentRequests:

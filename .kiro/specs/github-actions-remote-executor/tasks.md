@@ -2412,8 +2412,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - When attestation generation fails during a running/failed/timed_out poll, response must still include Script_Output with attestation_error field and output_attestation_document set to null
     - **Validates: Requirements 6.11**
 
-- [ ] 127. Update unit tests for output endpoint attestation on every poll
-  - [ ] 127.1 Update unit tests in tests/test_server_unit.py for output attestation
+- [x] 127. Update unit tests for output endpoint attestation on every poll
+  - [x] 127.1 Update unit tests in tests/test_server_unit.py for output attestation
     - Add or update test cases to verify output_attestation_document is present in responses for running executions (not just completed)
     - Add test case for failed execution status returning output_attestation_document
     - Add test case for timed_out execution status returning output_attestation_document
@@ -2421,7 +2421,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify attestation_error field is returned when attestation generation fails during non-complete polls
     - _Requirements: 6.4, 6.7, 6.8, 6.9, 6.11_
 
-- [ ] 128. Checkpoint - Ensure all output attestation every-poll tests pass
+- [x] 128. Checkpoint - Ensure all output attestation every-poll tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
