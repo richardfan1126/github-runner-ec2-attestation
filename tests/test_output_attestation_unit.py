@@ -225,8 +225,8 @@ class TestOutputEndpointWithAttestation:
         assert data["stdout"] == "ok"
         assert data["exit_code"] == 0
 
-    def test_running_execution_omits_output_attestation(self):
-        """Test running execution does not include output_attestation_document"""
+    def test_running_execution_includes_output_attestation(self):
+        """Test running execution includes output_attestation_document on every poll"""
         ctx, app, client = self._setup()
         eid = "test-running"
         ctx.encryption_manager.store_encryption_context(eid, ctx.shared_key)
@@ -236,27 +236,38 @@ class TestOutputEndpointWithAttestation:
             stdout="partial", stderr="", stdout_offset=7,
             stderr_offset=0, complete=False, exit_code=None,
         )
+        attestation_bytes = b"running_output_attestation_cbor"
 
         with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, "get_execution", return_value=record):
                 with patch.object(app.state.output_collector, "get_output", return_value=output):
-                    req_body = make_encrypted_output_request(
-                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                    )
-                    response = client.post(f"/execution/{eid}/output", json=req_body)
+                    with patch.object(
+                        app.state.attestation_generator,
+                        "generate_output_attestation",
+                        return_value=(attestation_bytes, None),
+                    ) as mock_gen:
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
         data = decrypt_output_response(response.json(), ctx.shared_key)
-        assert "output_attestation_document" not in data
-        assert "attestation_error" not in data
+        assert "output_attestation_document" in data
+        decoded = base64.b64decode(data["output_attestation_document"])
+        assert decoded == attestation_bytes
+        # Verify the canonical script output was passed
+        expected_script_output = "stdout:partial\nstderr:\nexit_code:None"
+        mock_gen.assert_called_once_with(expected_script_output, nonce=None)
 
-    def test_queued_execution_omits_output_attestation(self):
-        """Test queued execution does not include output_attestation_document"""
+    def test_queued_execution_includes_output_attestation(self):
+        """Test queued execution (no output buffer) includes output_attestation_document with empty output"""
         ctx, app, client = self._setup()
         eid = "test-queued"
         ctx.encryption_manager.store_encryption_context(eid, ctx.shared_key)
 
         record = self._make_record(eid, ExecutionStatus.QUEUED)
+        attestation_bytes = b"queued_output_attestation_cbor"
 
         with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, "get_execution", return_value=record):
@@ -264,11 +275,21 @@ class TestOutputEndpointWithAttestation:
                     app.state.output_collector, "get_output",
                     side_effect=ValueError("No output buffer"),
                 ):
-                    req_body = make_encrypted_output_request(
-                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                    )
-                    response = client.post(f"/execution/{eid}/output", json=req_body)
+                    with patch.object(
+                        app.state.attestation_generator,
+                        "generate_output_attestation",
+                        return_value=(attestation_bytes, None),
+                    ) as mock_gen:
+                        req_body = make_encrypted_output_request(
+                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                        )
+                        response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
         data = decrypt_output_response(response.json(), ctx.shared_key)
-        assert "output_attestation_document" not in data
+        assert "output_attestation_document" in data
+        decoded = base64.b64decode(data["output_attestation_document"])
+        assert decoded == attestation_bytes
+        # Verify empty output was used for canonical script output
+        expected_script_output = "stdout:\nstderr:\nexit_code:None"
+        mock_gen.assert_called_once_with(expected_script_output, nonce=None)

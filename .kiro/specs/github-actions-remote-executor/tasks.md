@@ -2382,8 +2382,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 124. Final checkpoint - Ensure all PQ Hybrid KEM tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 125. Move output attestation generation to run on every poll response
-  - [ ] 125.1 Update /execution/{id}/output handler in src/server.py to generate Output_Attestation_Document on every poll
+- [x] 125. Move output attestation generation to run on every poll response
+  - [x] 125.1 Update /execution/{id}/output handler in src/server.py to generate Output_Attestation_Document on every poll
     - Move the output attestation generation block OUTSIDE the `if output_data.complete:` conditional so it executes for every poll response where output_data is available
     - The canonical Script_Output concatenation (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`) must be computed for every poll, not just when complete
     - When output_data is None (no output buffer yet), generate attestation using empty stdout, empty stderr, and None exit_code

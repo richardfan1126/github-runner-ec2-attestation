@@ -696,50 +696,54 @@ def add_routes(app: FastAPI) -> None:
             
             # Build response
             if output_data:
+                stdout = output_data.stdout
+                stderr = output_data.stderr
+                exit_code = output_data.exit_code
                 response_data = {
                     "execution_id": execution_id,
                     "status": execution_record.status.value,
-                    "stdout": output_data.stdout,
-                    "stderr": output_data.stderr,
+                    "stdout": stdout,
+                    "stderr": stderr,
                     "stdout_offset": output_data.stdout_offset,
                     "stderr_offset": output_data.stderr_offset,
                     "complete": output_data.complete,
-                    "exit_code": output_data.exit_code
+                    "exit_code": exit_code
                 }
-                
-                # Generate output attestation when execution is complete
-                if output_data.complete:
-                    # Concatenate stdout, stderr, and exit_code into canonical Script_Output
-                    script_output = (
-                        f"stdout:{output_data.stdout}\n"
-                        f"stderr:{output_data.stderr}\n"
-                        f"exit_code:{output_data.exit_code}"
-                    )
-                    
-                    attestation_gen = request.app.state.attestation_generator
-                    attestation_bytes, attestation_error_msg = (
-                        attestation_gen.generate_output_attestation(script_output, nonce=nonce)
-                    )
-                    
-                    if attestation_bytes is not None:
-                        response_data["output_attestation_document"] = (
-                            base64.b64encode(attestation_bytes).decode("utf-8")
-                        )
-                    else:
-                        response_data["output_attestation_document"] = None
-                        response_data["attestation_error"] = attestation_error_msg
             else:
                 # No output yet - return empty
+                stdout = ""
+                stderr = ""
+                exit_code = None
                 response_data = {
                     "execution_id": execution_id,
                     "status": execution_record.status.value,
-                    "stdout": "",
-                    "stderr": "",
+                    "stdout": stdout,
+                    "stderr": stderr,
                     "stdout_offset": 0,
                     "stderr_offset": 0,
                     "complete": False,
-                    "exit_code": None
+                    "exit_code": exit_code
                 }
+
+            # Generate Output_Attestation_Document on every poll response
+            script_output = (
+                f"stdout:{stdout}\n"
+                f"stderr:{stderr}\n"
+                f"exit_code:{exit_code}"
+            )
+
+            attestation_gen = request.app.state.attestation_generator
+            attestation_bytes, attestation_error_msg = (
+                attestation_gen.generate_output_attestation(script_output, nonce=nonce)
+            )
+
+            if attestation_bytes is not None:
+                response_data["output_attestation_document"] = (
+                    base64.b64encode(attestation_bytes).decode("utf-8")
+                )
+            else:
+                response_data["output_attestation_document"] = None
+                response_data["attestation_error"] = attestation_error_msg
             
             # Encrypt response with shared key
             encrypted_response = encryption_manager.encrypt_response(
