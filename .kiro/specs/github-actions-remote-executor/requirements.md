@@ -20,6 +20,8 @@ This specification covers three major aspects:
 
 6. **Image Provisioning Requirements (Requirements 33-35)**: Packages and services that must be included in the KIWI image for runtime operation - Docker daemon for container execution, container image pulling at startup, and git for repository cloning.
 
+7. **Streaming Output Requirements (Requirement 44)**: How the Script_Executor streams output from Execution_Containers incrementally during execution, so that clients can observe partial output while scripts are still running rather than waiting for the container to exit.
+
 Note: By default, the KIWI image excludes SSH-related packages (openssh-server, cloud-init, ec2-instance-connect) to remove operator access. The debug feature must be enabled at KIWI image build time to include these packages, and then at deployment time to open port 22 and attach a key pair.
 
 The build process does NOT use the Remote Executor itself (since you can't use something that doesn't exist yet during initial builds). Instead, it uses standard GitHub Actions runners to build the KIWI image, and a temporary EC2 instance to convert it to an AMI.
@@ -44,6 +46,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Execution_Request**: JSON payload containing script location and execution parameters
 - **Script_Output**: Captured stdout, stderr, and exit code from script execution
 - **Output_Attestation_Document**: Cryptographic attestation document generated on every /execution/{id}/output poll response, containing a SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) in the user_data field, enabling the client to verify output integrity regardless of execution status
+- **Log_Streaming_Thread**: A daemon background thread started by the Script_Executor for each Execution_Container that uses the Docker SDK's streaming log API to incrementally capture stdout and stderr output during execution, feeding chunks to the Output_Collector in real time so that polling clients can observe partial output before the container exits
 
 ### Encryption Components
 - **PQ_Hybrid_KEM** (also known as **X25519MLKEM768**): Post-Quantum/Traditional Hybrid Key Encapsulation Mechanism combining X25519 ECDH (classical) with ML-KEM-768 (post-quantum, FIPS 203) to derive a shared secret resistant to both classical and quantum attacks; the hybrid approach ensures security even if one component is broken. The name X25519MLKEM768 follows the convention used by IETF, OpenSSL, and other implementations for this specific hybrid combination
@@ -178,6 +181,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. THE Script_Executor SHALL execute multiple scripts concurrently in separate Execution_Containers without interference
 12. THE Output_Collector SHALL store Script_Output associated with the Execution_ID
 13. THE Script_Executor SHALL assign a unique container name derived from the Execution_ID to each Execution_Container
+14. THE Script_Executor SHALL stream output from the Execution_Container incrementally during execution rather than capturing output only after the container exits, so that clients polling the output endpoint can observe partial output while the script is still running
 
 ### Requirement 6: Output Polling Endpoint
 
@@ -510,6 +514,24 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE appliance.kiwi package definition SHALL include the git package in the image packages list
 2. WHEN the KIWI image boots, THE git binary SHALL be available in the system PATH for the Repository_Client to invoke via subprocess
 3. IF the git package is not present in appliance.kiwi, THEN THE Repository_Client SHALL fail to clone repositories because the git binary is unavailable
+
+### Requirement 44: Streaming Output Capture During Container Execution
+
+**User Story:** As a GitHub Actions workflow, I want to see partial script output while the script is still running, so that I can monitor execution progress in real time rather than waiting for the entire script to finish before any output appears
+
+#### Acceptance Criteria
+
+1. THE Script_Executor SHALL start a background log-streaming thread for each Execution_Container immediately after the container is started and before calling container.wait()
+2. THE log-streaming thread SHALL use the Docker SDK's `container.logs(stream=True, follow=True, stdout=True, stderr=False)` API to receive stdout output incrementally as the container produces it
+3. THE log-streaming thread SHALL use a separate `container.logs(stream=True, follow=True, stdout=False, stderr=True)` call or a combined stream to receive stderr output incrementally
+4. THE log-streaming thread SHALL feed each received chunk of output to the Output_Collector via `capture_output(execution_id, stream_name, chunk)` so that the output buffer is populated incrementally during execution
+5. THE log-streaming thread SHALL terminate gracefully when the container exits (the Docker SDK log stream ends when the container stops)
+6. THE log-streaming thread SHALL handle Docker API errors gracefully by logging a warning and continuing to attempt capture, so that transient errors do not cause output loss
+7. WHEN the container exits, THE Script_Executor SHALL NOT call `_capture_container_logs()` to re-capture the full output in a single batch, because the streaming thread has already captured all output incrementally
+8. THE streaming approach SHALL ensure that clients polling the /execution/{id}/output endpoint observe partial output within one poll interval of the output being produced by the script, rather than seeing empty output until the container exits
+9. THE log-streaming thread SHALL NOT block the container.wait() call; both SHALL run concurrently so that the Script_Executor can detect container completion while output is being streamed
+10. IF the container is stopped due to a timeout, THE log-streaming thread SHALL capture any output produced up to the point of termination before the thread exits
+11. THE log-streaming thread SHALL be implemented as a daemon thread so that it does not prevent the server process from shutting down
 
 ### Requirement 36: Server Keypair Generation and Lifecycle
 

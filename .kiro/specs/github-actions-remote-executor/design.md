@@ -216,7 +216,7 @@ The system consists of the following major components:
 - Sets the container working directory to `/workspace` so the script can reference sibling files
 - Ensures the cloned repository directory is world-readable (`chmod -R a+rX`) before mounting, so the container's non-root user can access files regardless of the server process umask
 - Executes the script via `command=["bash", "/workspace/{script_path}"]` where `script_path` is the relative path within the repo
-- Captures stdout and stderr streams from the container
+- Streams stdout and stderr incrementally from the container during execution using a Log_Streaming_Thread that calls `container.logs(stream=True, follow=True)` and feeds chunks to the Output_Collector in real time, so that polling clients observe partial output while the script is still running
 - Monitors execution progress and enforces timeout
 - Removes the container and its resources after completion, failure, or timeout
 - Never reuses a container for more than one execution
@@ -225,8 +225,8 @@ The system consists of the following major components:
 - Records exit codes
 
 **Output Collector**
-- Captures streaming output from script execution
-- Stores output incrementally
+- Receives incremental output chunks from the Log_Streaming_Thread during script execution via `capture_output()`
+- Stores output incrementally in thread-safe buffers, enabling polling clients to observe partial output while the container is still running
 - Supports offset-based retrieval
 - Manages output retention
 
@@ -265,8 +265,8 @@ The system consists of the following major components:
 11. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
 12. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
 13. Script Executor creates a new Docker container from the configured Container_Image and begins asynchronous execution inside it
-14. Output Collector captures stdout/stderr streams from the container
-15. Execution Manager updates status upon completion; container is removed
+14. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution
+15. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
 
 **Output Polling Flow:**
 
@@ -292,7 +292,7 @@ The system consists of the following major components:
 - Containers are never reused — each execution gets a fresh container that is destroyed after completion, failure, or timeout
 - Execution state stored in thread-safe in-memory data structure
 - Encryption_Contexts (Shared_Keys keyed by Execution_ID) stored in thread-safe in-memory data structure alongside execution state
-- Output collection uses buffered writes to avoid blocking
+- Output collection uses buffered writes to avoid blocking; each execution has a dedicated Log_Streaming_Thread (daemon thread) that reads from the Docker log stream and writes to the Output_Collector concurrently with `container.wait()`
 - Maximum concurrent Execution_Containers configurable to prevent resource exhaustion
 - Docker daemon manages container lifecycle and resource isolation
 - Server_Keypair (composite X25519 + ML-KEM-768) generated once at startup and shared across all concurrent requests (read-only after initialization)
@@ -666,6 +666,14 @@ class ScriptExecutor:
         cloned repository directory read-only at /workspace, and executes the
         script asynchronously. The container is assigned a unique name derived
         from the execution_id.
+
+        After starting the container, launches a Log_Streaming_Thread (daemon thread)
+        that calls container.logs(stream=True, follow=True) to incrementally capture
+        stdout and stderr, feeding each chunk to the Output_Collector in real time.
+        The streaming thread runs concurrently with container.wait() so that polling
+        clients observe partial output while the script is still running. When the
+        container exits, the streaming thread terminates naturally (the Docker log
+        stream ends), and no batch re-capture of logs is performed.
         """
         pass
 
@@ -1002,9 +1010,9 @@ class EncryptionContext:
 
 ### Property 23: Output Stream Capture
 
-*For any* script execution, both stdout and stderr streams should be captured completely.
+*For any* script execution, both stdout and stderr streams should be captured completely and incrementally during execution via the Log_Streaming_Thread, so that partial output is available to polling clients before the container exits.
 
-**Validates: Requirements 5.3**
+**Validates: Requirements 5.3, 5.14, 44.1, 44.2, 44.3, 44.4**
 
 ### Property 24: Output Storage Round-Trip
 
@@ -1390,6 +1398,36 @@ class EncryptionContext:
 
 **Validates: Requirements 37.10**
 
+### Property 137: Incremental Output Availability During Execution
+
+*For any* script execution that produces output while running, the Output_Collector should contain partial output within one poll interval of the output being produced, so that clients polling the /execution/{id}/output endpoint observe incremental output before the container exits.
+
+**Validates: Requirements 5.14, 44.4, 44.8**
+
+### Property 138: Log Streaming Thread Concurrent with Container Wait
+
+*For any* script execution, the Log_Streaming_Thread should run concurrently with `container.wait()` without blocking it, so that the Script_Executor can detect container completion while output is being streamed.
+
+**Validates: Requirements 44.9**
+
+### Property 139: Log Streaming Thread Graceful Termination
+
+*For any* script execution, the Log_Streaming_Thread should terminate gracefully when the container exits (the Docker SDK log stream ends naturally), and should capture any output produced up to the point of termination when the container is stopped due to a timeout.
+
+**Validates: Requirements 44.5, 44.10**
+
+### Property 140: No Batch Re-Capture After Streaming
+
+*For any* script execution where the Log_Streaming_Thread has been streaming output, the Script_Executor should NOT call `_capture_container_logs()` to re-capture the full output in a single batch after the container exits, because the streaming thread has already captured all output incrementally.
+
+**Validates: Requirements 44.7**
+
+### Property 141: Log Streaming Thread Is Daemon Thread
+
+*For any* Log_Streaming_Thread started by the Script_Executor, the thread should be a daemon thread so that it does not prevent the server process from shutting down.
+
+**Validates: Requirements 44.11**
+
 ### Error Categories
 
 The system handles errors in the following categories:
@@ -1611,12 +1649,12 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
 - Property tests: Random Script_Output content at various execution states, SHA-256 digest round-trip verification on every poll, base64 encoding validation
 
 **Execution Testing**
-- Unit tests: Specific scripts with known output, timeout scenarios, container creation/removal
-- Property tests: Random script content, concurrent executions in separate containers, container cleanup verification
+- Unit tests: Specific scripts with known output, timeout scenarios, container creation/removal, streaming output capture via Log_Streaming_Thread
+- Property tests: Random script content, concurrent executions in separate containers, container cleanup verification, incremental output availability during execution (Property 137), streaming thread concurrent with container.wait() (Property 138), graceful termination on container exit and timeout (Property 139), no batch re-capture after streaming (Property 140), daemon thread behavior (Property 141)
 
 **Output Collection Testing**
-- Unit tests: Specific output patterns, offset edge cases
-- Property tests: Random output sizes, offset values, concurrent access
+- Unit tests: Specific output patterns, offset edge cases, incremental writes from streaming thread
+- Property tests: Random output sizes, offset values, concurrent access, partial output visible during execution
 
 **Security Testing**
 - Unit tests: Path traversal attempts, token handling, Docker container security constraints, PQ_Hybrid_KEM composite key generation, Shared_Key not persisted to disk, Server_Keypair not persisted to disk, private key material and decapsulation key material not logged
@@ -1629,14 +1667,15 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
 ### Integration Testing
 
 **End-to-End Scenarios**:
-1. Complete execution flow: attest → PQ_Hybrid_KEM key exchange → encrypted request → attestation → container creation → execution → encrypted output retrieval → container removal
+1. Complete execution flow: attest → PQ_Hybrid_KEM key exchange → encrypted request → attestation → container creation → execution with streaming output → encrypted output retrieval with partial output visible during execution → container removal
 2. Error scenarios: decryption failure, authentication failure, timeout, file not found, Docker daemon unavailable, missing encryption context
-3. Concurrent execution: multiple simultaneous encrypted requests in separate Docker containers
+3. Concurrent execution: multiple simultaneous encrypted requests in separate Docker containers with independent streaming threads
 4. Rate limiting: exceeding limits from single IP
 5. Cleanup: verify containers removed, temporary files cleaned up, and Encryption_Contexts removed after execution
 6. Startup: verify dangling container cleanup and Server_Keypair generation on server start
 7. Attest endpoint: verify unauthenticated access, Server_Public_Key in attestation, nonce support
 8. Encryption exemption: verify /attest, /health, /metrics return unencrypted responses
+9. Streaming output: verify polling returns incremental output while script is still running, not just after container exits
 
 **External Dependencies**:
 - Mock GitHub API for predictable testing
@@ -1656,9 +1695,10 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
 **Stress Testing**:
 - Maximum concurrent Execution_Containers
 - Large script file handling
-- Long-running script behavior within containers
+- Long-running script behavior within containers with streaming output
 - Output retention with many executions
 - Docker daemon resource limits under load
+- Many concurrent Log_Streaming_Threads under high execution load
 
 ### Security Testing
 

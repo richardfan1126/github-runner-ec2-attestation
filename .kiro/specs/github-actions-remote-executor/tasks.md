@@ -2424,11 +2424,50 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 128. Checkpoint - Ensure all output attestation every-poll tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 129. Implement streaming output capture via Log_Streaming_Thread
+  - [ ] 129.1 Replace batch log capture with streaming log capture in ScriptExecutor._execute_in_container
+    - After `container.start()` and before `container.wait()`, start a Log_Streaming_Thread (daemon thread) that calls `container.logs(stream=True, follow=True, stdout=True, stderr=False)` for stdout and a separate call for stderr
+    - Each streaming thread reads chunks from the Docker log stream and calls `self._output_collector.capture_output(execution_id, stream_name, chunk)` for each chunk received
+    - The streaming threads run concurrently with `container.wait()` so that the Script_Executor can detect container completion while output is being streamed
+    - Remove the call to `self._capture_container_logs(execution_id, container)` after `container.wait()` returns, since the streaming threads have already captured all output incrementally
+    - Keep the `_capture_container_logs` call in the timeout/error path as a fallback only if the streaming thread did not run (defensive)
+    - Ensure the streaming threads are daemon threads so they do not prevent server shutdown
+    - Handle Docker API errors in the streaming threads gracefully by logging a warning
+    - After `container.wait()` returns, join the streaming threads with a short timeout to ensure they have finished processing
+    - _Requirements: 5.14, 44.1, 44.2, 44.3, 44.4, 44.5, 44.6, 44.7, 44.9, 44.10, 44.11_
+
+  - [ ] 129.2 Write property tests for streaming output capture
+    - **Property 137: Incremental Output Availability During Execution**
+    - Verify that for any script execution producing output, the Output_Collector contains partial output before the container exits
+    - **Property 138: Log Streaming Thread Concurrent with Container Wait**
+    - Verify that the Log_Streaming_Thread runs concurrently with container.wait() without blocking it
+    - **Property 139: Log Streaming Thread Graceful Termination**
+    - Verify that the streaming thread terminates when the container exits and captures output up to the point of timeout termination
+    - **Property 140: No Batch Re-Capture After Streaming**
+    - Verify that _capture_container_logs is NOT called after container.wait() when streaming was active
+    - **Property 141: Log Streaming Thread Is Daemon Thread**
+    - Verify that the streaming thread is a daemon thread
+    - **Validates: Requirements 5.14, 44.1-44.11**
+
+  - [ ] 129.3 Write unit tests for streaming output capture
+    - Test that streaming threads are started after container.start() and before container.wait()
+    - Test that output chunks are fed to OutputCollector incrementally during execution
+    - Test that _capture_container_logs is not called after successful streaming
+    - Test that streaming threads handle Docker API errors gracefully
+    - Test that streaming threads terminate when the container exits
+    - Test that streaming threads capture partial output on timeout
+    - Test that streaming threads are daemon threads
+    - Mock Docker SDK container.logs(stream=True, follow=True) to return an iterator of chunks
+    - _Requirements: 5.14, 44.1-44.11_
+
+- [ ] 130. Checkpoint - Ensure all streaming output tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 136 correctness properties from the design document
+- Property tests validate the 141 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
@@ -2458,7 +2497,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
 - Git package provisioning (task 90) adds the git package to the KIWI image so the Repository_Client can clone repositories at runtime using git commands
 - Container image pre-pull (tasks 76-79) originally baked the configured Container_Image into the KIWI image during build; tasks 80-84 reverse this by removing the build-time pre-pull code and implementing server-startup pull instead — the GHA_Server now pulls the Container_Image from the registry at startup before accepting requests
-- All 136 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 141 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
@@ -2496,3 +2535,4 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Encryption_Context (Shared_Key per execution_id) is stored in memory and cleaned up with execution records
 - /attest, /health, and /metrics remain unencrypted plain JSON endpoints
 - Output attestation every-poll change (tasks 125-128): Output_Attestation_Document is now generated on EVERY /execution/{id}/output poll response, not just when execution is complete; the SHA-256 digest covers the current Script_Output (stdout + stderr + exit_code) at the time of each poll regardless of execution status (running, completed, failed, timed_out)
+- Streaming output capture (tasks 129-130): Replaces the batch log capture pattern (capture all output after container.wait() returns) with a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally feed output chunks to the Output_Collector during execution; this ensures polling clients observe partial output while the script is still running rather than seeing empty output until the container exits
