@@ -28,6 +28,7 @@ class MockContainer:
         self._script_content = None
         self._removed = False
         self._started = False
+        self._streaming_started = False
         self._lock = threading.Lock()
 
     def put_archive(self, path, data):
@@ -116,6 +117,10 @@ class MockContainer:
         The background _run thread (started by ``start()``) may still be
         setting up the subprocess, so we first join that thread before
         inspecting ``_process``.
+
+        When streaming threads are reading the pipes (``_streaming_started``
+        is True), we only call ``process.wait()`` instead of ``communicate()``
+        to avoid competing for pipe data.
         """
         # Wait for the background start thread to finish launching the process
         if hasattr(self, "_run_thread"):
@@ -123,6 +128,20 @@ class MockContainer:
 
         if self._process is None:
             return {"StatusCode": self._exit_code if self._exit_code is not None else -1}
+
+        if self._streaming_started:
+            # Streaming threads own the pipes — just wait for exit.
+            try:
+                self._process.wait(timeout=timeout)
+                with self._lock:
+                    self._exit_code = self._process.returncode
+                return {"StatusCode": self._exit_code}
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait()
+                with self._lock:
+                    self._exit_code = -1
+                raise Exception(f"Container wait timed out after {timeout}s")
 
         try:
             stdout, stderr = self._process.communicate(timeout=timeout)
@@ -140,14 +159,65 @@ class MockContainer:
                 self._exit_code = -1
             raise Exception(f"Container wait timed out after {timeout}s")
 
-    def logs(self, stdout=True, stderr=True):
-        """Return captured logs."""
+    def logs(self, stdout=True, stderr=True, stream=False, follow=False):
+        """Return captured logs.
+
+        When ``stream=True`` is passed, returns an iterator that yields output
+        chunks incrementally.  The iterator waits for the subprocess to start,
+        reads from the pipe in small chunks while the process is running, and
+        stops when the process exits (simulating real Docker behaviour).
+
+        When ``stream=False`` (the default), returns the full captured bytes
+        as before.
+        """
+        if stream:
+            self._streaming_started = True
+            return self._stream_logs(stdout=stdout, stderr=stderr)
+
         with self._lock:
             if stdout and not stderr:
                 return self._stdout
             if stderr and not stdout:
                 return self._stderr
             return self._stdout + self._stderr
+
+    def _stream_logs(self, stdout=True, stderr=True):
+        """Generator that yields log chunks incrementally from the subprocess.
+
+        Waits for the background _run_thread to finish launching the process,
+        then reads from the appropriate pipe in small chunks until the process
+        exits.
+        """
+        # Wait for the subprocess to be set up
+        if hasattr(self, "_run_thread"):
+            self._run_thread.join(timeout=30)
+
+        if self._process is None:
+            return
+
+        # Pick the right pipe
+        if stdout and not stderr:
+            pipe = self._process.stdout
+        elif stderr and not stdout:
+            pipe = self._process.stderr
+        else:
+            pipe = self._process.stdout  # default to stdout for combined
+
+        if pipe is None:
+            return
+
+        # Use read1() for non-blocking partial reads — BufferedReader.read(n)
+        # blocks until exactly n bytes or EOF, but read1() returns as soon as
+        # any data is available from the underlying raw stream.
+        while True:
+            try:
+                chunk = pipe.read1(4096)
+            except (ValueError, OSError):
+                # Pipe closed
+                break
+            if not chunk:
+                break
+            yield chunk
 
     def stop(self, timeout=None):
         """Stop the running process."""

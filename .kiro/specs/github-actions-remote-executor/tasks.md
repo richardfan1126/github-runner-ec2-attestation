@@ -2424,8 +2424,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 128. Checkpoint - Ensure all output attestation every-poll tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 129. Implement streaming output capture via Log_Streaming_Thread
-  - [ ] 129.1 Replace batch log capture with streaming log capture in ScriptExecutor._execute_in_container
+- [x] 129. Implement streaming output capture via Log_Streaming_Thread
+  - [x] 129.1 Replace batch log capture with streaming log capture in ScriptExecutor._execute_in_container
     - After `container.start()` and before `container.wait()`, start a Log_Streaming_Thread (daemon thread) that calls `container.logs(stream=True, follow=True, stdout=True, stderr=False)` for stdout and a separate call for stderr
     - Each streaming thread reads chunks from the Docker log stream and calls `self._output_collector.capture_output(execution_id, stream_name, chunk)` for each chunk received
     - The streaming threads run concurrently with `container.wait()` so that the Script_Executor can detect container completion while output is being streamed
@@ -2436,7 +2436,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - After `container.wait()` returns, join the streaming threads with a short timeout to ensure they have finished processing
     - _Requirements: 5.14, 44.1, 44.2, 44.3, 44.4, 44.5, 44.6, 44.7, 44.9, 44.10, 44.11_
 
-  - [ ] 129.2 Write property tests for streaming output capture
+  - [x] 129.2 Write property tests for streaming output capture
     - **Property 137: Incremental Output Availability During Execution**
     - Verify that for any script execution producing output, the Output_Collector contains partial output before the container exits
     - **Property 138: Log Streaming Thread Concurrent with Container Wait**
@@ -2449,7 +2449,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify that the streaming thread is a daemon thread
     - **Validates: Requirements 5.14, 44.1-44.11**
 
-  - [ ] 129.3 Write unit tests for streaming output capture
+  - [x] 129.3 Write unit tests for streaming output capture
     - Test that streaming threads are started after container.start() and before container.wait()
     - Test that output chunks are fed to OutputCollector incrementally during execution
     - Test that _capture_container_logs is not called after successful streaming
@@ -2460,7 +2460,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Mock Docker SDK container.logs(stream=True, follow=True) to return an iterator of chunks
     - _Requirements: 5.14, 44.1-44.11_
 
-- [ ] 130. Checkpoint - Ensure all streaming output tests pass
+- [x] 130. Checkpoint - Ensure all streaming output tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

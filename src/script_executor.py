@@ -89,6 +89,9 @@ class ScriptExecutor:
         """
         Internal method to execute script inside a Docker container (runs in background thread).
 
+        Uses Log_Streaming_Threads to capture stdout/stderr incrementally during
+        execution rather than batch-capturing after the container exits.
+
         Args:
             execution_id: Unique execution identifier
             repo_path: Path to the cloned repository directory on the host
@@ -98,6 +101,7 @@ class ScriptExecutor:
 
         container = None
         container_name = f"{CONTAINER_NAME_PREFIX}{execution_id}"
+        streaming_active = False
 
         try:
             # Get execution record for timeout
@@ -116,16 +120,11 @@ class ScriptExecutor:
             logger.info(f"Starting execution {execution_id}: {script_path}")
 
             # Create container with security constraints
-            # The cloned repo directory is bind-mounted read-only into the
-            # container at /workspace so the script can reference sibling files.
-            # A tmpfs at /tmp/execution gives the script a writable area.
             nano_cpus = int(self._cpu_limit * 1e9)
             host_repo_path = os.path.abspath(repo_path)
 
             # Ensure cloned files are world-readable so the container's
             # "nobody" user can access them through the bind mount.
-            # git clone inherits the server process umask which may be
-            # restrictive (e.g. 0077), leaving files owner-only.
             subprocess.run(
                 ["chmod", "-R", "a+rX", host_repo_path],
                 timeout=30,
@@ -157,6 +156,22 @@ class ScriptExecutor:
             container.start()
             logger.info(f"Container {container_name} started for execution {execution_id}")
 
+            # Start Log_Streaming_Threads for stdout and stderr
+            stdout_thread = threading.Thread(
+                target=self._stream_container_logs,
+                args=(execution_id, container, "stdout"),
+                daemon=True,
+            )
+            stderr_thread = threading.Thread(
+                target=self._stream_container_logs,
+                args=(execution_id, container, "stderr"),
+                daemon=True,
+            )
+            stdout_thread.start()
+            stderr_thread.start()
+            streaming_active = True
+            logger.debug(f"Log streaming threads started for execution {execution_id}")
+
             # Wait for completion with timeout
             try:
                 result = container.wait(timeout=timeout)
@@ -171,16 +186,25 @@ class ScriptExecutor:
                 except docker.errors.APIError:
                     pass
 
-                # Capture any partial output before marking timed out
-                self._capture_container_logs(execution_id, container)
+                # Join streaming threads to capture any partial output
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
+
+                # Fallback batch capture only if streaming was not active
+                if not streaming_active:
+                    self._capture_container_logs(execution_id, container)
+
                 self._output_collector.mark_complete(execution_id, -1)
                 self._execution_manager.update_status(
                     execution_id, ExecutionStatus.TIMED_OUT, exit_code=-1
                 )
                 return
 
-            # Capture stdout/stderr from container logs
-            self._capture_container_logs(execution_id, container)
+            # Join streaming threads with short timeout to ensure they finish
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+
+            # Streaming threads already captured all output — no batch re-capture needed
 
             # Mark output as complete
             self._output_collector.mark_complete(execution_id, exit_code)
@@ -220,6 +244,34 @@ class ScriptExecutor:
 
             # Clean up temporary files
             self._cleanup_temp_files(execution_id, repo_path)
+
+    def _stream_container_logs(self, execution_id: str, container, stream_name: str) -> None:
+        """
+        Stream logs from a container incrementally and feed chunks to the OutputCollector.
+
+        This runs as a daemon thread (Log_Streaming_Thread) concurrently with
+        container.wait(), reading from the Docker SDK streaming log API.
+
+        Args:
+            execution_id: Unique execution identifier
+            container: Docker container object
+            stream_name: 'stdout' or 'stderr'
+        """
+        try:
+            is_stdout = stream_name == "stdout"
+            log_stream = container.logs(
+                stream=True,
+                follow=True,
+                stdout=is_stdout,
+                stderr=not is_stdout,
+            )
+            for chunk in log_stream:
+                if chunk:
+                    self._output_collector.capture_output(execution_id, stream_name, chunk)
+        except Exception as e:
+            logger.warning(
+                f"Error streaming {stream_name} for execution {execution_id}: {e}"
+            )
 
     def _copy_script_to_container(self, container, script_path: str) -> None:
         """
