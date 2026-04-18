@@ -22,6 +22,7 @@ from src.script_executor import ScriptExecutor
 from src.validation import RequestValidator
 from src.models import ExecutionStatus, CloneResult
 from src.logging_config import set_log_context, clear_log_context, sanitize_for_logging, sanitize_error_message
+from src.nonce_cache import NonceCache
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,7 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     app.state.request_validator = request_validator
     app.state.rate_limiter = rate_limiter
     app.state.encryption_manager = encryption_manager
+    app.state.nonce_cache = NonceCache(config.nonce_cache_ttl_seconds)
     
     # Request logging middleware (exclude tokens)
     @app.middleware("http")
@@ -421,6 +423,20 @@ def add_routes(app: FastAPI) -> None:
                         "OIDC token repository claim does not match request repository_url"
                     )
                 )
+
+            # Anti-replay nonce check
+            request_nonce = body.get("nonce")
+            if request_nonce is not None:
+                nonce_cache = request.app.state.nonce_cache
+                if not nonce_cache.check_and_store(request_nonce):
+                    logger.warning(f"Duplicate nonce detected on /execute: {request_nonce}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=create_error_response(
+                            "duplicate_nonce",
+                            "Duplicate nonce detected; request rejected as potential replay"
+                        )
+                    )
 
             # Log request details (exclude token)
             logger.info(
@@ -780,6 +796,19 @@ def add_routes(app: FastAPI) -> None:
                         "OIDC token repository claim does not match execution record"
                     )
                 )
+
+            # Anti-replay nonce check
+            if nonce is not None:
+                nonce_cache = request.app.state.nonce_cache
+                if not nonce_cache.check_and_store(nonce):
+                    logger.warning(f"Duplicate nonce detected on /output: {nonce}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=create_error_response(
+                            "duplicate_nonce",
+                            "Duplicate nonce detected; request rejected as potential replay"
+                        )
+                    )
 
             # Retrieve output
             output_collector = request.app.state.output_collector

@@ -44,6 +44,9 @@ class ServerConfig:
     # Output Buffer Size Configuration
     max_output_size_bytes: int = 10_485_760  # 10MB default
     
+    # Anti-replay nonce cache TTL (matches OIDC token lifetime)
+    nonce_cache_ttl_seconds: int = 300
+
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
     require_protected_ref: bool = False
@@ -133,6 +136,12 @@ class ServerConfig:
         if max_output_size_bytes_raw is not None:
             max_output_size_bytes = int(max_output_size_bytes_raw)
         
+        # Parse optional NONCE_CACHE_TTL_SECONDS (default 300s = 5 min)
+        nonce_cache_ttl_seconds_raw = os.getenv("NONCE_CACHE_TTL_SECONDS")
+        nonce_cache_ttl_seconds = 300
+        if nonce_cache_ttl_seconds_raw is not None:
+            nonce_cache_ttl_seconds = int(nonce_cache_ttl_seconds_raw)
+        
         return cls(
             port=int(port),
             max_concurrent_executions=int(max_concurrent),
@@ -151,6 +160,7 @@ class ServerConfig:
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,
+            nonce_cache_ttl_seconds=nonce_cache_ttl_seconds,
         )
     
     def validate(self) -> None:
@@ -216,6 +226,11 @@ class ServerConfig:
         if self.max_output_size_bytes < 1:
             errors.append(
                 f"Invalid max_output_size_bytes: {self.max_output_size_bytes} (must be >= 1)"
+            )
+        
+        if self.nonce_cache_ttl_seconds < 1:
+            errors.append(
+                f"Invalid nonce_cache_ttl_seconds: {self.nonce_cache_ttl_seconds} (must be >= 1)"
             )
         
         if errors:

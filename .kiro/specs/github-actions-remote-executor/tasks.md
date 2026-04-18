@@ -2691,28 +2691,28 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Update Property 58, 59, 60 tests as needed
     - _Requirements: 10.4, 10.5_
 
-- [ ] 144. Implement anti-replay nonce cache
-  - [ ] 144.1 Create NonceCache class in src/server.py or a new src/nonce_cache.py
+- [x] 144. Implement anti-replay nonce cache
+  - [x] 144.1 Create NonceCache class in src/server.py or a new src/nonce_cache.py
     - Implement `NonceCache` with configurable TTL (NONCE_CACHE_TTL_SECONDS)
     - Implement `check_and_store(nonce)` returning True if new, False if duplicate
     - Implement `cleanup_expired()` to purge expired entries
     - Thread-safe for concurrent access
     - _Requirements: 45.1, 45.4_
 
-  - [ ] 144.2 Add NONCE_CACHE_TTL_SECONDS config to src/config.py
+  - [x] 144.2 Add NONCE_CACHE_TTL_SECONDS config to src/config.py
     - Add `nonce_cache_ttl_seconds` field with default matching OIDC token lifetime
     - _Requirements: 45.4_
 
-  - [ ] 144.3 Wire nonce validation into /execute and /output endpoints
+  - [x] 144.3 Wire nonce validation into /execute and /output endpoints
     - After decryption, extract nonce from decrypted payload
     - Check nonce against NonceCache; reject with HTTP 400 if duplicate
     - _Requirements: 45.2, 45.3, 45.5_
 
-  - [ ] 144.4 Write property test for Anti-Replay Nonce Validation
+  - [x] 144.4 Write property test for Anti-Replay Nonce Validation
     - **Property 154: Anti-Replay Nonce Validation**
     - **Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5**
 
-  - [ ] 144.5 Write unit tests for nonce cache
+  - [x] 144.5 Write unit tests for nonce cache
     - Test new nonce accepted
     - Test duplicate nonce rejected with 400
     - Test nonce expiry after TTL
