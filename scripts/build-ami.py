@@ -782,6 +782,71 @@ def validate_artifact_files(ssh_client: paramiko.SSHClient) -> None:
     logger.info("All required artifact files verified successfully")
 
 
+def check_debug_annotation(ssh_client: paramiko.SSHClient, artifact_ref: str, allow_debug: bool) -> None:
+    """
+    Check the debug annotation on the artifact and gate production builds.
+
+    Runs `oras manifest fetch` on the remote instance to retrieve the manifest
+    JSON, parses it to find the `debug` annotation, and enforces the production
+    gate: debug artifacts are rejected unless --allow-debug is provided.
+
+    Args:
+        ssh_client: Connected paramiko SSHClient
+        artifact_ref: GitHub Container Registry artifact reference
+        allow_debug: Whether --allow-debug CLI flag was provided
+
+    Raises:
+        RuntimeError: If debug=true and allow_debug is False
+
+    Requirements: 46.3, 46.4, 46.5
+    """
+    logger.info("Checking debug annotation on artifact...")
+
+    exit_code, stdout, stderr = execute_remote_command(
+        ssh_client,
+        f"oras manifest fetch {artifact_ref}",
+        stream_output=False
+    )
+
+    if exit_code != 0:
+        logger.warning(f"Failed to fetch manifest for debug annotation check: {stderr}")
+        logger.warning("Proceeding without debug annotation check")
+        return
+
+    try:
+        manifest = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"Failed to parse manifest JSON: {e}")
+        logger.warning("Proceeding without debug annotation check")
+        return
+
+    # Look for debug annotation in manifest annotations
+    annotations = manifest.get("annotations", {})
+    debug_value = annotations.get("debug")
+
+    if debug_value is None:
+        logger.info("No debug annotation found on artifact, proceeding normally")
+        return
+
+    logger.info(f"Debug annotation value: {debug_value}")
+
+    if debug_value == "true":
+        if not allow_debug:
+            raise RuntimeError(
+                "REFUSING TO BUILD: Artifact has debug=true annotation (SSH-enabled debug image). "
+                "Debug images must not be converted to production AMIs. "
+                "If you intentionally want to build a debug AMI, re-run with --allow-debug flag."
+            )
+        else:
+            logger.warning("=" * 80)
+            logger.warning("WARNING: Building AMI from DEBUG artifact (debug=true)")
+            logger.warning("This artifact was built with SSH debug access enabled.")
+            logger.warning("The resulting AMI is NOT intended for production use.")
+            logger.warning("=" * 80)
+    else:
+        logger.info("Artifact is not a debug image (debug=%s), proceeding normally", debug_value)
+
+
 def validate_pcr_measurements(ssh_client: paramiko.SSHClient) -> dict:
     """
     Read and validate PCR measurements from pcr_measurements.json.
@@ -1198,6 +1263,14 @@ def parse_arguments() -> argparse.Namespace:
         default='ami_build_result.json',
         help='Output file for build result (default: ami_build_result.json)'
     )
+
+    parser.add_argument(
+        '--allow-debug',
+        action='store_true',
+        default=False,
+        help='Allow building AMI from debug (SSH-enabled) artifacts. '
+             'Without this flag, debug artifacts are rejected.'
+    )
     
     return parser.parse_args()
 
@@ -1310,6 +1383,11 @@ def main() -> int:
         logger.info("")
         logger.info("Validating artifact files...")
         validate_artifact_files(ssh_client)
+
+        # Check debug annotation and enforce production gate (Requirement 46.3, 46.4, 46.5)
+        logger.info("")
+        logger.info("Checking debug annotation...")
+        check_debug_annotation(ssh_client, args.artifact_ref, args.allow_debug)
 
         # Validate and extract PCR measurements
         logger.info("")

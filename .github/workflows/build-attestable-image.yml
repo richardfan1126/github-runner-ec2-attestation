@@ -119,6 +119,12 @@ jobs:
             exit 1
           fi
           
+          # Determine debug annotation based on whether SSH was enabled
+          DEBUG_VALUE="false"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
+            DEBUG_VALUE="true"
+          fi
+          
           echo "Pushing artifact to: $ARTIFACT_REF"
           
           if ! oras push "$ARTIFACT_REF" \
@@ -127,6 +133,7 @@ jobs:
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             --annotation "com.github.attestable-image.pcr4=${{ steps.pcr.outputs.pcr4 }}" \
             --annotation "com.github.attestable-image.pcr7=${{ steps.pcr.outputs.pcr7 }}" \
+            --annotation "debug=${DEBUG_VALUE}" \
             "$RAW_IMAGE:application/octet-stream" \
             build-output/pcr_measurements.json:application/json; then
             echo "::error::Failed to push artifact to GHCR"

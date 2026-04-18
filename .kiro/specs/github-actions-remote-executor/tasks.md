@@ -2810,27 +2810,27 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 160: Secure SSH Key Deletion**
     - **Validates: Requirements 21.15**
 
-- [ ] 151. Checkpoint - Ensure build security hardening tests pass
+- [x] 151. Checkpoint - Ensure build security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 152. Implement debug image annotation
-  - [ ] 152.1 Add debug annotation to ORAS push in .github/workflows/build-attestable-image.yml
+- [x] 152. Implement debug image annotation
+  - [x] 152.1 Add debug annotation to ORAS push in .github/workflows/build-attestable-image.yml
     - When building with --enable-ssh, add `--annotation "debug=true"` to the ORAS push command
     - When building without --enable-ssh, add `--annotation "debug=false"` to the ORAS push command
     - _Requirements: 45.1, 45.2_
 
-  - [ ] 152.2 Add --allow-debug CLI flag to scripts/build-ami.py
+  - [x] 152.2 Add --allow-debug CLI flag to scripts/build-ami.py
     - Add `--allow-debug` as a boolean flag (store_true)
     - After downloading the artifact, check for the `debug` annotation using `oras manifest fetch`
     - If `debug=true` and `--allow-debug` is not provided, refuse to build and terminate with error
     - If `debug=true` and `--allow-debug` is provided, log a prominent warning and proceed
     - _Requirements: 45.3, 45.4, 45.5_
 
-  - [ ] 152.3 Write property test for Debug Image Annotation
+  - [x] 152.3 Write property test for Debug Image Annotation
     - **Property 161: Debug Image Annotation**
     - **Validates: Requirements 46.1, 46.2**
 
-  - [ ] 152.4 Write property test for Debug Image Production Gate
+  - [x] 152.4 Write property test for Debug Image Production Gate
     - **Property 162: Debug Image Production Gate**
     - **Validates: Requirements 46.3, 46.4, 46.5**
 
