@@ -82,7 +82,7 @@ class TestLargeOutputHandling:
     
     def test_large_mixed_output(self):
         """Test capturing large mixed stdout and stderr (20MB total)"""
-        collector = OutputCollector()
+        collector = OutputCollector(max_output_size_bytes=20 * 1024 * 1024)
         execution_id = "test-large-mixed"
         collector.create_buffer(execution_id)
         
@@ -142,7 +142,7 @@ class TestLargeOutputHandling:
     
     def test_memory_efficiency_with_large_output(self):
         """Test that large output doesn't cause memory issues"""
-        collector = OutputCollector()
+        collector = OutputCollector(max_output_size_bytes=52 * 1024 * 1024)
         execution_id = "test-memory"
         collector.create_buffer(execution_id)
         

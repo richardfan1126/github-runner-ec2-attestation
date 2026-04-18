@@ -2531,23 +2531,23 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 134. Checkpoint - Ensure OIDC binding and repo security tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 135. Implement output buffer size limits
-  - [ ] 135.1 Add MAX_OUTPUT_SIZE_BYTES config to src/config.py
+- [x] 135. Implement output buffer size limits
+  - [x] 135.1 Add MAX_OUTPUT_SIZE_BYTES config to src/config.py
     - Add `max_output_size_bytes` field with a sensible default (e.g., 10MB)
     - Read from MAX_OUTPUT_SIZE_BYTES environment variable
     - _Requirements: 5.15_
 
-  - [ ] 135.2 Enforce output size limit in src/output_collector.py
+  - [x] 135.2 Enforce output size limit in src/output_collector.py
     - Track combined stdout and stderr buffer size
     - When appending output would exceed MAX_OUTPUT_SIZE_BYTES, truncate the output
     - Mark the output record as truncated (add a `truncated` flag)
     - _Requirements: 5.15, 5.16_
 
-  - [ ] 135.3 Write property test for Output Buffer Size Enforcement
+  - [x] 135.3 Write property test for Output Buffer Size Enforcement
     - **Property 146: Output Buffer Size Enforcement**
     - **Validates: Requirements 5.15, 5.16**
 
-  - [ ] 135.4 Write unit tests for output buffer size limits
+  - [x] 135.4 Write unit tests for output buffer size limits
     - Test output within limit (not truncated)
     - Test output exceeding limit (truncated, flag set)
     - Test exact boundary condition

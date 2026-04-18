@@ -64,6 +64,7 @@ class OutputData:
     stderr_offset: int
     complete: bool
     exit_code: Optional[int]
+    truncated: bool = False
 
 
 @dataclass

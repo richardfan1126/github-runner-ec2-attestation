@@ -41,6 +41,9 @@ class ServerConfig:
     container_memory_limit: str
     container_cpu_limit: float
     
+    # Output Buffer Size Configuration
+    max_output_size_bytes: int = 10_485_760  # 10MB default
+    
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
     require_protected_ref: bool = False
@@ -124,6 +127,12 @@ class ServerConfig:
         require_protected_ref_raw = os.getenv("REQUIRE_PROTECTED_REF", "false")
         require_protected_ref = require_protected_ref_raw.lower() in ("true", "1", "yes")
         
+        # Parse optional MAX_OUTPUT_SIZE_BYTES (default 10MB)
+        max_output_size_bytes_raw = os.getenv("MAX_OUTPUT_SIZE_BYTES")
+        max_output_size_bytes = 10_485_760  # 10MB default
+        if max_output_size_bytes_raw is not None:
+            max_output_size_bytes = int(max_output_size_bytes_raw)
+        
         return cls(
             port=int(port),
             max_concurrent_executions=int(max_concurrent),
@@ -141,6 +150,7 @@ class ServerConfig:
             container_cpu_limit=float(container_cpu_limit),
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
+            max_output_size_bytes=max_output_size_bytes,
         )
     
     def validate(self) -> None:
@@ -201,6 +211,11 @@ class ServerConfig:
         if self.container_cpu_limit <= 0:
             errors.append(
                 f"Invalid container_cpu_limit: {self.container_cpu_limit} (must be > 0)"
+            )
+        
+        if self.max_output_size_bytes < 1:
+            errors.append(
+                f"Invalid max_output_size_bytes: {self.max_output_size_bytes} (must be >= 1)"
             )
         
         if errors:

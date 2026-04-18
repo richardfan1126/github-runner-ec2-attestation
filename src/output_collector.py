@@ -12,16 +12,22 @@ class OutputBuffer:
     stderr: bytearray = field(default_factory=bytearray)
     complete: bool = False
     exit_code: Optional[int] = None
+    truncated: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 class OutputCollector:
     """Collects and stores output from script executions"""
     
-    def __init__(self):
-        """Initialize the output collector"""
+    def __init__(self, max_output_size_bytes: int = 10_485_760):
+        """Initialize the output collector
+        
+        Args:
+            max_output_size_bytes: Maximum combined stdout+stderr size in bytes (default 10MB)
+        """
         self._outputs: Dict[str, OutputBuffer] = {}
         self._store_lock = threading.Lock()
+        self._max_output_size_bytes = max_output_size_bytes
     
     def create_buffer(self, execution_id: str) -> None:
         """Create a new output buffer for an execution
@@ -54,6 +60,23 @@ class OutputCollector:
             raise ValueError(f"Invalid stream: {stream}")
         
         with buffer.lock:
+            if buffer.truncated:
+                return
+            
+            if not data:
+                return
+            
+            current_size = len(buffer.stdout) + len(buffer.stderr)
+            remaining = self._max_output_size_bytes - current_size
+            
+            if remaining <= 0:
+                buffer.truncated = True
+                return
+            
+            if len(data) > remaining:
+                data = data[:remaining]
+                buffer.truncated = True
+            
             if stream == 'stdout':
                 buffer.stdout.extend(data)
             else:
@@ -120,7 +143,8 @@ class OutputCollector:
                 stdout_offset=stdout_offset,
                 stderr_offset=stderr_offset,
                 complete=buffer.complete,
-                exit_code=buffer.exit_code
+                exit_code=buffer.exit_code,
+                truncated=buffer.truncated
             )
     
     def remove_output(self, execution_id: str) -> None:
