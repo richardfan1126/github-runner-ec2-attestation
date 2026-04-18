@@ -2617,17 +2617,17 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test atomicity under concurrent request simulation
     - _Requirements: 8.11, 8.12_
 
-- [ ] 139. Implement script size enforcement
-  - [ ] 139.1 Add file size check after clone in src/server.py
+- [x] 139. Implement script size enforcement
+  - [x] 139.1 Add file size check after clone in src/server.py
     - After cloning the repository and before execution, check the script file size against MAX_SCRIPT_SIZE_BYTES
     - Return HTTP 413 Payload Too Large if exceeded
     - _Requirements: 8.13, 8.14_
 
-  - [ ] 139.2 Write property test for Script Size Enforcement
+  - [x] 139.2 Write property test for Script Size Enforcement
     - **Property 150: Script Size Enforcement**
     - **Validates: Requirements 8.13, 8.14**
 
-  - [ ] 139.3 Write unit tests for script size enforcement
+  - [x] 139.3 Write unit tests for script size enforcement
     - Test script within size limit (allowed)
     - Test script exceeding size limit (413)
     - _Requirements: 8.13, 8.14_

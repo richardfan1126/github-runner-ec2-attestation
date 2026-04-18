@@ -744,3 +744,79 @@ def test_property_149_concurrency_enforcement(max_concurrent):
                             assert data["detail"]["error"] == "at_capacity"
 
     assert accepted_count == max_concurrent
+
+
+# Feature: github-actions-remote-executor, Property 150: Script Size Enforcement
+@settings(max_examples=100, deadline=None)
+@given(
+    max_script_size=st.integers(min_value=1, max_value=10_000_000),
+    file_size=st.integers(min_value=0, max_value=20_000_000),
+)
+def test_property_150_script_size_enforcement(max_script_size, file_size):
+    """
+    **Validates: Requirements 8.13, 8.14**
+
+    For any script file whose size exceeds MAX_SCRIPT_SIZE_BYTES, the server
+    should reject the request with HTTP 413 Payload Too Large. Files within
+    the limit should be accepted.
+    """
+    ctx = EncryptionTestContext()
+    config = get_test_config()
+    config.max_script_size_bytes = max_script_size
+    config.rate_limit_per_ip = 100000  # avoid rate limiting
+    app = create_app(config, encryption_manager=ctx.encryption_manager)
+    client = TestClient(app)
+
+    request_data = {
+        "repository_url": "https://github.com/owner/repo",
+        "commit_hash": "a" * 40,
+        "script_path": "scripts/test.sh",
+        "github_token": "ghp_test_token_123",
+        "oidc_token": "valid.oidc.token",
+    }
+
+    with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
+         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        mock_validate.return_value = Mock(valid=True, errors=[])
+
+        with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
+            mock_auth.return_value = Mock(success=True, error_message=None)
+
+            with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                mock_clone.return_value = CloneResult(
+                    clone_path="/tmp/test_clone",
+                    script_path=""
+                )
+
+                with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                    with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                        mock_attest.return_value = (
+                            AttestationDocument(
+                                repository_url=request_data['repository_url'],
+                                commit_hash=request_data['commit_hash'],
+                                script_path=request_data['script_path'],
+                                timestamp=datetime.now(timezone.utc),
+                                signature=b"test_signature_bytes"
+                            ),
+                            None
+                        )
+
+                        with patch('os.path.getsize', return_value=file_size), \
+                             patch.object(app.state.script_executor, 'execute_async'), \
+                             patch.object(app.state.repository_client, 'cleanup_clone'):
+
+                            body = make_encrypted_execute_request(request_data, ctx)
+                            resp = client.post("/execute", json=body)
+
+                            if file_size > max_script_size:
+                                assert resp.status_code == 413, (
+                                    f"Expected 413 for file_size={file_size} > max={max_script_size}, "
+                                    f"got {resp.status_code}"
+                                )
+                                data = resp.json()
+                                assert data["detail"]["error"] == "script_too_large"
+                            else:
+                                assert resp.status_code == 200, (
+                                    f"Expected 200 for file_size={file_size} <= max={max_script_size}, "
+                                    f"got {resp.status_code}"
+                                )

@@ -1236,3 +1236,83 @@ class TestTryCreateExecution:
         )
         assert accepted is True
         assert record is not None
+
+
+class TestScriptSizeEnforcement:
+    """Tests for script size enforcement (Requirements 8.13, 8.14)"""
+
+    def _make_request_with_file_size(self, client, app, ctx, request_data, file_size):
+        """Helper to make an /execute request with a mocked file size."""
+        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+            mock_validate.return_value = Mock(valid=True, errors=[])
+
+            with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
+                mock_auth.return_value = Mock(success=True, error_message=None)
+
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.return_value = CloneResult(
+                        clone_path="/tmp/test_clone",
+                        script_path=""
+                    )
+
+                    with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                        with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                            mock_attest.return_value = (
+                                AttestationDocument(
+                                    repository_url=request_data['repository_url'],
+                                    commit_hash=request_data['commit_hash'],
+                                    script_path=request_data['script_path'],
+                                    timestamp=datetime.now(timezone.utc),
+                                    signature=b"test_signature_bytes"
+                                ),
+                                None
+                            )
+
+                            with patch('os.path.getsize', return_value=file_size), \
+                                 patch.object(app.state.script_executor, 'execute_async'), \
+                                 patch.object(app.state.repository_client, 'cleanup_clone'):
+                                body = make_encrypted_execute_request(request_data, ctx)
+                                return client.post("/execute", json=body)
+
+    def test_script_within_size_limit_allowed(self):
+        """Test that scripts within the size limit are accepted"""
+        ctx = EncryptionTestContext()
+        config = get_test_config()
+        config.rate_limit_per_ip = 100000
+        app = create_app(config, encryption_manager=ctx.encryption_manager)
+        client = TestClient(app)
+
+        request_data = {
+            "repository_url": "https://github.com/owner/repo",
+            "commit_hash": "a" * 40,
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token_123",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        # File size below the 1MB limit
+        resp = self._make_request_with_file_size(client, app, ctx, request_data, file_size=100)
+        assert resp.status_code == 200
+
+    def test_script_exceeding_size_limit_rejected_with_413(self):
+        """Test that scripts exceeding the size limit are rejected with 413"""
+        ctx = EncryptionTestContext()
+        config = get_test_config()
+        config.rate_limit_per_ip = 100000
+        app = create_app(config, encryption_manager=ctx.encryption_manager)
+        client = TestClient(app)
+
+        request_data = {
+            "repository_url": "https://github.com/owner/repo",
+            "commit_hash": "a" * 40,
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token_123",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        # File size above the 1MB (1048576) limit
+        resp = self._make_request_with_file_size(client, app, ctx, request_data, file_size=1048577)
+        assert resp.status_code == 413
+        data = resp.json()
+        assert data["detail"]["error"] == "script_too_large"

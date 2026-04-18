@@ -468,6 +468,22 @@ def add_routes(app: FastAPI) -> None:
             # Get config for later use
             config = request.app.state.config
             
+            # Check script file size against MAX_SCRIPT_SIZE_BYTES
+            script_full_path = os.path.join(clone_result.clone_path, clone_result.script_path)
+            script_size = os.path.getsize(script_full_path)
+            if script_size > config.max_script_size_bytes:
+                logger.warning(
+                    f"Script file too large: {script_size} bytes exceeds limit of {config.max_script_size_bytes} bytes"
+                )
+                repo_client.cleanup_clone(clone_result.clone_path)
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=create_error_response(
+                        "script_too_large",
+                        "Script file exceeds maximum allowed size"
+                    )
+                )
+            
             # Generate attestation
             attestation_start = time.time()
             attestation_gen = request.app.state.attestation_generator
