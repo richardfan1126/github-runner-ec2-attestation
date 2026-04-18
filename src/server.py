@@ -141,6 +141,8 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     request_validator = RequestValidator(
         allowed_repositories=config.allowed_repositories,
         expected_audience=config.expected_audience,
+        allowed_branches=config.allowed_branches,
+        require_protected_ref=config.require_protected_ref,
     )
     rate_limiter = RateLimiter(
         config.rate_limit_per_ip,

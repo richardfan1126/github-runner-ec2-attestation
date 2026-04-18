@@ -2481,30 +2481,30 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test various URL formats (with/without .git suffix, trailing slashes)
     - _Requirements: 2.22, 2.23, 2.24_
 
-- [ ] 132. Implement extended OIDC claim restrictions (branch and protected ref)
-  - [ ] 132.1 Add ALLOWED_BRANCHES and REQUIRE_PROTECTED_REF config to src/config.py
+- [x] 132. Implement extended OIDC claim restrictions (branch and protected ref)
+  - [x] 132.1 Add ALLOWED_BRANCHES and REQUIRE_PROTECTED_REF config to src/config.py
     - Add optional `allowed_branches` field (comma-separated list, default None)
     - Add optional `require_protected_ref` field (boolean, default False)
     - Parse ALLOWED_BRANCHES env var into a list of branch patterns
     - Parse REQUIRE_PROTECTED_REF env var as boolean
     - _Requirements: 2.25, 2.28_
 
-  - [ ] 132.2 Add branch and ref validation to src/validation.py
+  - [x] 132.2 Add branch and ref validation to src/validation.py
     - When `allowed_branches` is configured, validate the `ref` claim against allowed branch patterns; reject with HTTP 403 if no match
     - When `require_protected_ref` is True, validate the `ref_protected` claim is "true"; reject with HTTP 403 if not
     - Skip branch validation when `allowed_branches` is not configured
     - Skip protected ref validation when `require_protected_ref` is not configured or False
     - _Requirements: 2.26, 2.27, 2.29, 2.30, 2.31, 2.32_
 
-  - [ ] 132.3 Write property test for Branch Restriction Enforcement
+  - [x] 132.3 Write property test for Branch Restriction Enforcement
     - **Property 143: Branch Restriction Enforcement**
     - **Validates: Requirements 2.25, 2.26, 2.27, 2.31**
 
-  - [ ] 132.4 Write property test for Protected Ref Enforcement
+  - [x] 132.4 Write property test for Protected Ref Enforcement
     - **Property 144: Protected Ref Enforcement**
     - **Validates: Requirements 2.28, 2.29, 2.30, 2.32**
 
-  - [ ] 132.5 Write unit tests for branch and protected ref validation
+  - [x] 132.5 Write unit tests for branch and protected ref validation
     - Test with ALLOWED_BRANCHES configured: matching ref (allowed), non-matching ref (403)
     - Test with ALLOWED_BRANCHES not configured: any ref allowed
     - Test with REQUIRE_PROTECTED_REF=true: ref_protected="true" (allowed), ref_protected="false" (403)

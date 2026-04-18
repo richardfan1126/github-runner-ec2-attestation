@@ -1,6 +1,6 @@
 """Configuration management for GitHub Actions Remote Executor"""
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -40,6 +40,10 @@ class ServerConfig:
     container_image: str
     container_memory_limit: str
     container_cpu_limit: float
+    
+    # Optional OIDC Branch/Ref Restrictions
+    allowed_branches: Optional[list[str]] = None
+    require_protected_ref: bool = False
     
     @classmethod
     def from_env(cls) -> "ServerConfig":
@@ -108,6 +112,18 @@ class ServerConfig:
                 f"Missing required environment variables: {', '.join(missing_vars)}"
             )
         
+        # Parse optional ALLOWED_BRANCHES (comma-separated, None if not set)
+        allowed_branches_raw = os.getenv("ALLOWED_BRANCHES")
+        allowed_branches = None
+        if allowed_branches_raw is not None:
+            allowed_branches = [b.strip() for b in allowed_branches_raw.split(",") if b.strip()]
+            if not allowed_branches:
+                allowed_branches = None
+        
+        # Parse optional REQUIRE_PROTECTED_REF (boolean, default False)
+        require_protected_ref_raw = os.getenv("REQUIRE_PROTECTED_REF", "false")
+        require_protected_ref = require_protected_ref_raw.lower() in ("true", "1", "yes")
+        
         return cls(
             port=int(port),
             max_concurrent_executions=int(max_concurrent),
@@ -123,6 +139,8 @@ class ServerConfig:
             container_image=container_image,
             container_memory_limit=container_memory_limit,
             container_cpu_limit=float(container_cpu_limit),
+            allowed_branches=allowed_branches,
+            require_protected_ref=require_protected_ref,
         )
     
     def validate(self) -> None:

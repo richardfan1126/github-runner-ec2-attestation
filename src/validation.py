@@ -1,4 +1,5 @@
 """Request validation for GitHub Actions Remote Executor"""
+import fnmatch
 import logging
 import re
 import time
@@ -51,9 +52,13 @@ class RequestValidator:
         self,
         allowed_repositories: Optional[List[str]] = None,
         expected_audience: Optional[str] = None,
+        allowed_branches: Optional[List[str]] = None,
+        require_protected_ref: bool = False,
     ):
         self.allowed_repositories = allowed_repositories or []
         self.expected_audience = expected_audience or ""
+        self.allowed_branches = allowed_branches
+        self.require_protected_ref = require_protected_ref
         self._jwks_cache: Optional[dict] = None
 
     # ------------------------------------------------------------------
@@ -183,6 +188,11 @@ class RequestValidator:
                 claims=None,
             )
 
+        # --- validate branch restriction ---
+        branch_result = self._validate_branch_and_ref(claims)
+        if branch_result is not None:
+            return branch_result
+
         return OIDCValidationResult(
             valid=True, status_code=200,
             error_message=None,
@@ -284,11 +294,44 @@ class RequestValidator:
                 claims=None,
             )
 
+        # --- validate branch restriction ---
+        branch_result = self._validate_branch_and_ref(claims)
+        if branch_result is not None:
+            return branch_result
+
         return OIDCValidationResult(
             valid=True, status_code=200,
             error_message=None,
             claims=claims,
         )
+
+    def _validate_branch_and_ref(self, claims: dict) -> Optional[OIDCValidationResult]:
+        """Validate branch and protected ref restrictions.
+
+        Returns an ``OIDCValidationResult`` rejection if a restriction is
+        violated, or ``None`` if all checks pass (or are skipped).
+        """
+        # Branch restriction
+        if self.allowed_branches:
+            ref = claims.get("ref", "")
+            if not any(fnmatch.fnmatch(ref, pattern) for pattern in self.allowed_branches):
+                return OIDCValidationResult(
+                    valid=False, status_code=403,
+                    error_message=f"Branch not allowed: {ref}",
+                    claims=None,
+                )
+
+        # Protected ref restriction
+        if self.require_protected_ref:
+            ref_protected = claims.get("ref_protected", "")
+            if ref_protected != "true":
+                return OIDCValidationResult(
+                    valid=False, status_code=403,
+                    error_message=f"Protected ref required but ref_protected is: {ref_protected}",
+                    claims=None,
+                )
+
+        return None
 
     def _find_signing_key(self, kid: str):
         """Look up a signing key by kid, refreshing JWKS once on miss."""
