@@ -167,6 +167,9 @@ def test_infrastructure_cleanup_guarantee(region, instance_type, build_succeeds)
 
     with patch.object(build_ami.subprocess, 'run') as mock_run, \
          patch.object(build_ami.os.path, 'exists', return_value=True), \
+         patch.object(build_ami.os.path, 'getsize', return_value=256), \
+         patch.object(build_ami.os, 'urandom', return_value=b'\x00' * 256), \
+         patch('builtins.open', create=True) as mock_open, \
          patch.object(build_ami.os, 'unlink') as mock_unlink:
 
         # Terraform destroy succeeds

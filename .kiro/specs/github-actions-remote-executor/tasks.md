@@ -2799,14 +2799,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 159: Coldsnap Pinned Version**
     - **Validates: Requirements 17.15**
 
-- [ ] 150. Implement secure SSH key deletion
-  - [ ] 150.1 Update cleanup_infrastructure in scripts/build-ami.py
+- [x] 150. Implement secure SSH key deletion
+  - [x] 150.1 Update cleanup_infrastructure in scripts/build-ami.py
     - Before unlinking the SSH key file, overwrite it with random bytes (e.g., `os.urandom(len)`)
     - Then unlink the file
     - Add a comment documenting Terraform state sensitivity
     - _Requirements: 21.15, 21.16_
 
-  - [ ] 150.2 Write property test for Secure SSH Key Deletion
+  - [x] 150.2 Write property test for Secure SSH Key Deletion
     - **Property 160: Secure SSH Key Deletion**
     - **Validates: Requirements 21.15**
 

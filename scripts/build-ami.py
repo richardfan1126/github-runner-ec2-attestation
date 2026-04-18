@@ -1148,11 +1148,20 @@ def cleanup_infrastructure(
     else:
         logger.info("Infrastructure destroyed successfully")
 
+    # NOTE: Terraform state (terraform/build-ami/) contains sensitive SSH key
+    # material. Ensure state files are not committed to version control and are
+    # stored securely if retained.
+
     # Clean up temporary SSH key file
     if ssh_key_path and os.path.exists(ssh_key_path):
         try:
+            # Overwrite with random bytes before unlinking to prevent recovery
+            # (Requirement 21.15)
+            file_size = os.path.getsize(ssh_key_path)
+            with open(ssh_key_path, 'wb') as f:
+                f.write(os.urandom(file_size))
             os.unlink(ssh_key_path)
-            logger.info(f"Temporary SSH key file deleted: {ssh_key_path}")
+            logger.info(f"Temporary SSH key file securely deleted: {ssh_key_path}")
         except Exception:
             pass
 
