@@ -2463,19 +2463,19 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 130. Checkpoint - Ensure all streaming output tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 131. Implement OIDC repository claim binding on /execute
-  - [ ] 131.1 Add repository claim vs repository_url comparison in src/server.py
+- [x] 131. Implement OIDC repository claim binding on /execute
+  - [x] 131.1 Add repository claim vs repository_url comparison in src/server.py
     - After OIDC validation succeeds on /execute, extract the `repository` claim from the validated token
     - Compare the `repository` claim against the `repository_url` field in the decrypted Execution_Request (extract owner/repo from the URL)
     - If mismatch, reject with HTTP 403 Forbidden and an error message indicating repository mismatch
     - Perform this check before repository cloning begins
     - _Requirements: 2.22, 2.23, 2.24_
 
-  - [ ] 131.2 Write property test for OIDC Repository Claim Binding
+  - [x] 131.2 Write property test for OIDC Repository Claim Binding
     - **Property 142: OIDC Repository Claim Binding**
     - **Validates: Requirements 2.22, 2.23, 2.24**
 
-  - [ ] 131.3 Write unit tests for repository claim binding
+  - [x] 131.3 Write unit tests for repository claim binding
     - Test matching repository claim and repository_url (allowed)
     - Test mismatched repository claim and repository_url (403)
     - Test various URL formats (with/without .git suffix, trailing slashes)

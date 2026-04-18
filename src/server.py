@@ -367,6 +367,29 @@ def add_routes(app: FastAPI) -> None:
             )
             phase_times['oidc_auth'] = (time.time() - oidc_start) * 1000
 
+            # Repository claim binding: verify OIDC repository matches request repository_url
+            oidc_repo_claim = oidc_result.claims.get("repository", "")
+            request_repo_url = body.get("repository_url", "")
+            # Extract owner/repo from URL: strip trailing slashes, .git suffix, take last two segments
+            stripped_url = request_repo_url.rstrip("/")
+            if stripped_url.endswith(".git"):
+                stripped_url = stripped_url[:-4]
+            url_parts = stripped_url.split("/")
+            repo_from_url = "/".join(url_parts[-2:]) if len(url_parts) >= 2 else ""
+
+            if oidc_repo_claim != repo_from_url:
+                logger.warning(
+                    f"Repository mismatch: OIDC claim={oidc_repo_claim}, "
+                    f"request URL={request_repo_url} (parsed={repo_from_url})"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=create_error_response(
+                        "repository_mismatch",
+                        "OIDC token repository claim does not match request repository_url"
+                    )
+                )
+
             # Log request details (exclude token)
             logger.info(
                 f"Execution request: repo={body.get('repository_url')}, "
