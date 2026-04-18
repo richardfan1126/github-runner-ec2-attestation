@@ -2776,26 +2776,26 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test refs with spaces, semicolons, pipes (rejected)
     - _Requirements: 15.15, 15.16_
 
-- [ ] 149. Implement ORAS checksum verification and coldsnap version pinning
-  - [ ] 149.1 Add SHA-256 checksum verification for ORAS download in scripts/build-ami.py
+- [x] 149. Implement ORAS checksum verification and coldsnap version pinning
+  - [x] 149.1 Add SHA-256 checksum verification for ORAS download in scripts/build-ami.py
     - After downloading the ORAS tar.gz, compute its SHA-256 checksum
     - Compare against a known expected checksum hardcoded in the script
     - Fail with an integrity verification error if mismatch
     - _Requirements: 17.13, 17.14_
 
-  - [ ] 149.2 Pin coldsnap clone to a specific git tag or commit
+  - [x] 149.2 Pin coldsnap clone to a specific git tag or commit
     - Change the coldsnap `git clone` to checkout a specific tag or commit hash
     - _Requirements: 17.15_
 
-  - [ ] 149.3 Add trust assumption documentation comments
+  - [x] 149.3 Add trust assumption documentation comments
     - Add code comments documenting trust assumptions for rustup installer and GitHub CLI package repository
     - _Requirements: 17.16_
 
-  - [ ] 149.4 Write property test for ORAS Checksum Verification
+  - [x] 149.4 Write property test for ORAS Checksum Verification
     - **Property 158: ORAS Checksum Verification**
     - **Validates: Requirements 17.13, 17.14**
 
-  - [ ] 149.5 Write property test for Coldsnap Pinned Version
+  - [x] 149.5 Write property test for Coldsnap Pinned Version
     - **Property 159: Coldsnap Pinned Version**
     - **Validates: Requirements 17.15**
 

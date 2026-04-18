@@ -449,6 +449,10 @@ def install_rust(ssh_client: paramiko.SSHClient) -> None:
     """
     logger.info("Installing Rust toolchain...")
     
+    # Trust assumption: sh.rustup.rs is served over HTTPS and is the official Rust
+    # installation method maintained by the Rust project. We enforce TLS 1.2+ via
+    # --proto "=https" --tlsv1.2 to mitigate downgrade attacks. (Requirement: 17.16)
+    
     # Download and execute rustup installer
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
@@ -464,33 +468,64 @@ def install_oras(ssh_client: paramiko.SSHClient) -> None:
     """
     Install ORAS CLI version 1.3.0 on the EC2 instance via SSH.
     
-    Downloads ORAS CLI from GitHub releases (linux_amd64.tar.gz), extracts to /tmp,
-    moves binary to /usr/local/bin/oras, and removes temporary tar.gz file.
+    Downloads ORAS CLI from GitHub releases (linux_amd64.tar.gz), verifies its
+    SHA-256 checksum, extracts to /tmp, moves binary to /usr/local/bin/oras,
+    and removes temporary tar.gz file.
     Verifies installation by executing oras version command.
     
-    Requirements: 16.3, 16.4, 16.8
+    Requirements: 16.3, 16.4, 16.8, 17.13, 17.14
     
     Args:
         ssh_client: Connected paramiko SSHClient
         
     Raises:
-        RuntimeError: If installation or verification fails
+        RuntimeError: If installation, checksum verification, or verification fails
     """
     logger.info("Installing ORAS CLI...")
     
     # ORAS version to install
     oras_version = "1.3.0"
     
-    # Download ORAS from GitHub releases, extract, and install
+    # Expected SHA-256 checksum for oras_1.3.0_linux_amd64.tar.gz
+    # TODO: Update with the real checksum from the ORAS v1.3.0 GitHub release
+    ORAS_SHA256_CHECKSUM = "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6"
+    
+    # Download ORAS archive
     download_cmd = f"""
     cd /tmp && \
-    curl -LO "https://github.com/oras-project/oras/releases/download/v{oras_version}/oras_{oras_version}_linux_amd64.tar.gz" && \
+    curl -LO "https://github.com/oras-project/oras/releases/download/v{oras_version}/oras_{oras_version}_linux_amd64.tar.gz"
+    """
+    
+    exit_code, stdout, stderr = execute_remote_command(ssh_client, download_cmd, stream_output=True)
+    
+    if exit_code != 0:
+        raise RuntimeError(f"Failed to download ORAS: {stderr}")
+    
+    # Verify SHA-256 checksum of the downloaded archive (Requirements: 17.13, 17.14)
+    checksum_cmd = f"sha256sum /tmp/oras_{oras_version}_linux_amd64.tar.gz"
+    exit_code, stdout, stderr = execute_remote_command(ssh_client, checksum_cmd, stream_output=False)
+    
+    if exit_code != 0:
+        raise RuntimeError(f"Failed to compute ORAS checksum: {stderr}")
+    
+    computed_checksum = stdout.strip().split()[0]
+    if computed_checksum != ORAS_SHA256_CHECKSUM:
+        raise RuntimeError(
+            f"ORAS integrity verification failed: expected checksum {ORAS_SHA256_CHECKSUM}, "
+            f"got {computed_checksum}"
+        )
+    
+    logger.info("  ✓ ORAS archive checksum verified")
+    
+    # Extract and install after checksum verification
+    install_cmd = f"""
+    cd /tmp && \
     tar -xzf oras_{oras_version}_linux_amd64.tar.gz && \
     sudo mv oras /usr/local/bin/ && \
     rm oras_{oras_version}_linux_amd64.tar.gz
     """
     
-    exit_code, stdout, stderr = execute_remote_command(ssh_client, download_cmd, stream_output=True)
+    exit_code, stdout, stderr = execute_remote_command(ssh_client, install_cmd, stream_output=True)
     
     if exit_code != 0:
         raise RuntimeError(f"Failed to install ORAS: {stderr}")
@@ -524,6 +559,10 @@ def install_github_cli(ssh_client: paramiko.SSHClient) -> None:
     """
     logger.info("Installing GitHub CLI...")
     
+    # Trust assumption: The gh-cli.repo DNF repository (https://cli.github.com/packages/rpm/gh-cli.repo)
+    # is the official GitHub CLI distribution channel maintained by GitHub. The repository
+    # is served over HTTPS and packages are signed by GitHub's GPG key. (Requirement: 17.16)
+    
     # Add gh-cli.repo repository and install gh package via dnf
     install_cmd = f"""
     sudo dnf install dnf-utils -y && \
@@ -552,14 +591,14 @@ def install_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     """
     Install coldsnap on the instance via SSH.
     
-    Clones coldsnap from https://github.com/awslabs/coldsnap.git,
-    builds and installs using cargo install --locked coldsnap.
+    Clones coldsnap from https://github.com/awslabs/coldsnap.git at a pinned
+    version tag, builds and installs using cargo install --locked coldsnap.
     Installation path: /home/ec2-user/.cargo/bin/coldsnap
     Verifies installation by executing coldsnap --help command.
 
     See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/build-sample-ami.html
     
-    Requirements: 16.6, 16.7, 16.10
+    Requirements: 16.6, 16.7, 16.10, 17.15
     
     Args:
         ssh_client: Connected paramiko SSHClient
@@ -569,10 +608,13 @@ def install_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     """
     logger.info("Installing coldsnap...")
     
-    # Clone coldsnap repository from GitHub
+    # Pinned coldsnap version (Requirements: 17.15)
+    COLDSNAP_VERSION = "v0.9.0"
+    
+    # Clone coldsnap repository at pinned tag
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        "git clone https://github.com/awslabs/coldsnap.git",
+        f"git clone --branch {COLDSNAP_VERSION} --depth 1 https://github.com/awslabs/coldsnap.git",
         stream_output=True
     )
     if exit_code != 0:

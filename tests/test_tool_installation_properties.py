@@ -70,15 +70,17 @@ def test_tool_installation_verification(oras_version: str, gh_version: str):
     # Mock SSH client
     mock_ssh_client = Mock()
     
-    # Define successful command responses
+    # Define successful command responses (sha256sum must be checked before oras_ since the sha256sum command contains oras_ in the path)
     command_responses = {
         "dnf install -y git gcc": (0, "Installed successfully", ""),
         "sh.rustup.rs": (0, "Rust installed", ""),
-        "oras_": (0, "ORAS downloaded", ""),
+        "sha256sum": (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", ""),
+        "curl -LO": (0, "ORAS downloaded", ""),
+        "tar -xzf oras_": (0, "ORAS extracted", ""),
         "oras version": (0, f"Version: {oras_version}", ""),
         "dnf install gh": (0, "GitHub CLI installed", ""),
         "gh version": (0, f"gh version {gh_version}", ""),
-        "git clone https://github.com/awslabs/coldsnap.git": (0, "Cloned", ""),
+        "git clone": (0, "Cloned", ""),
         "cargo install --locked coldsnap": (0, "Built coldsnap", ""),
         "coldsnap --help": (0, "coldsnap help output", "")
     }
@@ -178,6 +180,8 @@ def test_tool_verification_failure_detection(verification_exit_code: int):
         def side_effect(ssh_client, command, stream_output=True):
             if "oras version" in command:
                 return (verification_exit_code, "", "Command not found")
+            if "sha256sum" in command:
+                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             return (0, "Success", "")
         
         mock_execute.side_effect = side_effect
@@ -205,6 +209,9 @@ def test_install_all_tools_sequential_execution():
         
         def side_effect(ssh_client, command, stream_output=True):
             executed_commands.append(command)
+            # Return matching checksum for sha256sum command
+            if "sha256sum" in command:
+                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             # Return success for all commands
             return (0, "Success", "")
         
@@ -268,12 +275,16 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
                 return (1, "", "Failed to install system deps")
             elif failing_tool == "rust" and "rustup" in command:
                 return (1, "", "Failed to install Rust")
-            elif failing_tool == "oras" and "oras_" in command:
+            elif failing_tool == "oras" and "oras_" in command and "sha256sum" not in command:
                 return (1, "", "Failed to install ORAS")
             elif failing_tool == "github_cli" and ("gh-cli.repo" in command or "dnf install gh" in command):
                 return (1, "", "Failed to install GitHub CLI")
             elif failing_tool == "coldsnap" and "git clone" in command and "coldsnap" in command:
                 return (1, "", "Failed to install coldsnap")
+            
+            # Return matching checksum for sha256sum command
+            if "sha256sum" in command:
+                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             
             return (0, "Success", "")
         
@@ -322,6 +333,8 @@ def test_tool_verification_output_logging(stdout_output: str):
         def side_effect(ssh_client, command, stream_output=True):
             if "oras version" in command:
                 return (0, stdout_output, "")
+            if "sha256sum" in command:
+                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             return (0, "Success", "")
         
         mock_execute.side_effect = side_effect
@@ -394,3 +407,107 @@ def test_coldsnap_verification_uses_full_path():
         verification_command = verification_calls[0][0][1]
         assert "/home/ec2-user/.cargo/bin/coldsnap" in verification_command, \
             "Coldsnap verification should use full path"
+
+
+# Feature: github-actions-remote-executor, Property 158: ORAS Checksum Verification
+@settings(max_examples=100)
+@given(
+    bad_checksum=st.text(
+        alphabet=st.sampled_from("0123456789abcdef"),
+        min_size=64,
+        max_size=64,
+    )
+)
+def test_oras_checksum_verification(bad_checksum: str):
+    """
+    Property 158: ORAS Checksum Verification
+
+    For any ORAS CLI download, the AMI_Converter should verify the downloaded archive
+    against a known SHA-256 checksum before installation. If the checksum does not match,
+    the converter should fail with an integrity verification error.
+
+    **Validates: Requirements 17.13, 17.14**
+    """
+    mock_ssh_client = Mock()
+
+    # The expected checksum hardcoded in install_oras
+    expected_checksum = "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6"
+
+    with patch.object(build_ami, 'execute_remote_command') as mock_execute:
+        # --- Case 1: matching checksum should succeed ---
+        def side_effect_match(ssh_client, command, stream_output=True):
+            if "sha256sum" in command:
+                return (0, f"{expected_checksum}  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+            if "oras version" in command:
+                return (0, "Version: 1.3.0", "")
+            return (0, "Success", "")
+
+        mock_execute.side_effect = side_effect_match
+        # Should succeed without raising
+        build_ami.install_oras(mock_ssh_client)
+
+        # Verify sha256sum command was executed on the remote instance
+        calls = [c[0][1] for c in mock_execute.call_args_list]
+        assert any("sha256sum" in cmd for cmd in calls), \
+            "sha256sum command should be executed on the remote instance"
+
+        mock_execute.reset_mock()
+
+        # --- Case 2: mismatched checksum should raise RuntimeError ---
+        assume(bad_checksum != expected_checksum)
+
+        def side_effect_mismatch(ssh_client, command, stream_output=True):
+            if "sha256sum" in command:
+                return (0, f"{bad_checksum}  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+            return (0, "Success", "")
+
+        mock_execute.side_effect = side_effect_mismatch
+
+        with pytest.raises(RuntimeError) as exc_info:
+            build_ami.install_oras(mock_ssh_client)
+
+        error_msg = str(exc_info.value).lower()
+        assert "integrity" in error_msg or "verification" in error_msg or "checksum" in error_msg, \
+            "RuntimeError should indicate an integrity verification failure"
+
+
+# Feature: github-actions-remote-executor, Property 159: Coldsnap Pinned Version
+@settings(max_examples=100)
+@given(
+    data=st.data()
+)
+def test_coldsnap_pinned_version(data):
+    """
+    Property 159: Coldsnap Pinned Version
+
+    For any coldsnap installation, the AMI_Converter should clone coldsnap at a
+    specific pinned git tag or commit hash rather than HEAD.
+
+    **Validates: Requirements 17.15**
+    """
+    mock_ssh_client = Mock()
+
+    with patch.object(build_ami, 'execute_remote_command') as mock_execute:
+        mock_execute.return_value = (0, "Success", "")
+
+        build_ami.install_coldsnap(mock_ssh_client)
+
+        # Find the git clone command
+        calls = [c[0][1] for c in mock_execute.call_args_list]
+        clone_calls = [cmd for cmd in calls if "git clone" in cmd and "coldsnap" in cmd]
+
+        assert len(clone_calls) > 0, "git clone command for coldsnap should be executed"
+
+        clone_cmd = clone_calls[0]
+
+        # Verify the clone command includes --branch with a pinned version
+        assert "--branch" in clone_cmd, \
+            "git clone should use --branch to pin to a specific version"
+
+        # Verify a version tag is specified (e.g., v0.9.0)
+        assert re.search(r"--branch\s+v[\d.]+", clone_cmd), \
+            "git clone should specify a version tag (e.g., v0.9.0)"
+
+        # Verify --depth 1 is used for shallow clone
+        assert "--depth 1" in clone_cmd or "--depth=1" in clone_cmd, \
+            "git clone should use --depth 1 for a shallow clone at the pinned version"
