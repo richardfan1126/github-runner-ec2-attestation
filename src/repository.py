@@ -160,6 +160,26 @@ class RepositoryClient:
             if not non_git:
                 raise GitHubAPIError("Cloned repository is empty", 400)
 
+            # Strip the GitHub token from .git/config
+            clean_url = f"https://github.com/{owner}/{repo}.git"
+            strip_result = subprocess.run(
+                ["git", "remote", "set-url", "origin", clean_url],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=clone_dir,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+            if strip_result.returncode == 0:
+                logger.info("Stripped GitHub token from .git/config")
+            else:
+                logger.warning(f"Failed to strip token from .git/config: {strip_result.stderr.strip()}")
+
+            # Remove the .git directory entirely
+            git_dir = os.path.join(clone_dir, ".git")
+            shutil.rmtree(git_dir)
+            logger.info("Removed .git directory from cloned repository")
+
             return CloneResult(clone_path=clone_dir, script_path="")
 
         except subprocess.TimeoutExpired:

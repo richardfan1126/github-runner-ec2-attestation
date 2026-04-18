@@ -97,12 +97,15 @@ class TestCloneRepo:
             fetch_result = Mock(returncode=0, stdout="", stderr="")
             # Mock checkout success
             checkout_result = Mock(returncode=0, stdout="", stderr="")
-            mock_run.side_effect = [clone_result, fetch_result, checkout_result]
+            # Mock token strip success
+            strip_result = Mock(returncode=0, stdout="", stderr="")
+            mock_run.side_effect = [clone_result, fetch_result, checkout_result, strip_result]
 
             # Create a dummy file in the clone dir so it's not "empty"
             with patch('os.listdir', return_value=[".git", "script.sh"]):
                 with patch('tempfile.mkdtemp', return_value=os.path.join(temp_dir, "abc12345_clone")):
                     os.makedirs(os.path.join(temp_dir, "abc12345_clone"), exist_ok=True)
+                    os.makedirs(os.path.join(temp_dir, "abc12345_clone", ".git"), exist_ok=True)
                     result = client.clone_repo(
                         "https://github.com/owner/repo",
                         "abc123def456abc123def456abc123def456abc1",
@@ -307,3 +310,106 @@ class TestURLParsing:
         owner, repo = client._parse_repo_url("https://github.com/owner/repo.git/")
         assert owner == "owner"
         assert repo == "repo"
+
+
+class TestTokenStrippingAndGitRemoval:
+    """Tests for token stripping and .git directory removal (Requirements 3.10, 3.11, 3.12)"""
+
+    def test_git_remote_set_url_called_with_clean_url(self, client, temp_dir):
+        """Test that git remote set-url is called after clone with the correct clean URL"""
+        with patch('subprocess.run') as mock_run:
+            clone_result = Mock(returncode=0, stdout="", stderr="")
+            fetch_result = Mock(returncode=0, stdout="", stderr="")
+            checkout_result = Mock(returncode=0, stdout="", stderr="")
+            strip_result = Mock(returncode=0, stdout="", stderr="")
+            mock_run.side_effect = [clone_result, fetch_result, checkout_result, strip_result]
+
+            clone_dir = os.path.join(temp_dir, "abc12345_clone")
+            with patch('os.listdir', return_value=[".git", "script.sh"]):
+                with patch('tempfile.mkdtemp', return_value=clone_dir):
+                    os.makedirs(clone_dir, exist_ok=True)
+                    os.makedirs(os.path.join(clone_dir, ".git"), exist_ok=True)
+
+                    client.clone_repo(
+                        "https://github.com/myowner/myrepo",
+                        "abc123def456abc123def456abc123def456abc1",
+                        "ghp_secrettoken123"
+                    )
+
+            # 4th subprocess call should be git remote set-url
+            strip_call = mock_run.call_args_list[3]
+            assert strip_call[0][0] == [
+                "git", "remote", "set-url", "origin",
+                "https://github.com/myowner/myrepo.git"
+            ]
+            # Token must not appear in the clean URL
+            assert "ghp_secrettoken123" not in strip_call[0][0][4]
+
+    def test_git_directory_removed_after_token_stripping(self, client, temp_dir):
+        """Test that .git directory is removed after token stripping"""
+        with patch('subprocess.run') as mock_run:
+            clone_result = Mock(returncode=0, stdout="", stderr="")
+            fetch_result = Mock(returncode=0, stdout="", stderr="")
+            checkout_result = Mock(returncode=0, stdout="", stderr="")
+            strip_result = Mock(returncode=0, stdout="", stderr="")
+            mock_run.side_effect = [clone_result, fetch_result, checkout_result, strip_result]
+
+            clone_dir = os.path.join(temp_dir, "abc12345_clone")
+            with patch('os.listdir', return_value=[".git", "script.sh"]):
+                with patch('tempfile.mkdtemp', return_value=clone_dir):
+                    os.makedirs(clone_dir, exist_ok=True)
+                    os.makedirs(os.path.join(clone_dir, ".git"), exist_ok=True)
+
+                    result = client.clone_repo(
+                        "https://github.com/owner/repo",
+                        "abc123def456abc123def456abc123def456abc1",
+                        "ghp_token123"
+                    )
+
+            # .git directory should have been removed
+            assert not os.path.exists(os.path.join(clone_dir, ".git"))
+
+    def test_operation_ordering_clone_strip_remove(self, client, temp_dir):
+        """Test ordering: clone → checkout → strip token → remove .git → return result"""
+        call_order = []
+
+        with patch('subprocess.run') as mock_run:
+            def track_subprocess(*args, **kwargs):
+                cmd = args[0]
+                if cmd[0] == "git" and cmd[1] == "clone":
+                    call_order.append("clone")
+                    return Mock(returncode=0, stdout="", stderr="")
+                elif cmd[0] == "git" and cmd[1] == "fetch":
+                    call_order.append("fetch")
+                    return Mock(returncode=0, stdout="", stderr="")
+                elif cmd[0] == "git" and cmd[1] == "checkout":
+                    call_order.append("checkout")
+                    return Mock(returncode=0, stdout="", stderr="")
+                elif cmd[0] == "git" and cmd[1] == "remote":
+                    call_order.append("strip_token")
+                    return Mock(returncode=0, stdout="", stderr="")
+                return Mock(returncode=0, stdout="", stderr="")
+
+            mock_run.side_effect = track_subprocess
+
+            clone_dir = os.path.join(temp_dir, "abc12345_clone")
+            with patch('os.listdir', return_value=[".git", "script.sh"]):
+                with patch('tempfile.mkdtemp', return_value=clone_dir):
+                    os.makedirs(clone_dir, exist_ok=True)
+                    git_dir = os.path.join(clone_dir, ".git")
+                    os.makedirs(git_dir, exist_ok=True)
+
+                    with patch('shutil.rmtree') as mock_rmtree:
+                        def track_rmtree(path):
+                            if ".git" in path:
+                                call_order.append("remove_git")
+                        mock_rmtree.side_effect = track_rmtree
+
+                        result = client.clone_repo(
+                            "https://github.com/owner/repo",
+                            "abc123def456abc123def456abc123def456abc1",
+                            "ghp_token123"
+                        )
+
+            assert isinstance(result, CloneResult)
+            assert call_order == ["clone", "fetch", "checkout", "strip_token", "remove_git"]

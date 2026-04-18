@@ -2511,18 +2511,18 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test with REQUIRE_PROTECTED_REF=false or unset: any ref_protected value allowed
     - _Requirements: 2.25, 2.26, 2.27, 2.28, 2.29, 2.30, 2.31, 2.32_
 
-- [ ] 133. Implement token stripping and .git directory removal
-  - [ ] 133.1 Update src/repository.py clone_repo to strip token and remove .git
+- [x] 133. Implement token stripping and .git directory removal
+  - [x] 133.1 Update src/repository.py clone_repo to strip token and remove .git
     - After successful clone, run `git remote set-url origin https://github.com/{owner}/{repo}.git` to strip the token from .git/config
     - After token stripping, remove the `.git` directory entirely using `shutil.rmtree`
     - Perform both operations before the cloned repo is mounted into the Execution_Container
     - _Requirements: 3.10, 3.11, 3.12_
 
-  - [ ] 133.2 Write property test for Token Stripping and .git Removal
+  - [x] 133.2 Write property test for Token Stripping and .git Removal
     - **Property 145: Token Stripping and .git Removal**
     - **Validates: Requirements 3.10, 3.11, 3.12**
 
-  - [ ] 133.3 Write unit tests for token stripping and .git removal
+  - [x] 133.3 Write unit tests for token stripping and .git removal
     - Test that git remote set-url is called after clone
     - Test that .git directory is removed after token stripping
     - Test ordering: clone → strip token → remove .git → mount
