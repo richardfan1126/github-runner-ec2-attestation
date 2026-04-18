@@ -81,6 +81,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
             completed_at=None,
             exit_code=None,
             timeout_seconds=300,
+            repository="owner/repo",
         )
         output_data = OutputData(
             stdout=stdout,
@@ -102,6 +103,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
             completed_at=now,
             exit_code=exit_code,
             timeout_seconds=300,
+            repository="owner/repo",
         )
         output_data = OutputData(
             stdout=stdout,
@@ -125,6 +127,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
             completed_at=now,
             exit_code=failed_exit,
             timeout_seconds=300,
+            repository="owner/repo",
         )
         output_data = OutputData(
             stdout=stdout,
@@ -146,6 +149,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
             completed_at=now,
             exit_code=None,
             timeout_seconds=300,
+            repository="owner/repo",
         )
         output_data = OutputData(
             stdout=stdout,

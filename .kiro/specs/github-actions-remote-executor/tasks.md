@@ -2662,7 +2662,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that no cap_add is present
     - _Requirements: 8.17, 8.18_
 
-- [ ] 142. Checkpoint - Ensure runtime security hardening tests pass
+- [x] 142. Checkpoint - Ensure runtime security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 143. Harden health endpoint and remove /metrics

@@ -434,6 +434,7 @@ class TestOIDCProtectedEndpoints:
             completed_at=None,
             exit_code=None,
             timeout_seconds=300,
+            repository="owner/repo",
         )
         output_data = OutputData(
             stdout="hello",

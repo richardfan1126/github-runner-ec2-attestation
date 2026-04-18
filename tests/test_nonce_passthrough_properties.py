@@ -161,6 +161,8 @@ def test_nonce_passthrough_execute_endpoint(nonce):
         app.state.attestation_generator, "generate_attestation"
     ) as mock_attest, patch.object(
         app.state.script_executor, "execute_async"
+    ), patch(
+        "src.server.os.path.getsize", return_value=100
     ):
         mock_attest.return_value = (_make_attestation_doc(), None)
 
@@ -215,6 +217,7 @@ def test_nonce_passthrough_output_endpoint(nonce):
         completed_at=datetime.now(timezone.utc),
         exit_code=0,
         timeout_seconds=300,
+        repository="owner/repo",
     )
 
     completed_output = OutputData(

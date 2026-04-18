@@ -202,6 +202,12 @@ def _mock_successful_execution(app):
             self_ctx._patches.append(p7)
             p7.start()
 
+            # Mock os.path.getsize so the script size check doesn't fail
+            # on the mocked clone path
+            p8 = _patch("src.server.os.path.getsize", return_value=100)
+            self_ctx._patches.append(p8)
+            p8.start()
+
             return self_ctx
 
         def __exit__(self_ctx, *args):
@@ -440,6 +446,7 @@ class TestMissingEncryptionContextReturnsHTTP400:
             completed_at=None,
             exit_code=None,
             timeout_seconds=300,
+            repository="owner/repo",
         )
 
         with patch.object(app.state.execution_manager, "get_execution", return_value=record):

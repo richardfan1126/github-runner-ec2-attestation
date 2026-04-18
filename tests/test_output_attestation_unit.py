@@ -152,6 +152,7 @@ class TestOutputEndpointWithAttestation:
             completed_at=datetime.now(timezone.utc) if exit_code is not None else None,
             exit_code=exit_code,
             timeout_seconds=300,
+            repository="owner/repo",
         )
 
     def _setup(self):

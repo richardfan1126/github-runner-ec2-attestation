@@ -280,7 +280,8 @@ def test_output_endpoint_status_return(execution_id, status):
         started_at=None,
         completed_at=None,
         exit_code=None,
-        timeout_seconds=300
+        timeout_seconds=300,
+        repository="owner/repo",
     )
     
     # Store encryption context for this execution_id
@@ -336,7 +337,8 @@ def test_completion_exit_code_inclusion(execution_id, exit_code):
         started_at=datetime.now(timezone.utc),
         completed_at=datetime.now(timezone.utc),
         exit_code=exit_code,
-        timeout_seconds=300
+        timeout_seconds=300,
+        repository="owner/repo",
     )
     
     shared_key = os.urandom(32)
@@ -393,7 +395,8 @@ def test_completion_flag_accuracy(execution_id, is_complete):
         started_at=datetime.now(timezone.utc),
         completed_at=datetime.now(timezone.utc) if is_complete else None,
         exit_code=0 if is_complete else None,
-        timeout_seconds=300
+        timeout_seconds=300,
+        repository="owner/repo",
     )
     
     shared_key = os.urandom(32)
@@ -559,6 +562,7 @@ def test_output_request_response_encryption_round_trip(
         completed_at=datetime.now(timezone.utc) if is_complete else None,
         exit_code=exit_code if is_complete else None,
         timeout_seconds=300,
+        repository="owner/repo",
     )
 
     shared_key = os.urandom(32)
@@ -641,6 +645,7 @@ def test_missing_encryption_context_returns_400(execution_id):
         completed_at=None,
         exit_code=None,
         timeout_seconds=300,
+        repository="owner/repo",
     )
 
     with patch.object(_app.state.execution_manager, "get_execution", return_value=record):
