@@ -1,4 +1,5 @@
 """Script execution for GitHub Actions Remote Executor using Docker SDK"""
+import contextvars
 import io
 import os
 import shutil
@@ -65,7 +66,10 @@ class ScriptExecutor:
         """
         Execute script asynchronously inside an ephemeral Docker container.
 
-        Creates a background thread that:
+        Creates a background thread that runs in a *fresh* contextvars.Context
+        so that the parent request's log context is not inherited or leaked.
+
+        The thread:
         1. Creates a new container from the configured Container_Image
         2. Mounts the cloned repository directory read-only at /workspace
         3. Starts the container and waits for completion with timeout
@@ -78,9 +82,12 @@ class ScriptExecutor:
             repo_path: Path to the cloned repository directory on the host
             script_path: Relative path to the script within the repo
         """
+        # Create a fresh context so the background thread does not inherit
+        # (or pollute) the parent request's contextvars state.
+        ctx = contextvars.copy_context()
         thread = threading.Thread(
-            target=self._execute_in_container,
-            args=(execution_id, repo_path, script_path),
+            target=ctx.run,
+            args=(self._execute_in_container, execution_id, repo_path, script_path),
             daemon=True,
         )
         thread.start()

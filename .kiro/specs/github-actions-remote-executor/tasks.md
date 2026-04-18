@@ -2574,23 +2574,23 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test repository stored at creation and checked at retrieval
     - _Requirements: 6.14, 6.15, 6.16_
 
-- [ ] 137. Implement contextvars-based logging
-  - [ ] 137.1 Replace global mutable log context with contextvars.ContextVar in src/logging_config.py
+- [x] 137. Implement contextvars-based logging
+  - [x] 137.1 Replace global mutable log context with contextvars.ContextVar in src/logging_config.py
     - Replace the process-global mutable dictionary with a `contextvars.ContextVar` for per-request/per-task log context
     - Update log formatter to read from the ContextVar
     - Ensure each request/task gets its own isolated context
     - _Requirements: 7.9, 7.10_
 
-  - [ ] 137.2 Update src/server.py and src/script_executor.py to use contextvars
+  - [x] 137.2 Update src/server.py and src/script_executor.py to use contextvars
     - Replace all mutations of the global log context dict with ContextVar token-based set/reset
     - Ensure background tasks (script execution) copy the context or create a new one
     - _Requirements: 7.9, 7.10_
 
-  - [ ] 137.3 Write property test for Contextvars Log Isolation
+  - [x] 137.3 Write property test for Contextvars Log Isolation
     - **Property 148: Contextvars Log Isolation**
     - **Validates: Requirements 7.9, 7.10**
 
-  - [ ] 137.4 Write unit tests for contextvars logging
+  - [x] 137.4 Write unit tests for contextvars logging
     - Test that concurrent requests have isolated log contexts
     - Test that background tasks do not leak context to other requests
     - _Requirements: 7.9, 7.10_

@@ -1,4 +1,5 @@
 """Logging infrastructure for GitHub Actions Remote Executor"""
+import contextvars
 import logging
 import logging.handlers
 import os
@@ -7,37 +8,37 @@ from pathlib import Path
 from typing import Optional
 
 
+# ContextVar holding a dict of log context fields per async task / thread.
+# Each request or background task gets its own isolated copy.
+_log_context_var: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    '_log_context_var', default={}
+)
+
+
 class ContextFilter(logging.Filter):
-    """Filter to add context information to log records"""
-    
-    def __init__(self):
-        super().__init__()
-        self._context = {}
-    
+    """Filter to add context information to log records.
+
+    Reads per-request/per-task context from a ``contextvars.ContextVar``
+    so that concurrent requests never share or overwrite each other's
+    log context.
+    """
+
     def filter(self, record):
-        """Add context fields to log record"""
-        # Add context fields if they exist
-        for key, value in self._context.items():
+        """Add context fields from the current ContextVar to the log record."""
+        ctx = _log_context_var.get()
+        for key, value in ctx.items():
             setattr(record, key, value)
-        
+
         # Ensure fields exist even if not set
         if not hasattr(record, 'execution_id'):
             record.execution_id = '-'
         if not hasattr(record, 'request_id'):
             record.request_id = '-'
-        
+
         return True
-    
-    def set_context(self, **kwargs):
-        """Set context fields for subsequent log records"""
-        self._context.update(kwargs)
-    
-    def clear_context(self):
-        """Clear all context fields"""
-        self._context.clear()
 
 
-# Global context filter instance
+# Global context filter instance (stateless – all state lives in the ContextVar)
 _context_filter = ContextFilter()
 
 
@@ -128,24 +129,30 @@ def setup_logging(
 
 def set_log_context(execution_id: Optional[str] = None, request_id: Optional[str] = None) -> None:
     """
-    Set context for subsequent log messages
-    
+    Set context for subsequent log messages in the current async task / thread.
+
+    Uses ``contextvars.ContextVar`` so each request or background task has
+    its own isolated log context.
+
     Args:
         execution_id: Execution ID to include in logs
         request_id: Request ID to include in logs
     """
-    context = {}
+    updates = {}
     if execution_id is not None:
-        context['execution_id'] = execution_id
+        updates['execution_id'] = execution_id
     if request_id is not None:
-        context['request_id'] = request_id
-    
-    _context_filter.set_context(**context)
+        updates['request_id'] = request_id
+
+    # Merge into the current context dict (creates a new dict to avoid
+    # mutating a dict that might be shared with a parent context copy).
+    current = _log_context_var.get()
+    _log_context_var.set({**current, **updates})
 
 
 def clear_log_context() -> None:
-    """Clear all log context"""
-    _context_filter.clear_context()
+    """Clear all log context for the current async task / thread."""
+    _log_context_var.set({})
 
 
 def sanitize_for_logging(data: dict, sensitive_keys: list[str] = None) -> dict:
