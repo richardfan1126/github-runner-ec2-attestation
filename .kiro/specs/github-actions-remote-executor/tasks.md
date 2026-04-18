@@ -2757,20 +2757,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test no digest configured (skip verification)
     - _Requirements: 34.7, 34.8, 34.9, 34.10_
 
-- [ ] 147. Checkpoint - Ensure all runtime security hardening tests pass
+- [x] 147. Checkpoint - Ensure all runtime security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 148. Implement artifact ref input validation in build-ami.py
-  - [ ] 148.1 Add strict regex validation for artifact_ref in scripts/build-ami.py
+- [x] 148. Implement artifact ref input validation in build-ami.py
+  - [x] 148.1 Add strict regex validation for artifact_ref in scripts/build-ami.py
     - Validate artifact_ref against `^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`
     - Reject and terminate before any shell interpolation if invalid
     - _Requirements: 15.15, 15.16_
 
-  - [ ] 148.2 Write property test for Artifact Ref Validation
+  - [x] 148.2 Write property test for Artifact Ref Validation
     - **Property 157: Artifact Ref Validation**
     - **Validates: Requirements 15.15, 15.16**
 
-  - [ ] 148.3 Write unit tests for artifact ref validation
+  - [x] 148.3 Write unit tests for artifact ref validation
     - Test valid artifact refs (accepted)
     - Test refs with shell metacharacters (rejected)
     - Test refs with spaces, semicolons, pipes (rejected)

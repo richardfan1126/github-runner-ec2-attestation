@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import logging
@@ -48,39 +49,24 @@ def get_user_public_ip() -> str:
 
 def validate_artifact_reference(artifact_ref: str) -> None:
     """
-    Validate artifact reference format.
+    Validate artifact reference format against a strict allowlist pattern.
 
-    Expected format: ghcr.io/owner/repo:tag or ghcr.io/owner/repo:tag@sha256:digest
+    Expected format: ghcr.io/owner/repo:tag where owner, repo, and tag
+    contain only alphanumeric characters, dots, hyphens, and underscores.
 
     Args:
         artifact_ref: GitHub Container Registry artifact reference
 
     Raises:
-        ValueError: If artifact reference format is invalid
+        ValueError: If artifact reference format is invalid or contains
+                    characters outside the allowlist
     """
-    if not artifact_ref.startswith('ghcr.io/'):
+    pattern = r'^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$'
+    if not re.match(pattern, artifact_ref):
         raise ValueError(
             f"Invalid artifact reference format: {artifact_ref}. "
-            "Expected format: ghcr.io/owner/repo:tag"
-        )
-
-    # Remove ghcr.io/ prefix and check for owner/repo structure
-    path = artifact_ref.replace('ghcr.io/', '')
-
-    # Split by : to separate path from tag/digest
-    if ':' not in path:
-        raise ValueError(
-            f"Invalid artifact reference format: {artifact_ref}. "
-            "Missing tag. Expected format: ghcr.io/owner/repo:tag"
-        )
-
-    repo_path = path.split(':')[0]
-    parts = repo_path.split('/')
-
-    if len(parts) < 2:
-        raise ValueError(
-            f"Invalid artifact reference format: {artifact_ref}. "
-            "Expected format: ghcr.io/owner/repo:tag"
+            "Expected format: ghcr.io/owner/repo:tag "
+            "(only alphanumeric, dots, hyphens, and underscores allowed)"
         )
 
     logger.info(f"Artifact reference validated: {artifact_ref}")
