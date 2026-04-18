@@ -11,6 +11,7 @@ if __name__ != "__main__":
     from typing import TYPE_CHECKING
     if TYPE_CHECKING:
         from src.encryption import EncryptionManager as _EncryptionManager
+        from src.output_collector import OutputCollector as _OutputCollector
 
 logger = logging.getLogger(__name__)
 
@@ -18,18 +19,20 @@ logger = logging.getLogger(__name__)
 class ExecutionManager:
     """Manages execution lifecycle and state tracking"""
     
-    def __init__(self, output_retention_hours: int, encryption_manager: Optional["_EncryptionManager"] = None):
+    def __init__(self, output_retention_hours: int, encryption_manager: Optional["_EncryptionManager"] = None, output_collector: Optional["_OutputCollector"] = None):
         """
         Initialize execution manager
 
         Args:
             output_retention_hours: Hours to retain execution records after completion
             encryption_manager: Optional EncryptionManager for cleaning up encryption contexts
+            output_collector: Optional OutputCollector for cleaning up output buffers
         """
         self._executions: Dict[str, ExecutionRecord] = {}
         self._lock = Lock()
         self._output_retention_hours = output_retention_hours
         self._encryption_manager = encryption_manager
+        self._output_collector = output_collector
 
         # Metrics tracking
         self._total_executions = 0
@@ -248,6 +251,12 @@ class ExecutionManager:
         if self._encryption_manager is not None:
             for execution_id in expired_ids:
                 self._encryption_manager.remove_encryption_context(execution_id)
+        
+        # Clean up output buffers outside the lock to avoid potential deadlocks
+        # (OutputCollector.remove_output uses its own internal lock)
+        if self._output_collector is not None:
+            for execution_id in expired_ids:
+                self._output_collector.remove_output(execution_id)
         
         if removed_count > 0:
             logger.info(f"Cleaned up {removed_count} expired execution(s)")

@@ -2632,17 +2632,17 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test script exceeding size limit (413)
     - _Requirements: 8.13, 8.14_
 
-- [ ] 140. Implement periodic cleanup scheduling
-  - [ ] 140.1 Schedule periodic cleanup_expired invocation in src/server.py or src/main.py
+- [x] 140. Implement periodic cleanup scheduling
+  - [x] 140.1 Schedule periodic cleanup_expired invocation in src/server.py or src/main.py
     - Use asyncio or a background task to periodically invoke `cleanup_expired` on the ExecutionManager
     - Cleanup should call `remove_output` on the OutputCollector and `remove_encryption_context` on the EncryptionManager for each expired record
     - _Requirements: 8.15, 8.16_
 
-  - [ ] 140.2 Write property test for Periodic Cleanup Scheduling
+  - [x] 140.2 Write property test for Periodic Cleanup Scheduling
     - **Property 151: Periodic Cleanup Scheduling**
     - **Validates: Requirements 8.15, 8.16**
 
-  - [ ] 140.3 Write unit tests for periodic cleanup
+  - [x] 140.3 Write unit tests for periodic cleanup
     - Test that cleanup_expired is invoked periodically
     - Test that expired records trigger remove_output and remove_encryption_context
     - _Requirements: 8.15, 8.16_

@@ -1,4 +1,5 @@
 """HTTP server for GitHub Actions Remote Executor"""
+import asyncio
 import logging
 import os
 import time
@@ -10,6 +11,7 @@ from typing import Dict, Tuple
 
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 from src.config import ServerConfig
 from src.execution_manager import ExecutionManager
@@ -109,10 +111,38 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     """
     import docker as docker_lib
 
+    # Cleanup interval in seconds (configurable, default 60s)
+    cleanup_interval_seconds = int(os.environ.get("CLEANUP_INTERVAL_SECONDS", "60"))
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        """Manage background tasks for the application lifecycle."""
+        async def periodic_cleanup():
+            """Periodically invoke cleanup_expired on the ExecutionManager."""
+            while True:
+                try:
+                    await asyncio.sleep(cleanup_interval_seconds)
+                    removed = application.state.execution_manager.cleanup_expired()
+                    if removed > 0:
+                        logger.info(f"Periodic cleanup removed {removed} expired execution(s)")
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    logger.exception("Error during periodic cleanup")
+
+        cleanup_task = asyncio.create_task(periodic_cleanup())
+        yield
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
     app = FastAPI(
         title="GitHub Actions Remote Executor",
         description="Attestable script execution service for GitHub Actions",
-        version="1.0.0"
+        version="1.0.0",
+        lifespan=lifespan,
     )
     
     # Initialize Docker client if not provided
@@ -124,8 +154,8 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
             docker_client = None
     
     # Initialize components
-    execution_manager = ExecutionManager(config.output_retention_hours, encryption_manager=encryption_manager)
     output_collector = OutputCollector()
+    execution_manager = ExecutionManager(config.output_retention_hours, encryption_manager=encryption_manager, output_collector=output_collector)
     repository_client = RepositoryClient(config.temp_storage_path)
     attestation_generator = AttestationGenerator(config.tpm_attest_path)
     script_executor = ScriptExecutor(
