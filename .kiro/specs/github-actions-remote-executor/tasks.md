@@ -2595,23 +2595,23 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that background tasks do not leak context to other requests
     - _Requirements: 7.9, 7.10_
 
-- [ ] 138. Implement concurrency enforcement
-  - [ ] 138.1 Add atomic concurrency check in src/execution_manager.py
+- [x] 138. Implement concurrency enforcement
+  - [x] 138.1 Add atomic concurrency check in src/execution_manager.py
     - Before creating a new execution record, check the count of active executions (queued and running) against MAX_CONCURRENT_EXECUTIONS
     - Use a lock or atomic operation to prevent race conditions
     - Return a rejection indicator when at capacity
     - _Requirements: 8.11, 8.12_
 
-  - [ ] 138.2 Wire concurrency check into /execute endpoint in src/server.py
+  - [x] 138.2 Wire concurrency check into /execute endpoint in src/server.py
     - Before creating the execution record, call the concurrency check
     - Return HTTP 503 Service Unavailable when at capacity
     - _Requirements: 8.11, 8.12_
 
-  - [ ] 138.3 Write property test for Concurrency Enforcement
+  - [x] 138.3 Write property test for Concurrency Enforcement
     - **Property 149: Concurrency Enforcement**
     - **Validates: Requirements 8.11, 8.12**
 
-  - [ ] 138.4 Write unit tests for concurrency enforcement
+  - [x] 138.4 Write unit tests for concurrency enforcement
     - Test that requests are accepted when below capacity
     - Test that requests are rejected with 503 when at capacity
     - Test atomicity under concurrent request simulation

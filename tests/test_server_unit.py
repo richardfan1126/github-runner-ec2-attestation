@@ -1019,3 +1019,220 @@ class TestConcurrentRequests:
         assert len(results) == 10
         for response in results:
             assert response.status_code == 200
+
+import threading
+from src.execution_manager import ExecutionManager
+
+
+class TestConcurrencyEnforcement:
+    """Tests for concurrency enforcement (Requirements 8.11, 8.12)"""
+
+    def _make_successful_request(self, client, app, ctx, request_data):
+        """Helper to make a successful /execute request with all mocks."""
+        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
+             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+            mock_validate.return_value = Mock(valid=True, errors=[])
+
+            with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
+                mock_auth.return_value = Mock(success=True, error_message=None)
+
+                with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                    mock_clone.return_value = CloneResult(
+                        clone_path="/tmp/test_clone",
+                        script_path=""
+                    )
+
+                    with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                        with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                            mock_attest.return_value = (
+                                AttestationDocument(
+                                    repository_url=request_data['repository_url'],
+                                    commit_hash=request_data['commit_hash'],
+                                    script_path=request_data['script_path'],
+                                    timestamp=datetime.now(timezone.utc),
+                                    signature=b"test_signature_bytes"
+                                ),
+                                None
+                            )
+
+                            with patch('os.path.getsize', return_value=100), \
+                                 patch.object(app.state.script_executor, 'execute_async'), \
+                                 patch.object(app.state.repository_client, 'cleanup_clone'):
+                                body = make_encrypted_execute_request(request_data, ctx)
+                                return client.post("/execute", json=body)
+
+    def test_requests_accepted_below_capacity(self):
+        """Test that requests are accepted when below max concurrent executions"""
+        ctx = EncryptionTestContext()
+        config = get_test_config()
+        config.max_concurrent_executions = 3
+        config.rate_limit_per_ip = 100000
+        app = create_app(config, encryption_manager=ctx.encryption_manager)
+        client = TestClient(app)
+
+        request_data = {
+            "repository_url": "https://github.com/owner/repo",
+            "commit_hash": "a" * 40,
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token_123",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        # First two requests should be accepted (below capacity of 3)
+        for i in range(2):
+            resp = self._make_successful_request(client, app, ctx, request_data)
+            assert resp.status_code == 200, f"Request {i+1} should be accepted, got {resp.status_code}"
+
+    def test_requests_rejected_at_capacity_with_503(self):
+        """Test that requests are rejected with 503 when at max capacity"""
+        ctx = EncryptionTestContext()
+        config = get_test_config()
+        config.max_concurrent_executions = 2
+        config.rate_limit_per_ip = 100000
+        app = create_app(config, encryption_manager=ctx.encryption_manager)
+        client = TestClient(app)
+
+        request_data = {
+            "repository_url": "https://github.com/owner/repo",
+            "commit_hash": "a" * 40,
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token_123",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        # Fill to capacity
+        for _ in range(2):
+            resp = self._make_successful_request(client, app, ctx, request_data)
+            assert resp.status_code == 200
+
+        # Next request should be rejected
+        resp = self._make_successful_request(client, app, ctx, request_data)
+        assert resp.status_code == 503
+        data = resp.json()
+        assert data["detail"]["error"] == "at_capacity"
+
+    def test_concurrency_atomicity_under_concurrent_requests(self):
+        """Test that concurrency check is atomic under concurrent requests"""
+        ctx = EncryptionTestContext()
+        config = get_test_config()
+        config.max_concurrent_executions = 3
+        config.rate_limit_per_ip = 100000
+        app = create_app(config, encryption_manager=ctx.encryption_manager)
+        client = TestClient(app)
+
+        request_data = {
+            "repository_url": "https://github.com/owner/repo",
+            "commit_hash": "a" * 40,
+            "script_path": "scripts/test.sh",
+            "github_token": "ghp_test_token_123",
+            "oidc_token": "valid.oidc.token",
+        }
+
+        results = []
+
+        def make_request():
+            resp = self._make_successful_request(client, app, ctx, request_data)
+            results.append(resp.status_code)
+
+        # Send 6 concurrent requests with max_concurrent=3
+        threads = [threading.Thread(target=make_request) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert len(results) == 6
+        accepted = sum(1 for s in results if s == 200)
+        rejected = sum(1 for s in results if s == 503)
+
+        # Exactly max_concurrent should be accepted, rest rejected
+        assert accepted == 3, f"Expected 3 accepted, got {accepted}"
+        assert rejected == 3, f"Expected 3 rejected, got {rejected}"
+
+
+class TestTryCreateExecution:
+    """Unit tests for ExecutionManager.try_create_execution"""
+
+    def test_accepted_below_capacity(self):
+        """Test try_create_execution succeeds when below capacity"""
+        manager = ExecutionManager(output_retention_hours=24)
+
+        record, accepted = manager.try_create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="abc123",
+            script_path="scripts/test.sh",
+            timeout_seconds=300,
+            max_concurrent=5,
+        )
+
+        assert accepted is True
+        assert record is not None
+        assert record.status == ExecutionStatus.QUEUED
+
+    def test_rejected_at_capacity(self):
+        """Test try_create_execution rejects when at capacity"""
+        manager = ExecutionManager(output_retention_hours=24)
+
+        # Fill to capacity
+        for _ in range(3):
+            record, accepted = manager.try_create_execution(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="abc123",
+                script_path="scripts/test.sh",
+                timeout_seconds=300,
+                max_concurrent=3,
+            )
+            assert accepted is True
+
+        # Next should be rejected
+        record, accepted = manager.try_create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="abc123",
+            script_path="scripts/test.sh",
+            timeout_seconds=300,
+            max_concurrent=3,
+        )
+        assert accepted is False
+        assert record is None
+
+    def test_capacity_freed_after_completion(self):
+        """Test that completing an execution frees capacity"""
+        manager = ExecutionManager(output_retention_hours=24)
+
+        # Fill to capacity
+        records = []
+        for _ in range(2):
+            record, accepted = manager.try_create_execution(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="abc123",
+                script_path="scripts/test.sh",
+                timeout_seconds=300,
+                max_concurrent=2,
+            )
+            assert accepted is True
+            records.append(record)
+
+        # At capacity - should reject
+        _, accepted = manager.try_create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="abc123",
+            script_path="scripts/test.sh",
+            timeout_seconds=300,
+            max_concurrent=2,
+        )
+        assert accepted is False
+
+        # Complete one execution
+        manager.update_status(records[0].execution_id, ExecutionStatus.RUNNING)
+        manager.update_status(records[0].execution_id, ExecutionStatus.COMPLETED, exit_code=0)
+
+        # Now should accept again
+        record, accepted = manager.try_create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="abc123",
+            script_path="scripts/test.sh",
+            timeout_seconds=300,
+            max_concurrent=2,
+        )
+        assert accepted is True
+        assert record is not None

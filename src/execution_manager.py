@@ -3,7 +3,7 @@ import uuid
 import logging
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from src.models import ExecutionRecord, ExecutionStatus
 
@@ -81,6 +81,66 @@ class ExecutionManager:
         logger.debug(f"Created execution record: {execution_id}")
 
         return record
+
+    def try_create_execution(
+        self,
+        repository_url: str,
+        commit_hash: str,
+        script_path: str,
+        timeout_seconds: int,
+        max_concurrent: int,
+        repository: str = ""
+    ) -> Tuple[Optional[ExecutionRecord], bool]:
+        """
+        Atomically check concurrency limit and create execution record.
+
+        Checks the count of active executions (queued and running) against
+        max_concurrent within the same lock acquisition, preventing race
+        conditions between the check and creation.
+
+        Args:
+            repository_url: GitHub repository URL
+            commit_hash: Git commit SHA
+            script_path: Path to script file in repository
+            timeout_seconds: Execution timeout in seconds
+            max_concurrent: Maximum allowed concurrent executions
+            repository: OIDC repository claim (e.g., "owner/repo")
+
+        Returns:
+            Tuple of (ExecutionRecord, True) on success, or (None, False) when at capacity
+        """
+        execution_id = str(uuid.uuid4())
+
+        record = ExecutionRecord(
+            execution_id=execution_id,
+            repository_url=repository_url,
+            commit_hash=commit_hash,
+            script_path=script_path,
+            status=ExecutionStatus.QUEUED,
+            created_at=datetime.now(timezone.utc),
+            started_at=None,
+            completed_at=None,
+            exit_code=None,
+            timeout_seconds=timeout_seconds,
+            repository=repository
+        )
+
+        with self._lock:
+            active_count = sum(
+                1 for r in self._executions.values()
+                if r.status in (ExecutionStatus.QUEUED, ExecutionStatus.RUNNING)
+            )
+            if active_count >= max_concurrent:
+                logger.warning(
+                    f"Concurrency limit reached: {active_count}/{max_concurrent} active executions"
+                )
+                return None, False
+
+            self._executions[execution_id] = record
+            self._total_executions += 1
+
+        logger.debug(f"Created execution record: {execution_id}")
+        return record, True
     
     def get_execution(self, execution_id: str) -> Optional[ExecutionRecord]:
         """

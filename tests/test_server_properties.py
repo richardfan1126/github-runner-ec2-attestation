@@ -655,3 +655,92 @@ def test_missing_encryption_context_returns_400(execution_id):
     )
     data = response.json()
     assert data["detail"]["error"] == "no_encryption_context"
+
+# Import encryption test helpers for Property 149
+from tests.encryption_test_helpers import (
+    EncryptionTestContext,
+    make_encrypted_execute_request,
+    decrypt_execute_response,
+)
+
+
+# Feature: github-actions-remote-executor, Property 149: Concurrency Enforcement
+@settings(max_examples=10, deadline=None)
+@given(
+    max_concurrent=st.integers(min_value=1, max_value=5),
+)
+def test_property_149_concurrency_enforcement(max_concurrent):
+    """
+    **Validates: Requirements 8.11, 8.12**
+
+    For any /execute request received when the count of active executions
+    (queued and running) equals MAX_CONCURRENT_EXECUTIONS, the server should
+    reject the request with HTTP 503 Service Unavailable. The concurrency
+    check should be atomic.
+    """
+    ctx = EncryptionTestContext()
+    config = get_test_config()
+    config.max_concurrent_executions = max_concurrent
+    config.rate_limit_per_ip = 100000  # avoid rate limiting
+    app = create_app(config, encryption_manager=ctx.encryption_manager)
+    client = TestClient(app)
+
+    request_data = {
+        "repository_url": "https://github.com/owner/repo",
+        "commit_hash": "a" * 40,
+        "script_path": "scripts/test.sh",
+        "github_token": "ghp_test_token_123",
+        "oidc_token": "valid.oidc.token",
+    }
+
+    accepted_count = 0
+
+    with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
+         patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
+        mock_validate.return_value = Mock(valid=True, errors=[])
+
+        with patch.object(app.state.repository_client, 'authenticate') as mock_auth:
+            mock_auth.return_value = Mock(success=True, error_message=None)
+
+            with patch.object(app.state.repository_client, 'clone_repo') as mock_clone:
+                mock_clone.return_value = CloneResult(
+                    clone_path="/tmp/test_clone",
+                    script_path=""
+                )
+
+                with patch.object(app.state.repository_client, 'validate_script_exists', return_value=True):
+                    with patch.object(app.state.attestation_generator, 'generate_attestation') as mock_attest:
+                        mock_attest.return_value = (
+                            AttestationDocument(
+                                repository_url=request_data['repository_url'],
+                                commit_hash=request_data['commit_hash'],
+                                script_path=request_data['script_path'],
+                                timestamp=datetime.now(timezone.utc),
+                                signature=b"test_signature_bytes"
+                            ),
+                            None
+                        )
+
+                        with patch('os.path.getsize', return_value=100), \
+                             patch.object(app.state.script_executor, 'execute_async'), \
+                             patch.object(app.state.repository_client, 'cleanup_clone'):
+
+                            # Fill up to max_concurrent
+                            for _ in range(max_concurrent):
+                                body = make_encrypted_execute_request(request_data, ctx)
+                                resp = client.post("/execute", json=body)
+                                assert resp.status_code == 200, (
+                                    f"Request should be accepted below capacity, got {resp.status_code}"
+                                )
+                                accepted_count += 1
+
+                            # The next request should be rejected with 503
+                            body = make_encrypted_execute_request(request_data, ctx)
+                            resp = client.post("/execute", json=body)
+                            assert resp.status_code == 503, (
+                                f"Expected 503 at capacity ({max_concurrent}), got {resp.status_code}"
+                            )
+                            data = resp.json()
+                            assert data["detail"]["error"] == "at_capacity"
+
+    assert accepted_count == max_concurrent

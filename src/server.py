@@ -495,15 +495,26 @@ def add_routes(app: FastAPI) -> None:
             
             phase_times['attestation'] = (time.time() - attestation_start) * 1000
             
-            # Create execution record
+            # Create execution record with atomic concurrency check
             exec_manager = request.app.state.execution_manager
-            execution_record = exec_manager.create_execution(
+            execution_record, accepted = exec_manager.try_create_execution(
                 body['repository_url'],
                 body['commit_hash'],
                 body['script_path'],
                 config.execution_timeout_seconds,
+                max_concurrent=config.max_concurrent_executions,
                 repository=oidc_repo_claim
             )
+
+            if not accepted:
+                repo_client.cleanup_clone(clone_result.clone_path)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=create_error_response(
+                        "at_capacity",
+                        "Server is at maximum execution capacity. Please try again later."
+                    )
+                )
             
             # Store encryption context for this execution
             encryption_manager.store_encryption_context(
