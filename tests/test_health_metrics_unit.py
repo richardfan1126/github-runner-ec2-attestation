@@ -111,7 +111,7 @@ def test_health_endpoint_with_active_executions():
     exec_manager = app.state.execution_manager
     for i in range(3):
         record = exec_manager.create_execution(
-            f"https://github.com/test/repo{i}",
+            f"https://github.com/owner/repo{i}",
             "a" * 40,
             "test.sh",
             300
@@ -210,7 +210,7 @@ def test_metrics_accuracy():
     # Create 5 successful executions
     for i in range(5):
         record = exec_manager.create_execution(
-            f"https://github.com/test/repo{i}",
+            f"https://github.com/owner/repo{i}",
             "a" * 40,
             "test.sh",
             300
@@ -221,7 +221,7 @@ def test_metrics_accuracy():
     # Create 3 failed executions
     for i in range(3):
         record = exec_manager.create_execution(
-            f"https://github.com/test/repo{i+5}",
+            f"https://github.com/owner/repo{i+5}",
             "b" * 40,
             "test.sh",
             300
@@ -232,7 +232,7 @@ def test_metrics_accuracy():
     # Create 2 timed out executions
     for i in range(2):
         record = exec_manager.create_execution(
-            f"https://github.com/test/repo{i+8}",
+            f"https://github.com/owner/repo{i+8}",
             "c" * 40,
             "test.sh",
             300
@@ -266,7 +266,7 @@ def test_metrics_under_concurrent_executions():
     def create_and_complete_execution(success: bool):
         """Helper to create and complete an execution"""
         record = exec_manager.create_execution(
-            "https://github.com/test/repo",
+            "https://github.com/owner/repo",
             "a" * 40,
             "test.sh",
             300
@@ -317,7 +317,7 @@ def test_metrics_average_duration():
     durations_ms = []
     for i in range(3):
         record = exec_manager.create_execution(
-            f"https://github.com/test/repo{i}",
+            f"https://github.com/owner/repo{i}",
             "a" * 40,
             "test.sh",
             300
@@ -362,7 +362,7 @@ def test_metrics_with_active_executions():
     # Create some completed executions
     for i in range(2):
         record = exec_manager.create_execution(
-            f"https://github.com/test/repo{i}",
+            f"https://github.com/owner/repo{i}",
             "a" * 40,
             "test.sh",
             300
@@ -373,7 +373,7 @@ def test_metrics_with_active_executions():
     # Create some active executions
     for i in range(3):
         record = exec_manager.create_execution(
-            f"https://github.com/test/repo{i+2}",
+            f"https://github.com/owner/repo{i+2}",
             "b" * 40,
             "test.sh",
             300

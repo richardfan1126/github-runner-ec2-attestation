@@ -452,7 +452,7 @@ def test_property_115_container_image_configuration(image_name):
         )
 
         params = {
-            'repository_url': 'https://github.com/test/repo',
+            'repository_url': 'https://github.com/owner/repo',
             'commit_hash': '0' * 40,
             'script_path': 'test.sh',
             'timeout_seconds': 3,

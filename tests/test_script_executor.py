@@ -57,7 +57,7 @@ def test_execute_script_with_stdout():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -95,7 +95,7 @@ def test_execute_script_with_stderr():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="b" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -132,7 +132,7 @@ def test_execute_script_with_both_streams():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="c" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -171,7 +171,7 @@ def test_execute_script_with_exit_code_zero():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="d" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -207,7 +207,7 @@ def test_execute_script_with_nonzero_exit_code():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="e" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -247,7 +247,7 @@ def test_execute_script_with_multiple_exit_codes():
         for exit_code in test_exit_codes:
             # Create execution
             record = manager.create_execution(
-                repository_url="https://github.com/test/repo",
+                repository_url="https://github.com/owner/repo",
                 commit_hash=f"{exit_code:040d}",
                 script_path="test.sh",
                 timeout_seconds=5
@@ -297,7 +297,7 @@ def test_execute_script_timeout():
         # Create execution with short timeout
         timeout = 1
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="f" * 40,
             script_path="test.sh",
             timeout_seconds=timeout
@@ -347,7 +347,7 @@ def test_execute_script_timeout_with_different_durations():
         for timeout in timeout_values:
             # Create execution
             record = manager.create_execution(
-                repository_url="https://github.com/test/repo",
+                repository_url="https://github.com/owner/repo",
                 commit_hash=f"{timeout:040d}",
                 script_path="test.sh",
                 timeout_seconds=timeout
@@ -396,7 +396,7 @@ def test_cleanup_removes_script_file():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="1" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -436,7 +436,7 @@ def test_cleanup_on_success():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="2" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -479,7 +479,7 @@ def test_cleanup_on_failure():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="3" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -523,7 +523,7 @@ def test_cleanup_on_timeout():
         # Create execution with short timeout
         timeout = 1
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="4" * 40,
             script_path="test.sh",
             timeout_seconds=timeout
@@ -572,7 +572,7 @@ def test_cleanup_removes_empty_directory():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="5" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -618,7 +618,7 @@ def test_large_output_capture():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="6" * 40,
             script_path="test.sh",
             timeout_seconds=10
@@ -662,7 +662,7 @@ def test_concurrent_executions():
         # Create and start multiple executions
         for i in range(num_executions):
             record = manager.create_execution(
-                repository_url="https://github.com/test/repo",
+                repository_url="https://github.com/owner/repo",
                 commit_hash=f"{i:040d}",
                 script_path=f"test_{i}.sh",
                 timeout_seconds=5
@@ -716,7 +716,7 @@ def test_terminate_running_execution():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="7" * 40,
             script_path="test.sh",
             timeout_seconds=30
@@ -775,7 +775,7 @@ def test_terminate_completed_execution():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="8" * 40,
             script_path="test.sh",
             timeout_seconds=5
@@ -810,7 +810,7 @@ def test_status_transitions():
         
         # Create execution
         record = manager.create_execution(
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="9" * 40,
             script_path="test.sh",
             timeout_seconds=5

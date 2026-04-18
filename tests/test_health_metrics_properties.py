@@ -120,7 +120,7 @@ def test_execution_metrics_tracking(successful_count, failed_count):
     # Create executions and update their status
     for _ in range(successful_count):
         record = exec_manager.create_execution(
-            "https://github.com/test/repo",
+            "https://github.com/owner/repo",
             "a" * 40,
             "test.sh",
             300
@@ -130,7 +130,7 @@ def test_execution_metrics_tracking(successful_count, failed_count):
     
     for _ in range(failed_count):
         record = exec_manager.create_execution(
-            "https://github.com/test/repo",
+            "https://github.com/owner/repo",
             "b" * 40,
             "test.sh",
             300

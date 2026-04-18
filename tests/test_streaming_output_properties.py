@@ -50,7 +50,7 @@ def _make_executor(mock_client, manager, collector, temp_dir, **kw):
 
 def _run_execution(executor, manager, temp_dir, script_content, timeout=5, filename="test_script.sh"):
     record = manager.create_execution(
-        repository_url="https://github.com/test/repo",
+        repository_url="https://github.com/owner/repo",
         commit_hash="a" * 40,
         script_path="test.sh",
         timeout_seconds=timeout,

@@ -71,7 +71,7 @@ def _make_executor(mock_client, manager, collector, temp_dir, **kwargs):
 def _create_and_run(executor, manager, temp_dir, script_content, timeout=5):
     """Create an execution record, write a script, run it, and return the execution_id."""
     record = manager.create_execution(
-        repository_url="https://github.com/test/repo",
+        repository_url="https://github.com/owner/repo",
         commit_hash="a" * 40,
         script_path="test.sh",
         timeout_seconds=timeout,
@@ -548,7 +548,7 @@ class TestContainerNameDerivation:
             eids = []
             for i in range(3):
                 record = manager.create_execution(
-                    repository_url="https://github.com/test/repo",
+                    repository_url="https://github.com/owner/repo",
                     commit_hash=f"{i:040d}",
                     script_path="test.sh",
                     timeout_seconds=5,
@@ -618,7 +618,7 @@ class TestRepoDirectoryMounting:
 
             # Use a specific script filename
             record = manager.create_execution(
-                repository_url="https://github.com/test/repo",
+                repository_url="https://github.com/owner/repo",
                 commit_hash="a" * 40,
                 script_path="scripts/build.sh",
                 timeout_seconds=5,
@@ -647,7 +647,7 @@ class TestRepoDirectoryMounting:
             os.chmod(script_path, 0o755)
 
             record = manager.create_execution(
-                repository_url="https://github.com/test/repo",
+                repository_url="https://github.com/owner/repo",
                 commit_hash="a" * 40,
                 script_path="test.sh",
                 timeout_seconds=5,

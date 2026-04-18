@@ -431,7 +431,7 @@ class TestMissingEncryptionContextReturnsHTTP400:
         # Create a dummy execution record so the endpoint doesn't 404
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="scripts/test.sh",
             status=ExecutionStatus.RUNNING,

@@ -143,7 +143,7 @@ class TestOutputEndpointWithAttestation:
     def _make_record(self, execution_id, status, exit_code=None):
         return ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=status,

@@ -159,7 +159,7 @@ class TestEndToEndIntegration:
         Test complete execution flow from request to output retrieval
         """
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -198,7 +198,7 @@ class TestEndToEndIntegration:
 
         for i in range(3):
             request_data = {
-                "repository_url": f"https://github.com/test/repo{i}",
+                "repository_url": "https://github.com/owner/repo",
                 "commit_hash": f"{i:040x}",
                 "script_path": f"scripts/test{i}.sh",
                 "github_token": "ghp_test_token",
@@ -229,7 +229,7 @@ class TestEndToEndIntegration:
         rate_client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a1a2a3a4a5a6a1a2a3a4a5a6a1a2a3a4a5a6a1a2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -289,7 +289,7 @@ class TestErrorScenarios:
             mock_session.get.return_value = Mock(status_code=401)
 
             request_data = {
-                "repository_url": "https://github.com/test/repo",
+                "repository_url": "https://github.com/owner/repo",
                 "commit_hash": "c1c2c3c4c5c6c1c2c3c4c5c6c1c2c3c4c5c6c1c2",
                 "script_path": "scripts/test.sh",
                 "github_token": "invalid_token",
@@ -329,7 +329,7 @@ class TestErrorScenarios:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
             "script_path": "scripts/timeout.sh",
             "github_token": "ghp_test_token",
@@ -378,7 +378,7 @@ class TestPQHybridKEMEndToEnd:
         that correctly encrypts/decrypts /execute payloads (Req 40.1, 42.1).
         """
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -403,7 +403,7 @@ class TestPQHybridKEMEndToEnd:
         Verify /execute response is encrypted and contains attestation_document (Req 42.1).
         """
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -427,7 +427,7 @@ class TestPQHybridKEMEndToEnd:
         Verify output_attestation_document is included when execution completes (Req 42.4).
         """
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "f1f2f3f4f5f6f1f2f3f4f5f6f1f2f3f4f5f6f1f2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -460,7 +460,7 @@ class TestPQHybridKEMEndToEnd:
         Verify /execution/{id}/output response is encrypted (Req 42.4).
         """
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a2b2c2d2e2f2a2b2c2d2e2f2a2b2c2d2e2f2a2b2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -493,7 +493,7 @@ class TestPQHybridKEMErrorScenarios:
         wrong_ctx = EncryptionTestContext()
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "b1b2b3b4b5b6b1b2b3b4b5b6b1b2b3b4b5b6b1b2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -515,7 +515,7 @@ class TestPQHybridKEMErrorScenarios:
         import struct
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "c1c2c3c4c5c6c1c2c3c4c5c6c1c2c3c4c5c6c1c2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -546,7 +546,7 @@ class TestPQHybridKEMErrorScenarios:
         """
         # Create an execution first so the execution record exists
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -570,7 +570,7 @@ class TestPQHybridKEMErrorScenarios:
         Test that decryption failure on /execution/{id}/output returns 400 (Req 42.7).
         """
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -594,7 +594,7 @@ class TestCleanupAndRetention:
     def test_execution_cleanup(self, client, mock_github_and_attestation, app, encryption_ctx):
         """Test cleanup of expired executions"""
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "b1b2b3b4b5b6b1b2b3b4b5b6b1b2b3b4b5b6b1b2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
@@ -632,7 +632,7 @@ class TestCleanupAndRetention:
         files_before = len(list(Path(temp_dir).rglob('*')))
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "c1c2c3c4c5c6c1c2c3c4c5c6c1c2c3c4c5c6c1c2",
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",

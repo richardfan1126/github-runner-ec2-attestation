@@ -72,7 +72,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
     if exec_status == ExecutionStatus.RUNNING:
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.RUNNING,
@@ -93,7 +93,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
     elif exec_status == ExecutionStatus.COMPLETED:
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.COMPLETED,
@@ -116,7 +116,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
         failed_exit = exit_code if exit_code != 0 else 1
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.FAILED,
@@ -137,7 +137,7 @@ def _build_record_and_output(exec_status, stdout, stderr, exit_code, execution_i
     else:  # TIMED_OUT
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.TIMED_OUT,

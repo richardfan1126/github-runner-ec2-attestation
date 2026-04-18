@@ -2528,7 +2528,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test ordering: clone → strip token → remove .git → mount
     - _Requirements: 3.10, 3.11, 3.12_
 
-- [ ] 134. Checkpoint - Ensure OIDC binding and repo security tests pass
+- [x] 134. Checkpoint - Ensure OIDC binding and repo security tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 135. Implement output buffer size limits

@@ -59,7 +59,7 @@ class TestExecuteEndpoint:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token_123",
@@ -134,7 +134,7 @@ class TestExecuteEndpoint:
 
         # Missing github_token
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "oidc_token": "valid.oidc.token",
@@ -156,7 +156,7 @@ class TestExecuteEndpoint:
             assert "github_token" in str(data["detail"]["details"]["errors"])
 
     def test_invalid_repository_url(self):
-        """Test validation error for invalid repository URL"""
+        """Test validation error for invalid repository URL - repo binding check fires first"""
         ctx = EncryptionTestContext()
         app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
         client = TestClient(app)
@@ -169,19 +169,16 @@ class TestExecuteEndpoint:
             "oidc_token": "valid.oidc.token",
         }
 
-        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
-             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
-            mock_validate.return_value = Mock(
-                valid=False,
-                errors=["Invalid repository URL format"]
-            )
+        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
 
             body = make_encrypted_execute_request(request_data, ctx)
             response = client.post("/execute", json=body)
 
-            assert response.status_code == 400
+            # Repo binding check fires before request validation since
+            # "not-a-valid-url" can't match the OIDC claim "owner/repo"
+            assert response.status_code == 403
             data = response.json()
-            assert data["detail"]["error"] == "validation_failed"
+            assert data["detail"]["error"] == "repository_mismatch"
 
     def test_invalid_commit_hash(self):
         """Test validation error for invalid commit hash"""
@@ -190,7 +187,7 @@ class TestExecuteEndpoint:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "invalid",  # Not 40 hex chars
             "script_path": "test.sh",
             "github_token": "ghp_token",
@@ -218,7 +215,7 @@ class TestExecuteEndpoint:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "test.sh",
             "github_token": "invalid_token",
@@ -250,7 +247,7 @@ class TestExecuteEndpoint:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/nonexistent",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "test.sh",
             "github_token": "ghp_token",
@@ -284,7 +281,7 @@ class TestExecuteEndpoint:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "b" * 40,
             "script_path": "test.sh",
             "github_token": "ghp_token",
@@ -316,7 +313,7 @@ class TestExecuteEndpoint:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "nonexistent.sh",
             "github_token": "ghp_token",
@@ -352,7 +349,7 @@ class TestExecuteEndpoint:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "test.sh",
             "github_token": "ghp_token",
@@ -412,7 +409,7 @@ class TestRateLimiting:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "test.sh",
             "github_token": "ghp_token",
@@ -446,7 +443,7 @@ class TestRateLimiting:
         client = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "test.sh",
             "github_token": "ghp_token",
@@ -477,7 +474,7 @@ class TestRateLimiting:
         client2 = TestClient(app)
 
         request_data = {
-            "repository_url": "https://github.com/test/repo",
+            "repository_url": "https://github.com/owner/repo",
             "commit_hash": "a" * 40,
             "script_path": "test.sh",
             "github_token": "ghp_token",
@@ -509,7 +506,7 @@ class TestOutputEndpoint:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.RUNNING,
@@ -563,7 +560,7 @@ class TestOutputEndpoint:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.COMPLETED,
@@ -607,7 +604,7 @@ class TestOutputEndpoint:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.FAILED,
@@ -656,7 +653,7 @@ class TestOutputEndpoint:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.TIMED_OUT,
@@ -723,7 +720,7 @@ class TestOutputEndpoint:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.RUNNING,
@@ -785,7 +782,7 @@ class TestOutputEndpoint:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.QUEUED,
@@ -828,7 +825,7 @@ class TestOutputEndpoint:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.RUNNING,
@@ -920,7 +917,7 @@ class TestConcurrentRequests:
                                     def make_request(index):
                                         try:
                                             request_data = {
-                                                "repository_url": f"https://github.com/test/repo{index}",
+                                                "repository_url": "https://github.com/owner/repo",
                                                 "commit_hash": "a" * 40,
                                                 "script_path": f"test{index}.sh",
                                                 "github_token": f"ghp_token_{index}",
@@ -965,7 +962,7 @@ class TestConcurrentRequests:
 
         record = ExecutionRecord(
             execution_id=execution_id,
-            repository_url="https://github.com/test/repo",
+            repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="test.sh",
             status=ExecutionStatus.RUNNING,

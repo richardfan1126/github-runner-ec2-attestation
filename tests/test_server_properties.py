@@ -272,7 +272,7 @@ def test_output_endpoint_status_return(execution_id, status):
     # Create execution record
     record = ExecutionRecord(
         execution_id=execution_id,
-        repository_url="https://github.com/test/repo",
+        repository_url="https://github.com/owner/repo",
         commit_hash="a" * 40,
         script_path="test.sh",
         status=status,
@@ -328,7 +328,7 @@ def test_completion_exit_code_inclusion(execution_id, exit_code):
     # Create completed execution record
     record = ExecutionRecord(
         execution_id=execution_id,
-        repository_url="https://github.com/test/repo",
+        repository_url="https://github.com/owner/repo",
         commit_hash="a" * 40,
         script_path="test.sh",
         status=ExecutionStatus.COMPLETED,
@@ -385,7 +385,7 @@ def test_completion_flag_accuracy(execution_id, is_complete):
     
     record = ExecutionRecord(
         execution_id=execution_id,
-        repository_url="https://github.com/test/repo",
+        repository_url="https://github.com/owner/repo",
         commit_hash="a" * 40,
         script_path="test.sh",
         status=status,
@@ -498,7 +498,7 @@ def test_rate_limiting_per_ip(num_requests):
         
         for i in range(num_requests):
             response = client.post("/execute", json={
-                "repository_url": "https://github.com/test/repo",
+                "repository_url": "https://github.com/owner/repo",
                 "commit_hash": "a" * 40,
                 "script_path": "test.sh",
                 "github_token": "test_token"
@@ -550,7 +550,7 @@ def test_output_request_response_encryption_round_trip(
 
     record = ExecutionRecord(
         execution_id=execution_id,
-        repository_url="https://github.com/test/repo",
+        repository_url="https://github.com/owner/repo",
         commit_hash="a" * 40,
         script_path="test.sh",
         status=status_val,
@@ -632,7 +632,7 @@ def test_missing_encryption_context_returns_400(execution_id):
     # reaching the encryption context check.
     record = ExecutionRecord(
         execution_id=execution_id,
-        repository_url="https://github.com/test/repo",
+        repository_url="https://github.com/owner/repo",
         commit_hash="a" * 40,
         script_path="scripts/test.sh",
         status=ExecutionStatus.RUNNING,

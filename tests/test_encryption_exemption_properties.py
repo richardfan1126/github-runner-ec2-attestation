@@ -127,14 +127,14 @@ class TestEncryptionExemptionForNonContextEndpoints:
 
         for _ in range(successful):
             record = exec_manager.create_execution(
-                "https://github.com/test/repo", "a" * 40, "test.sh", 300
+                "https://github.com/owner/repo", "a" * 40, "test.sh", 300
             )
             exec_manager.update_status(record.execution_id, ExecutionStatus.RUNNING)
             exec_manager.update_status(record.execution_id, ExecutionStatus.COMPLETED, exit_code=0)
 
         for _ in range(failed):
             record = exec_manager.create_execution(
-                "https://github.com/test/repo", "b" * 40, "test.sh", 300
+                "https://github.com/owner/repo", "b" * 40, "test.sh", 300
             )
             exec_manager.update_status(record.execution_id, ExecutionStatus.RUNNING)
             exec_manager.update_status(record.execution_id, ExecutionStatus.FAILED, exit_code=1)

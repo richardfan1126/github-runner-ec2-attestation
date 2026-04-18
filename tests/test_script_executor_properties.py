@@ -460,7 +460,7 @@ def test_property_26_timeout_exit_code(timeout_seconds):
         
         # Create execution record
         params = {
-            'repository_url': 'https://github.com/test/repo',
+            'repository_url': 'https://github.com/owner/repo',
             'commit_hash': '0' * 40,
             'script_path': 'test.sh',
             'timeout_seconds': timeout_seconds
