@@ -8,7 +8,7 @@ Requirements: 2.1-2.14, 2.20
 """
 import base64
 import time
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import patch, Mock
 from datetime import datetime, timezone
 
 import jwt as pyjwt
@@ -469,14 +469,8 @@ class TestOIDCProtectedEndpoints:
         """GET /health without any Authorization header → 200"""
         client, app, _ctx = self._create_client()
 
-        with patch.object(
-            app.state.attestation_generator, "verify_tpm_available", return_value=False
-        ), patch("shutil.disk_usage") as mock_disk, patch.object(
-            app.state.execution_manager, "get_active_count", return_value=0
-        ):
-            mock_disk.return_value = MagicMock(free=1024 * 1024 * 1024)
-            response = client.get("/health")
+        response = client.get("/health")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] in ("healthy", "degraded")
+        assert data["status"] in ("healthy", "unhealthy")

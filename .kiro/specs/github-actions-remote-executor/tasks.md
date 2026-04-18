@@ -2665,27 +2665,27 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 142. Checkpoint - Ensure runtime security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 143. Harden health endpoint and remove /metrics
-  - [ ] 143.1 Apply rate limiting to /health endpoint in src/server.py
+- [x] 143. Harden health endpoint and remove /metrics
+  - [x] 143.1 Apply rate limiting to /health endpoint in src/server.py
     - Remove /health from rate limiting exemptions
     - Ensure /health is subject to the same per-IP rate limiting as other endpoints
     - _Requirements: 10.4_
 
-  - [ ] 143.2 Simplify /health response
+  - [x] 143.2 Simplify /health response
     - Return only a simple healthy/unhealthy status
     - Remove Docker availability, disk space, and active execution count from the response
     - _Requirements: 10.5_
 
-  - [ ] 143.3 Remove GET /metrics endpoint entirely
+  - [x] 143.3 Remove GET /metrics endpoint entirely
     - Remove the /metrics route from src/server.py
     - Remove metrics tracking code (total executions, success/failure counts, average duration)
     - _Requirements: 10.5 (removed)_
 
-  - [ ] 143.4 Write property test for Health Endpoint Rate Limiting
+  - [x] 143.4 Write property test for Health Endpoint Rate Limiting
     - **Property 153: Health Endpoint Rate Limiting**
     - **Validates: Requirements 10.4**
 
-  - [ ] 143.5 Update existing health and metrics tests
+  - [x] 143.5 Update existing health and metrics tests
     - Update tests to reflect simplified /health response
     - Remove /metrics endpoint tests
     - Update Property 58, 59, 60 tests as needed

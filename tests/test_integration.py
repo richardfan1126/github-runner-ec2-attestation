@@ -260,21 +260,7 @@ class TestEndToEndIntegration:
 
         data = response.json()
         assert "status" in data
-        assert "attestation_available" in data
-        assert "disk_space_mb" in data
-        assert "active_executions" in data
 
-    def test_metrics_endpoint(self, client):
-        """Test metrics endpoint"""
-        response = client.get("/metrics")
-        assert response.status_code == 200
-
-        data = response.json()
-        assert "total_executions" in data
-        assert "successful_executions" in data
-        assert "failed_executions" in data
-        assert "average_duration_ms" in data
-        assert "active_executions" in data
 
 
 class TestErrorScenarios:

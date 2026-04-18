@@ -10,7 +10,7 @@ which accepts the raw JWT string directly.
 """
 import base64
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import jwt as pyjwt
 import pytest
@@ -264,17 +264,7 @@ def test_property_108_health_endpoint_no_authentication(_dummy):
 
     **Validates: Requirements 2.20**
     """
-    with patch.object(
-        _server_app.state.attestation_generator,
-        "verify_tpm_available",
-        return_value=False,
-    ), patch("shutil.disk_usage") as mock_disk, patch.object(
-        _server_app.state.execution_manager,
-        "get_active_count",
-        return_value=0,
-    ):
-        mock_disk.return_value = MagicMock(free=1024 * 1024 * 1024)
-        response = _server_client.get("/health")
+    response = _server_client.get("/health")
 
     assert response.status_code == 200, (
         f"Health endpoint should return 200 without auth, got {response.status_code}"

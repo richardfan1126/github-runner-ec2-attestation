@@ -3,7 +3,7 @@
 Feature: github-actions-remote-executor
 Tests Property 135 from the design document.
 """
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from hypothesis import given, settings, strategies as st
 from fastapi.testclient import TestClient
@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from src.server import create_app
 from src.config import ServerConfig
 from src.encryption import EncryptionManager
-from src.models import ExecutionStatus
 
 
 def get_test_config():
@@ -93,61 +92,13 @@ class TestEncryptionExemptionForNonContextEndpoints:
         app = create_app(get_test_config(), encryption_manager=encryption_manager)
         client = TestClient(app)
 
-        mock_usage = Mock(free=10240 * 1024 * 1024, total=20480 * 1024 * 1024, used=10240 * 1024 * 1024)
-
-        with patch("shutil.disk_usage") as mock_disk_usage:
-            mock_disk_usage.return_value = mock_usage
-            with patch.object(
-                app.state.attestation_generator, "verify_tpm_available"
-            ) as mock_verify:
-                mock_verify.return_value = attestation_available
-
-                response = client.get("/health")
-
-                assert response.status_code == 200
-                data = response.json()
-                # Must contain status key
-                assert "status" in data
-                # Must NOT contain encrypted_response wrapper
-                assert "encrypted_response" not in data
-
-    @settings(max_examples=100, deadline=None)
-    @given(
-        successful=st.integers(min_value=0, max_value=10),
-        failed=st.integers(min_value=0, max_value=10),
-    )
-    def test_metrics_returns_plain_json_not_encrypted(self, successful, failed):
-        """Property 135 (metrics): /metrics response is plain unencrypted JSON
-        with no encrypted_response wrapper, even when EncryptionManager is configured."""
-        encryption_manager = EncryptionManager()
-        app = create_app(get_test_config(), encryption_manager=encryption_manager)
-        client = TestClient(app)
-
-        exec_manager = app.state.execution_manager
-
-        for _ in range(successful):
-            record = exec_manager.create_execution(
-                "https://github.com/owner/repo", "a" * 40, "test.sh", 300
-            )
-            exec_manager.update_status(record.execution_id, ExecutionStatus.RUNNING)
-            exec_manager.update_status(record.execution_id, ExecutionStatus.COMPLETED, exit_code=0)
-
-        for _ in range(failed):
-            record = exec_manager.create_execution(
-                "https://github.com/owner/repo", "b" * 40, "test.sh", 300
-            )
-            exec_manager.update_status(record.execution_id, ExecutionStatus.RUNNING)
-            exec_manager.update_status(record.execution_id, ExecutionStatus.FAILED, exit_code=1)
-
-        response = client.get("/metrics")
+        response = client.get("/health")
 
         assert response.status_code == 200
         data = response.json()
-        # Must contain expected metric keys
-        assert "total_executions" in data
-        assert "successful_executions" in data
-        assert "failed_executions" in data
-        assert "average_duration_ms" in data
-        assert "active_executions" in data
+        # Must contain status key
+        assert "status" in data
         # Must NOT contain encrypted_response wrapper
         assert "encrypted_response" not in data
+
+

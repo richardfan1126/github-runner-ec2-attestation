@@ -227,8 +227,8 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
         """Apply rate limiting per source IP"""
-        # Skip rate limiting for health check and attest endpoint
-        if request.url.path in ("/health", "/attest"):
+        # Skip rate limiting for attest endpoint
+        if request.url.path in ("/attest",):
             return await call_next(request)
         
         ip_address = request.client.host
@@ -950,89 +950,24 @@ def add_routes(app: FastAPI) -> None:
 
         Returns:
         {
-            "status": "healthy",
-            "attestation_available": true,
-            "docker_available": true,
-            "disk_space_mb": 10240,
-            "active_executions": 3
+            "status": "healthy"
         }
         """
         try:
-            import shutil
-
-            # Check attestation capability
-            attestation_gen = request.app.state.attestation_generator
-            attestation_available = attestation_gen.verify_tpm_available()
-
-            # Check Docker daemon availability
-            script_exec = request.app.state.script_executor
-            docker_available = script_exec.verify_docker_daemon()
-
-            # Check disk space
-            config = request.app.state.config
-            os.makedirs(config.temp_storage_path, exist_ok=True)
-            disk_usage = shutil.disk_usage(config.temp_storage_path)
-            disk_space_mb = disk_usage.free // (1024 * 1024)
-
-            # Get active executions count
-            exec_manager = request.app.state.execution_manager
-            active_executions = exec_manager.get_active_count()
-
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
-                    "status": "healthy",
-                    "attestation_available": attestation_available,
-                    "docker_available": docker_available,
-                    "disk_space_mb": disk_space_mb,
-                    "active_executions": active_executions
+                    "status": "healthy"
                 }
             )
 
         except Exception as e:
             logger.error(f"Error in health check endpoint: {e}", exc_info=True)
-            # Still return 200 but indicate degraded status
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
-                    "status": "degraded",
-                    "attestation_available": False,
-                    "docker_available": False,
-                    "disk_space_mb": 0,
-                    "active_executions": 0
+                    "status": "unhealthy"
                 }
             )
 
-    @app.get("/metrics")
-    async def metrics(request: Request):
-        """
-        Metrics endpoint for monitoring
-
-        Returns:
-        {
-            "total_executions": 1523,
-            "successful_executions": 1450,
-            "failed_executions": 73,
-            "average_duration_ms": 3421,
-            "active_executions": 3
-        }
-        """
-        try:
-            exec_manager = request.app.state.execution_manager
-            metrics_data = exec_manager.get_metrics()
-
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content=metrics_data
-            )
-
-        except Exception as e:
-            logger.error(f"Error in metrics endpoint: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=create_error_response(
-                    "internal_server_error",
-                    "An unexpected error occurred"
-                )
-            )
 
