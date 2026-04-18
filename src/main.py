@@ -107,6 +107,7 @@ def main() -> int:
             execution_manager=ExecutionManager(config.output_retention_hours),
             output_collector=OutputCollector(),
             temp_storage_path=config.temp_storage_path,
+            container_image_digest=config.container_image_digest,
         )
         temp_executor.cleanup_dangling_containers()
         logger.info("Dangling container cleanup complete")

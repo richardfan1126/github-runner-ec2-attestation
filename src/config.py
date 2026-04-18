@@ -47,6 +47,9 @@ class ServerConfig:
     # Anti-replay nonce cache TTL (matches OIDC token lifetime)
     nonce_cache_ttl_seconds: int = 300
 
+    # Container Image Digest Pinning
+    container_image_digest: Optional[str] = None
+
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
     require_protected_ref: bool = False
@@ -120,6 +123,9 @@ class ServerConfig:
         
         # Parse optional ALLOWED_BRANCHES (comma-separated, None if not set)
         allowed_branches_raw = os.getenv("ALLOWED_BRANCHES")
+
+        # Parse optional CONTAINER_IMAGE_DIGEST (SHA-256 digest, None if not set)
+        container_image_digest = os.getenv("CONTAINER_IMAGE_DIGEST") or None
         allowed_branches = None
         if allowed_branches_raw is not None:
             allowed_branches = [b.strip() for b in allowed_branches_raw.split(",") if b.strip()]
@@ -157,6 +163,7 @@ class ServerConfig:
             container_image=container_image,
             container_memory_limit=container_memory_limit,
             container_cpu_limit=float(container_cpu_limit),
+            container_image_digest=container_image_digest,
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,

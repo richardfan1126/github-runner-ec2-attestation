@@ -2734,24 +2734,24 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that exceeding rate limit returns 429
     - _Requirements: 37.12, 37.13_
 
-- [ ] 146. Implement container image digest pinning
-  - [ ] 146.1 Add CONTAINER_IMAGE_DIGEST config to src/config.py
+- [x] 146. Implement container image digest pinning
+  - [x] 146.1 Add CONTAINER_IMAGE_DIGEST config to src/config.py
     - Add optional `container_image_digest` field (default None)
     - Read from CONTAINER_IMAGE_DIGEST environment variable
     - _Requirements: 34.7_
 
-  - [ ] 146.2 Verify pulled image digest in src/script_executor.py pull_container_image
+  - [x] 146.2 Verify pulled image digest in src/script_executor.py pull_container_image
     - After pulling the image, retrieve its digest
     - If CONTAINER_IMAGE_DIGEST is configured, compare against the pulled image digest
     - If mismatch, raise an error to prevent server startup
     - Support digest-pinned image references (e.g., `image@sha256:...`)
     - _Requirements: 34.8, 34.9, 34.10_
 
-  - [ ] 146.3 Write property test for Container Image Digest Verification
+  - [x] 146.3 Write property test for Container Image Digest Verification
     - **Property 156: Container Image Digest Verification**
     - **Validates: Requirements 34.7, 34.8, 34.9, 34.10**
 
-  - [ ] 146.4 Write unit tests for container image digest pinning
+  - [x] 146.4 Write unit tests for container image digest pinning
     - Test matching digest (startup succeeds)
     - Test mismatched digest (startup fails)
     - Test no digest configured (skip verification)

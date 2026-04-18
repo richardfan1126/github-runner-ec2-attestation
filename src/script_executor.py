@@ -37,6 +37,7 @@ class ScriptExecutor:
         execution_manager: "ExecutionManager | None" = None,
         output_collector: "OutputCollector | None" = None,
         temp_storage_path: str = "/tmp",
+        container_image_digest: "str | None" = None,
     ):
         """
         Initialize script executor with Docker SDK.
@@ -50,6 +51,7 @@ class ScriptExecutor:
             execution_manager: Manager for execution lifecycle and state
             output_collector: Collector for capturing stdout/stderr
             temp_storage_path: Base path for temporary file storage
+            container_image_digest: Optional SHA-256 digest to verify pulled image against
         """
         self._docker_client = docker_client
         self._container_image = container_image
@@ -59,6 +61,7 @@ class ScriptExecutor:
         self._execution_manager = execution_manager
         self._output_collector = output_collector
         self._temp_storage_path = temp_storage_path
+        self._container_image_digest = container_image_digest
         self._active_containers = {}
         self._container_lock = threading.Lock()
 
@@ -446,10 +449,13 @@ class ScriptExecutor:
 
         Checks the local Docker image store first. If the image exists, skips
         the pull. Otherwise pulls from the registry and verifies availability.
+        When CONTAINER_IMAGE_DIGEST is configured, verifies the pulled image
+        digest matches the expected value.
 
         Raises:
             RuntimeError: If the Docker client is unavailable, the pull fails,
-                or the image cannot be verified after pulling.
+                the image cannot be verified after pulling, or the digest
+                does not match the expected value.
         """
         if self._docker_client is None:
             raise RuntimeError(
@@ -459,41 +465,92 @@ class ScriptExecutor:
         image_name = self._container_image
 
         # Check if image already exists locally
+        image = None
         try:
-            self._docker_client.images.get(image_name)
+            image = self._docker_client.images.get(image_name)
             logger.info(f"Container image '{image_name}' already present locally, skipping pull")
-            return
         except docker.errors.ImageNotFound:
             logger.info(f"Container image '{image_name}' not found locally, pulling from registry...")
         except docker.errors.APIError as e:
             logger.warning(f"Error checking local image '{image_name}': {e}. Attempting pull...")
 
-        # Pull the image
-        start = time.monotonic()
-        try:
-            image = self._docker_client.images.pull(image_name)
-            duration = time.monotonic() - start
-            size_bytes = image.attrs.get("Size", 0) if image.attrs else 0
-            size_mb = size_bytes / (1024 * 1024)
-            logger.info(
-                f"Pulled container image '{image_name}' in {duration:.1f}s "
-                f"(size: {size_mb:.1f} MB)"
-            )
-        except docker.errors.ImageNotFound:
+        # Pull the image if not already present
+        if image is None:
+            start = time.monotonic()
+            try:
+                image = self._docker_client.images.pull(image_name)
+                duration = time.monotonic() - start
+                size_bytes = image.attrs.get("Size", 0) if image.attrs else 0
+                size_mb = size_bytes / (1024 * 1024)
+                logger.info(
+                    f"Pulled container image '{image_name}' in {duration:.1f}s "
+                    f"(size: {size_mb:.1f} MB)"
+                )
+            except docker.errors.ImageNotFound:
+                raise RuntimeError(
+                    f"Container image '{image_name}' not found in registry"
+                )
+            except docker.errors.APIError as e:
+                raise RuntimeError(
+                    f"Failed to pull container image '{image_name}': {e}"
+                )
+
+            # Verify the image is available after pull
+            try:
+                image = self._docker_client.images.get(image_name)
+            except docker.errors.ImageNotFound:
+                raise RuntimeError(
+                    f"Container image '{image_name}' not available after pull"
+                )
+
+        # Verify image digest if configured
+        self._verify_image_digest(image, image_name)
+
+    def _verify_image_digest(self, image, image_name: str) -> None:
+        """Verify the pulled image digest matches the expected digest.
+
+        Determines the expected digest from either the CONTAINER_IMAGE_DIGEST
+        config or from a digest-pinned image reference (image@sha256:...).
+
+        Args:
+            image: Docker image object
+            image_name: The image reference string
+
+        Raises:
+            RuntimeError: If the digest does not match the expected value.
+        """
+        # Determine expected digest: from config or from digest-pinned reference
+        expected_digest = self._container_image_digest
+        if expected_digest is None and "@sha256:" in image_name:
+            expected_digest = image_name.split("@sha256:", 1)[1]
+            if expected_digest:
+                expected_digest = f"sha256:{expected_digest}"
+
+        if expected_digest is None:
+            return
+
+        # Extract actual digest from image RepoDigests
+        actual_digest = None
+        repo_digests = image.attrs.get("RepoDigests", []) if image.attrs else []
+        for entry in repo_digests:
+            if "@sha256:" in entry:
+                actual_digest = "sha256:" + entry.split("@sha256:", 1)[1]
+                break
+
+        # Fallback to image.id if no RepoDigests available
+        if actual_digest is None and image.id:
+            actual_digest = image.id
+
+        if actual_digest is None:
             raise RuntimeError(
-                f"Container image '{image_name}' not found in registry"
-            )
-        except docker.errors.APIError as e:
-            raise RuntimeError(
-                f"Failed to pull container image '{image_name}': {e}"
+                f"Cannot verify digest for container image '{image_name}': "
+                f"no digest information available"
             )
 
-        # Verify the image is available after pull
-        try:
-            self._docker_client.images.get(image_name)
-        except docker.errors.ImageNotFound:
+        if actual_digest != expected_digest:
             raise RuntimeError(
-                f"Container image '{image_name}' not available after pull"
+                f"Container image digest mismatch for '{image_name}': "
+                f"expected {expected_digest}, got {actual_digest}"
             )
 
     def _cleanup_temp_files(self, execution_id: str, repo_path: str) -> None:
