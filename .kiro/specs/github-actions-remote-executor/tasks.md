@@ -2719,17 +2719,17 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test concurrent nonce checks
     - _Requirements: 45.1, 45.2, 45.3, 45.4, 45.5_
 
-- [ ] 145. Apply rate limiting to /attest endpoint
-  - [ ] 145.1 Remove /attest from rate limiting exemptions in src/server.py
+- [x] 145. Apply rate limiting to /attest endpoint
+  - [x] 145.1 Remove /attest from rate limiting exemptions in src/server.py
     - Remove /attest from the list of paths exempt from rate limiting
     - Ensure /attest is subject to per-IP rate limiting
     - _Requirements: 37.12, 37.13_
 
-  - [ ] 145.2 Write property test for Attest Endpoint Rate Limiting
+  - [x] 145.2 Write property test for Attest Endpoint Rate Limiting
     - **Property 155: Attest Endpoint Rate Limiting**
     - **Validates: Requirements 37.12, 37.13**
 
-  - [ ] 145.3 Write unit tests for /attest rate limiting
+  - [x] 145.3 Write unit tests for /attest rate limiting
     - Test that /attest requests are rate limited per IP
     - Test that exceeding rate limit returns 429
     - _Requirements: 37.12, 37.13_

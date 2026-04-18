@@ -488,6 +488,46 @@ class TestRateLimiting:
             assert response.status_code != 429
 
 
+    def test_attest_rate_limit_enforcement(self):
+        """Test that /attest requests are rate limited per IP"""
+        config = get_test_config()
+        config.rate_limit_per_ip = 3
+        config.rate_limit_window_seconds = 60
+
+        app = create_app(config)
+        client = TestClient(app)
+
+        # First 3 requests should not be rate limited
+        for i in range(3):
+            response = client.get("/attest")
+            assert response.status_code != 429, (
+                f"Request {i+1} should not be rate limited"
+            )
+
+        # Next request should be rate limited
+        response = client.get("/attest")
+        assert response.status_code == 429
+
+    def test_attest_rate_limit_returns_proper_error_body(self):
+        """Test that exceeding rate limit on /attest returns 429 with proper error response"""
+        config = get_test_config()
+        config.rate_limit_per_ip = 1
+        config.rate_limit_window_seconds = 60
+
+        app = create_app(config)
+        client = TestClient(app)
+
+        # Use up the rate limit
+        client.get("/attest")
+
+        # Next request should be rate limited with proper error body
+        response = client.get("/attest")
+        assert response.status_code == 429
+        data = response.json()
+        assert data["error"] == "rate_limit_exceeded"
+        assert "retry_after_seconds" in data["details"]
+
+
 class TestOutputEndpoint:
     """Tests for POST /execution/{execution_id}/output endpoint"""
 

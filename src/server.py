@@ -229,10 +229,6 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
         """Apply rate limiting per source IP"""
-        # Skip rate limiting for attest endpoint
-        if request.url.path in ("/attest",):
-            return await call_next(request)
-        
         ip_address = request.client.host
         allowed, remaining = rate_limiter.check_rate_limit(ip_address)
         
