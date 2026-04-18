@@ -501,7 +501,8 @@ def add_routes(app: FastAPI) -> None:
                 body['repository_url'],
                 body['commit_hash'],
                 body['script_path'],
-                config.execution_timeout_seconds
+                config.execution_timeout_seconds,
+                repository=oidc_repo_claim
             )
             
             # Store encryption context for this execution
@@ -707,7 +708,22 @@ def add_routes(app: FastAPI) -> None:
                         f"Execution ID not found: {execution_id}"
                     )
                 )
-            
+
+            # Repository binding: verify OIDC repository claim matches execution record
+            oidc_repo_claim = oidc_result.claims.get("repository", "")
+            if oidc_repo_claim != execution_record.repository:
+                logger.warning(
+                    f"Output repository mismatch: OIDC claim={oidc_repo_claim}, "
+                    f"execution record={execution_record.repository}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=create_error_response(
+                        "repository_mismatch",
+                        "OIDC token repository claim does not match execution record"
+                    )
+                )
+
             # Retrieve output
             output_collector = request.app.state.output_collector
             

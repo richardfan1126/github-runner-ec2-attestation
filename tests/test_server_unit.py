@@ -514,7 +514,8 @@ class TestOutputEndpoint:
             started_at=datetime.now(timezone.utc),
             completed_at=None,
             exit_code=None,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         output_data = OutputData(
@@ -568,7 +569,8 @@ class TestOutputEndpoint:
             started_at=datetime.now(timezone.utc),
             completed_at=datetime.now(timezone.utc),
             exit_code=0,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         output_data = OutputData(
@@ -612,7 +614,8 @@ class TestOutputEndpoint:
             started_at=datetime.now(timezone.utc),
             completed_at=datetime.now(timezone.utc),
             exit_code=1,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         output_data = OutputData(
@@ -661,7 +664,8 @@ class TestOutputEndpoint:
             started_at=datetime.now(timezone.utc),
             completed_at=datetime.now(timezone.utc),
             exit_code=-1,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         output_data = OutputData(
@@ -728,7 +732,8 @@ class TestOutputEndpoint:
             started_at=datetime.now(timezone.utc),
             completed_at=None,
             exit_code=None,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         # Output from offset 100
@@ -790,7 +795,8 @@ class TestOutputEndpoint:
             started_at=None,
             completed_at=None,
             exit_code=None,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
@@ -833,7 +839,8 @@ class TestOutputEndpoint:
             started_at=datetime.now(timezone.utc),
             completed_at=None,
             exit_code=None,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         output_data = OutputData(
@@ -970,7 +977,8 @@ class TestConcurrentRequests:
             started_at=datetime.now(timezone.utc),
             completed_at=None,
             exit_code=None,
-            timeout_seconds=300
+            timeout_seconds=300,
+            repository="owner/repo"
         )
 
         output_data = OutputData(

@@ -42,7 +42,8 @@ class ExecutionManager:
         repository_url: str,
         commit_hash: str,
         script_path: str,
-        timeout_seconds: int
+        timeout_seconds: int,
+        repository: str = ""
     ) -> ExecutionRecord:
         """
         Create a new execution record with unique ID
@@ -52,6 +53,7 @@ class ExecutionManager:
             commit_hash: Git commit SHA
             script_path: Path to script file in repository
             timeout_seconds: Execution timeout in seconds
+            repository: OIDC repository claim (e.g., "owner/repo")
 
         Returns:
             ExecutionRecord with unique execution_id and QUEUED status
@@ -68,7 +70,8 @@ class ExecutionManager:
             started_at=None,
             completed_at=None,
             exit_code=None,
-            timeout_seconds=timeout_seconds
+            timeout_seconds=timeout_seconds,
+            repository=repository
         )
 
         with self._lock:

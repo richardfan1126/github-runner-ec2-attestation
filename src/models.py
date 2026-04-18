@@ -43,6 +43,7 @@ class ExecutionRecord:
     completed_at: Optional[datetime]
     exit_code: Optional[int]
     timeout_seconds: int
+    repository: str = ""
 
 
 @dataclass

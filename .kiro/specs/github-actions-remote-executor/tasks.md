@@ -2553,22 +2553,22 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test exact boundary condition
     - _Requirements: 5.15, 5.16_
 
-- [ ] 136. Implement execution output repository binding
-  - [ ] 136.1 Store repository claim in execution record
+- [x] 136. Implement execution output repository binding
+  - [x] 136.1 Store repository claim in execution record
     - When creating an execution record in src/execution_manager.py, accept and store the `repository` claim from the validated OIDC_Token
     - Add `repository` field to the execution record data structure
     - _Requirements: 6.14_
 
-  - [ ] 136.2 Verify repository claim on /output retrieval in src/server.py
+  - [x] 136.2 Verify repository claim on /output retrieval in src/server.py
     - On /execution/{id}/output, after OIDC validation, compare the `repository` claim from the token against the repository stored in the execution record
     - Reject with HTTP 403 if mismatch
     - _Requirements: 6.15, 6.16_
 
-  - [ ] 136.3 Write property test for Execution Output Repository Binding
+  - [x] 136.3 Write property test for Execution Output Repository Binding
     - **Property 147: Execution Output Repository Binding**
     - **Validates: Requirements 6.14, 6.15, 6.16**
 
-  - [ ] 136.4 Write unit tests for output repository binding
+  - [x] 136.4 Write unit tests for output repository binding
     - Test matching repository (allowed)
     - Test mismatched repository (403)
     - Test repository stored at creation and checked at retrieval
