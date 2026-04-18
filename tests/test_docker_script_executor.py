@@ -658,3 +658,41 @@ class TestRepoDirectoryMounting:
             # Wait for cleanup
             time.sleep(0.5)
             assert not os.path.exists(repo_dir), "Repo directory should be cleaned up"
+
+
+# ===========================================================================
+# 10. Capability dropping (Requirements 8.17, 8.18)
+# ===========================================================================
+
+class TestCapabilityDropping:
+    """Validates: Requirements 8.17, 8.18"""
+
+    def test_container_created_with_cap_drop_all(self):
+        """Container is created with cap_drop=["ALL"] (Req 8.17)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_client = create_mock_docker_client()
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = _make_executor(mock_client, manager, collector, temp_dir)
+
+            eid = _create_and_run(executor, manager, temp_dir, "echo ok\n")
+            assert wait_for_completion(manager, eid)
+
+            call = mock_client.containers._creation_calls[0]
+            assert call["cap_drop"] == ["ALL"]
+
+    def test_no_cap_add_present(self):
+        """Container does not add back any capabilities (Req 8.18)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_client = create_mock_docker_client()
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = _make_executor(mock_client, manager, collector, temp_dir)
+
+            eid = _create_and_run(executor, manager, temp_dir, "echo ok\n")
+            assert wait_for_completion(manager, eid)
+
+            call = mock_client.containers._creation_calls[0]
+            assert "cap_add" not in call, (
+                f"Container must not have cap_add, but found cap_add={call.get('cap_add')!r}"
+            )

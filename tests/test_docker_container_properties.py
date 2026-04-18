@@ -468,3 +468,54 @@ def test_property_115_container_image_configuration(image_name):
         assert creation_calls[0]["image"] == image_name, (
             f"Container should use image '{image_name}', got '{creation_calls[0]['image']}'"
         )
+
+
+# ===========================================================================
+# Property 152: Capability Dropping
+# ===========================================================================
+
+@given(params=execution_params())
+@settings(max_examples=10, deadline=10000)
+def test_property_152_capability_dropping(params):
+    """
+    Property 152: For any Execution_Container, verify it is created with
+    cap_drop=["ALL"] and no capabilities are added back via cap_add.
+
+    **Validates: Requirements 8.17, 8.18**
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mock_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=mock_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir,
+            memory_limit="512m",
+            cpu_limit=1.0,
+        )
+
+        record = manager.create_execution(**params)
+        script_path = create_test_script(temp_dir, "echo ok\n")
+        executor.execute_async(
+            record.execution_id,
+            os.path.dirname(script_path),
+            os.path.basename(script_path),
+        )
+
+        _wait_for_terminal(manager, record.execution_id)
+
+        creation_calls = mock_client.containers._creation_calls
+        assert len(creation_calls) == 1
+        call = creation_calls[0]
+
+        # Req 8.17: cap_drop must be ["ALL"]
+        assert call.get("cap_drop") == ["ALL"], (
+            f"Container must have cap_drop=['ALL'], got {call.get('cap_drop')!r}"
+        )
+
+        # Req 8.18: no capabilities added back
+        assert "cap_add" not in call or call["cap_add"] is None or call["cap_add"] == [], (
+            f"Container must not add back any capabilities, got cap_add={call.get('cap_add')!r}"
+        )

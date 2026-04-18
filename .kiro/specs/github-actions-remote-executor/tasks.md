@@ -2647,17 +2647,17 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that expired records trigger remove_output and remove_encryption_context
     - _Requirements: 8.15, 8.16_
 
-- [ ] 141. Implement capability dropping for execution containers
-  - [ ] 141.1 Add cap_drop=["ALL"] to container creation in src/script_executor.py
+- [x] 141. Implement capability dropping for execution containers
+  - [x] 141.1 Add cap_drop=["ALL"] to container creation in src/script_executor.py
     - Add `cap_drop=["ALL"]` to the Docker container creation call
     - Do not add back any capabilities
     - _Requirements: 8.17, 8.18_
 
-  - [ ] 141.2 Write property test for Capability Dropping
+  - [x] 141.2 Write property test for Capability Dropping
     - **Property 152: Capability Dropping**
     - **Validates: Requirements 8.17, 8.18**
 
-  - [ ] 141.3 Write unit tests for capability dropping
+  - [x] 141.3 Write unit tests for capability dropping
     - Test that container is created with cap_drop=["ALL"]
     - Test that no cap_add is present
     - _Requirements: 8.17, 8.18_
