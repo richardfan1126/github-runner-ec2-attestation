@@ -22,6 +22,10 @@ This specification covers three major aspects:
 
 7. **Streaming Output Requirements (Requirement 44)**: How the Script_Executor streams output from Execution_Containers incrementally during execution, so that clients can observe partial output while scripts are still running rather than waiting for the container to exit.
 
+8. **Security Hardening Requirements (Requirements 45-50)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection, debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, and IAM permission scoping.
+
+Note: Security hardening acceptance criteria from the security review are integrated throughout the existing requirements where they naturally belong. Only genuinely new requirement areas appear in the Security Hardening Requirements section.
+
 Note: By default, the KIWI image excludes SSH-related packages (openssh-server, cloud-init, ec2-instance-connect) to remove operator access. The debug feature must be enabled at KIWI image build time to include these packages, and then at deployment time to open port 22 and attach a key pair.
 
 The build process does NOT use the Remote Executor itself (since you can't use something that doesn't exist yet during initial builds). Instead, it uses standard GitHub Actions runners to build the KIWI image, and a temporary EC2 instance to convert it to an AMI.
@@ -81,6 +85,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **KIWI_Image**: Raw disk image (.raw file) produced by KIWI NG build process
 - **Build_Artifact**: Bundle containing KIWI image and PCR measurements file
 - **GHCR**: GitHub Container Registry where artifacts are stored
+
+### Security Components
+- **Nonce_Cache**: In-memory cache that tracks recently seen nonces from encrypted requests to prevent replay attacks, with entries expiring after a configurable TTL
+- **Allowed_Branches**: Optional configured list of branch patterns that the OIDC_Token `ref` claim must match for authorization
+- **REQUIRE_PROTECTED_REF**: Optional boolean configuration that, when true, requires the OIDC_Token `ref_protected` claim to be "true"
+- **CONTAINER_IMAGE_DIGEST**: Optional configuration value containing a SHA-256 digest used to verify the pulled Container_Image matches the expected image
 - **Coldsnap**: AWS tool for uploading raw disk images to EBS snapshots
 - **Build_Instance**: Temporary EC2 instance used to convert KIWI image to AMI
 - **Docker_Daemon**: The Docker Engine service (dockerd) that must be installed and enabled in the KIWI image to support creation and management of Execution_Containers at runtime
@@ -131,6 +141,17 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 19. THE Request_Validator SHALL sanitize all input parameters to prevent injection attacks
 20. THE Request_Validator SHALL NOT require authentication for the /health endpoint
 21. THE Request_Validator SHALL NOT require authentication for the /attest endpoint
+22. WHEN the GHA_Server processes a valid /execute request, THE Request_Validator SHALL verify that the `repository` claim from the validated OIDC_Token matches the `repository_url` field in the Execution_Request
+23. IF the `repository` claim does not match the `repository_url`, THEN THE GHA_Server SHALL reject the request with HTTP 403 Forbidden and an error message indicating repository mismatch
+24. THE comparison SHALL occur after OIDC_Token validation succeeds and before repository cloning begins
+25. THE GHA_Server SHALL support an optional Allowed_Branches configuration value containing a list of allowed branch patterns
+26. WHEN Allowed_Branches is configured, THE Request_Validator SHALL validate that the `ref` claim in the OIDC_Token matches one of the allowed branch patterns
+27. IF the `ref` claim does not match any allowed branch pattern, THEN THE Request_Validator SHALL reject the request with HTTP 403 Forbidden
+28. THE GHA_Server SHALL support an optional REQUIRE_PROTECTED_REF configuration value of type boolean
+29. WHEN REQUIRE_PROTECTED_REF is true, THE Request_Validator SHALL validate that the `ref_protected` claim in the OIDC_Token is "true"
+30. IF REQUIRE_PROTECTED_REF is true and `ref_protected` is not "true", THEN THE Request_Validator SHALL reject the request with HTTP 403 Forbidden
+31. WHEN Allowed_Branches is not configured, THE Request_Validator SHALL skip branch validation
+32. WHEN REQUIRE_PROTECTED_REF is not configured or is false, THE Request_Validator SHALL skip protected ref validation
 
 ### Requirement 3: Repository Cloning
 
@@ -147,6 +168,9 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. IF GitHub authentication fails during cloning, THEN THE Repository_Client SHALL record an authentication error
 8. THE Repository_Client SHALL support cloning private repositories using the provided token
 9. THE Repository_Client SHALL validate that the cloned repository is not empty
+10. WHEN the Repository_Client completes a successful clone, THE Repository_Client SHALL strip the GitHub token from the cloned repository's .git/config by running `git remote set-url origin https://github.com/{owner}/{repo}.git` (without the token)
+11. THE Repository_Client SHALL perform the token stripping before the cloned repository is mounted into the Execution_Container
+12. AFTER token stripping, THE Repository_Client SHALL remove the .git directory entirely from the cloned repository before the repository is mounted into the Execution_Container
 
 ### Requirement 4: Attestation Document Generation and Execution Initiation
 
@@ -182,6 +206,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE Output_Collector SHALL store Script_Output associated with the Execution_ID
 13. THE Script_Executor SHALL assign a unique container name derived from the Execution_ID to each Execution_Container
 14. THE Script_Executor SHALL stream output from the Execution_Container incrementally during execution rather than capturing output only after the container exits, so that clients polling the output endpoint can observe partial output while the script is still running
+15. THE Output_Collector SHALL enforce a maximum output buffer size configurable via MAX_OUTPUT_SIZE_BYTES
+16. WHEN the combined stdout and stderr output exceeds MAX_OUTPUT_SIZE_BYTES, THE Output_Collector SHALL truncate the output and mark the output record as truncated
 
 ### Requirement 6: Output Polling Endpoint
 
@@ -201,6 +227,9 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 10. IF the Execution_ID does not exist, THEN THE GHA_Server SHALL return HTTP 404 Not Found
 11. IF Output_Attestation_Document generation fails, THEN THE GHA_Server SHALL return the Script_Output and Attestation_Document with an error field indicating attestation failure
 12. THE GHA_Server SHALL retain execution results for at least 1 hour after completion
+13. WHEN the GHA_Server creates an execution record via /execute, THE Execution_Manager SHALL store the `repository` claim from the validated OIDC_Token in the execution record
+14. WHEN the GHA_Server receives a /execution/{id}/output request, THE GHA_Server SHALL compare the `repository` claim from the validated OIDC_Token against the repository stored in the execution record
+15. IF the `repository` claim does not match the execution record's repository, THEN THE GHA_Server SHALL reject the request with HTTP 403 Forbidden
 
 ### Requirement 7: Error Handling and Logging
 
@@ -216,6 +245,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. WHEN an error occurs, THE GHA_Server SHALL include error details in the polling response
 7. THE GHA_Server SHALL log all state transitions for each Execution_ID
 8. THE GHA_Server SHALL write logs to a persistent storage location
+9. THE GHA_Server SHALL use a contextvars.ContextVar-based approach for storing per-request log context instead of a process-global mutable dictionary
+10. THE log context for one request or task SHALL NOT be visible to or modifiable by any other concurrent request or task
 
 ### Requirement 8: Security and Resource Management
 
@@ -233,6 +264,14 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 8. THE GHA_Server SHALL reject new requests when at maximum capacity with HTTP 503 Service Unavailable
 9. WHEN an Execution_Container is removed, THE Script_Executor SHALL verify the container no longer exists on the Docker host
 10. THE Script_Executor SHALL remove any dangling Execution_Containers on startup that match the container naming convention
+11. BEFORE creating a new execution record, THE GHA_Server SHALL check the count of active executions (queued and running) against MAX_CONCURRENT_EXECUTIONS
+12. THE concurrency check SHALL be performed atomically to prevent race conditions
+13. WHEN the Repository_Client retrieves a script file, THE GHA_Server SHALL check the file size against MAX_SCRIPT_SIZE_BYTES before execution
+14. IF the script file size exceeds MAX_SCRIPT_SIZE_BYTES, THEN THE GHA_Server SHALL reject the request with HTTP 413 Payload Too Large
+15. THE GHA_Server SHALL schedule periodic invocation of cleanup_expired on the Execution_Manager
+16. WHEN cleanup_expired executes, THE Execution_Manager SHALL call remove_output on the Output_Collector and remove_encryption_context on the Encryption_Manager for each expired execution record
+17. THE Script_Executor SHALL create each Execution_Container with cap_drop set to ALL to remove all Linux capabilities
+18. THE Script_Executor SHALL NOT add back any capabilities unless documented as required with justification
 
 ### Requirement 9: Configuration Management
 
@@ -255,18 +294,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 ### Requirement 10: Health and Monitoring
 
-**User Story:** As a DevOps engineer, I want health check endpoints and metrics, so that I can monitor the Remote Executor's status
+**User Story:** As a DevOps engineer, I want a health check endpoint, so that I can monitor the Remote Executor's status
 
 #### Acceptance Criteria
 
 1. THE GHA_Server SHALL provide an HTTP GET endpoint for health checks
 2. THE health check endpoint SHALL return HTTP 200 OK when the service is healthy
 3. THE health check endpoint SHALL return HTTP 503 Service Unavailable when the service is unhealthy
-4. THE GHA_Server SHALL expose metrics for total requests received
-5. THE GHA_Server SHALL expose metrics for successful executions
-6. THE GHA_Server SHALL expose metrics for failed executions
-7. THE GHA_Server SHALL expose metrics for current concurrent executions
-8. THE GHA_Server SHALL expose metrics for average execution duration
+4. THE GHA_Server SHALL apply rate limiting to the /health endpoint
+5. THE /health endpoint SHALL return only a simple healthy/unhealthy status without Docker availability, disk space, or active execution count details
 
 ## Build Requirements
 
@@ -284,6 +320,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. THE Build_Workflow SHALL store build outputs in a dedicated build-output directory
 7. THE KIWI_Builder SHALL generate PCR measurements file (pcr_measurements.json) containing PCR4 and PCR7 values
 8. IF the KIWI build fails, THEN THE Build_Workflow SHALL fail with a descriptive error message
+9. THE Build_Workflow SHALL pin the GitHub Actions runner to a specific Ubuntu version (e.g., ubuntu-24.04) instead of ubuntu-latest
+10. THE Terraform data source for the Build_Instance AMI SHALL use a specific AMI ID or name filter with a specific version instead of most_recent = true
+11. THE Dockerfile for the KIWI builder SHALL include comments documenting that DNF packages are installed without explicit version pinning
+12. THE documentation SHALL suggest using --releasever lock or documenting expected package versions for audit purposes
 
 ### Requirement 12: Separate Python Dependency Configurations
 
@@ -364,6 +404,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE AMI_Converter SHALL wait for instance status checks to pass using EC2 waiter
 13. THE AMI_Converter SHALL save the SSH private key to a temporary file with 600 permissions
 14. IF instance provisioning fails, THEN THE AMI_Converter SHALL fail with a descriptive error
+15. THE AMI_Converter SHALL validate the artifact_ref argument against a strict allowlist pattern matching `^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`
+16. IF artifact_ref contains characters outside the allowlist, THEN reject and terminate before executing any remote commands
 
 ### Requirement 16: SSH Connectivity Verification
 
@@ -397,6 +439,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 10. THE AMI_Converter SHALL verify coldsnap installation by executing coldsnap --help command
 11. THE AMI_Converter SHALL stream installation output to logs during each installation step
 12. IF any tool installation fails, THEN THE AMI_Converter SHALL fail with installation error
+13. THE AMI_Converter SHALL verify the downloaded ORAS archive against a known SHA-256 checksum before installation
+14. IF the ORAS checksum does not match, THEN fail with an integrity verification error
+15. THE AMI_Converter SHALL clone coldsnap at a specific pinned git tag or commit hash rather than HEAD
+16. THE AMI_Converter SHALL document trust assumptions for rustup and GitHub CLI in code comments
 
 ### Requirement 18: Artifact Signature Verification
 
@@ -480,6 +526,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE AMI_Converter SHALL perform cleanup in a finally block to ensure execution even if AMI creation fails
 13. IF cleanup fails, THEN THE AMI_Converter SHALL log cleanup errors but not fail the overall process
 14. THE AMI_Converter SHALL log all cleanup operations including infrastructure destruction and key deletion
+15. THE AMI_Converter SHALL overwrite the temporary SSH key file with random bytes before unlinking
+16. THE AMI_Converter SHALL document that Terraform state contains sensitive SSH key material
 
 ### Requirement 33: Docker Daemon Provisioning in KIWI Image
 
@@ -504,6 +552,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 4. IF the Container_Image pull fails, THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating the image name and failure reason
 5. IF the Container_Image is already present in the local Docker image store, THE GHA_Server SHALL skip pulling and use the existing image
 6. THE GHA_Server SHALL log the Container_Image pull operation including image name, pull duration, and image size
+7. THE GHA_Server SHALL support an optional CONTAINER_IMAGE_DIGEST configuration value containing a SHA-256 digest
+8. WHEN CONTAINER_IMAGE_DIGEST is configured, THE GHA_Server SHALL verify the pulled image matches the expected digest
+9. IF the digest does not match, THEN fail to start with a descriptive error
+10. THE GHA_Server SHALL support digest-pinned container image references (e.g., python:3.11-slim@sha256:...)
 
 ### Requirement 35: Git Package Provisioning in KIWI Image
 
@@ -563,6 +615,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 9. THE /attest endpoint SHALL be the only endpoint whose Attestation_Document includes the Server_Public_Key fingerprint in the public_key field
 10. THE Attestation_Document returned by /attest SHALL NOT include user_data; only the public_key field (containing the SHA-256 fingerprint) and optionally the nonce SHALL be present
 11. THE client SHALL verify the Server_Public_Key by computing the SHA-256 fingerprint of the received composite key and comparing it against the fingerprint in the Attestation_Document public_key field
+12. THE GHA_Server SHALL apply per-IP rate limiting to the /attest endpoint
+13. IF a client exceeds the rate limit on /attest, THEN return HTTP 429 Too Many Requests
 
 ### Requirement 38: Nonce Support in Attestation Responses
 
@@ -643,8 +697,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 1. THE /attest endpoint response SHALL NOT be encrypted
 2. THE /health endpoint response SHALL NOT be encrypted
-3. THE /metrics endpoint response SHALL NOT be encrypted
-4. THE GHA_Server SHALL apply encryption only to endpoints that operate within an Encryption_Context (/execute and /execution/{execution_id}/output)
+3. THE GHA_Server SHALL apply encryption only to endpoints that operate within an Encryption_Context (/execute and /execution/{execution_id}/output)
 
 ## Deployment Requirements
 
@@ -849,3 +902,87 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 27. WHEN --enable-ssh is provided, THE Deploy_Script SHALL detect the user's public IP address by querying https://checkip.amazonaws.com with a 5 second timeout and pass allowed_ssh_cidr as {detected_ip}/32 via -var flag
 28. WHEN --enable-ssh is provided, THE Deploy_Script SHALL log a warning that SSH debug access is enabled and the instance is accessible on port 22
 29. THE Deploy_Script SHALL include the ssh_enabled status in the Infrastructure_State JSON output
+
+## Security Hardening Requirements
+
+### Requirement 45: Encrypted Request Anti-Replay Protection
+
+**User Story:** As a security engineer, I want encrypted requests protected against replay attacks, so that captured valid requests cannot be replayed to cause duplicate executions
+
+**Security Finding:** #9 (High)
+
+#### Acceptance Criteria
+
+1. THE GHA_Server SHALL maintain a nonce cache that tracks recently seen nonces from encrypted requests
+2. WHEN the GHA_Server receives an encrypted /execute request, THE GHA_Server SHALL extract the nonce from the decrypted payload and check it against the nonce cache
+3. IF the nonce has been previously seen in the cache, THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request and an error message indicating a duplicate nonce
+4. THE nonce cache entries SHALL expire after a configurable TTL that matches the OIDC_Token lifetime
+5. THE GHA_Server SHALL apply the same nonce validation to /execution/{execution_id}/output requests
+
+### Requirement 46: Debug Image Annotation and Production Gate
+
+**User Story:** As a security engineer, I want SSH-enabled debug images annotated with a machine-readable marker and production AMI builds gated against debug artifacts, so that debug images cannot be accidentally deployed to production
+
+**Security Finding:** #14 (Medium)
+
+#### Acceptance Criteria
+
+1. WHEN the Build_Workflow builds with --enable-ssh, THE Artifact_Publisher SHALL add a machine-readable annotation `debug=true` to the ORAS artifact push
+2. WHEN the Build_Workflow builds without --enable-ssh, THE Artifact_Publisher SHALL add a machine-readable annotation `debug=false` to the ORAS artifact push
+3. WHEN the AMI_Converter downloads an artifact, THE AMI_Converter SHALL check for the `debug` annotation on the artifact
+4. IF the artifact has `debug=true` annotation, THEN THE AMI_Converter SHALL refuse to build the AMI and terminate with an error unless an explicit `--allow-debug` CLI flag is provided
+5. IF --allow-debug is provided and the artifact has `debug=true`, THEN THE AMI_Converter SHALL log a prominent warning that a debug image is being converted to an AMI
+
+### Requirement 47: Artifact Provenance Workflow Verification
+
+**User Story:** As a security engineer, I want the AMI converter to optionally verify the producing workflow identity in the attestation, so that only artifacts from a specific trusted workflow are accepted
+
+**Security Finding:** #17 (Medium)
+
+#### Acceptance Criteria
+
+1. THE AMI_Converter SHALL accept an optional --expected-workflow CLI argument specifying the expected workflow file path
+2. WHEN --expected-workflow is provided, THE Signature_Verifier SHALL verify that the attestation's workflow identity matches the expected workflow path
+3. IF the attestation's workflow identity does not match the expected workflow, THEN THE AMI_Converter SHALL terminate with an error indicating workflow mismatch
+4. WHEN --expected-workflow is not provided, THE Signature_Verifier SHALL skip workflow identity verification
+
+### Requirement 48: Docker Daemon Security Configuration
+
+**User Story:** As a security engineer, I want the Docker daemon configured with explicit security hardening in the KIWI image, so that container isolation does not rely on ambient defaults
+
+**Security Finding:** #19 (High)
+
+#### Acceptance Criteria
+
+1. THE KIWI image SHALL include a daemon.json configuration file for the Docker daemon at /etc/docker/daemon.json
+2. THE daemon.json SHALL enable user-namespace remapping to isolate container root from host root
+3. THE daemon.json SHALL set a restrictive default seccomp profile
+4. THE KIWI image build SHALL document the expected Docker daemon security configuration in code comments
+
+### Requirement 49: Systemd Service Hardening
+
+**User Story:** As a security engineer, I want the host executor systemd service hardened with security directives, so that a container breakout has reduced impact on the host
+
+**Security Finding:** #22 (Medium)
+
+#### Acceptance Criteria
+
+1. THE systemd service unit for the github-actions-remote-executor SHALL set NoNewPrivileges to true
+2. THE systemd service unit SHALL set PrivateTmp to true
+3. THE systemd service unit SHALL set ProtectSystem to strict
+4. THE systemd service unit SHALL set ProtectHome to true
+5. THE systemd service unit SHALL set RestrictAddressFamilies to AF_INET AF_INET6 AF_UNIX AF_NETLINK
+6. THE systemd service unit SHALL set ReadWritePaths to include only the directories required for operation (temporary storage path and Docker socket path)
+
+### Requirement 50: AMI Build IAM Permission Scoping
+
+**User Story:** As a security engineer, I want the AMI build instance IAM permissions scoped to the specific region and account, so that compromise of the build instance does not grant account-wide image manipulation capability
+
+**Security Finding:** #24 (High)
+
+#### Acceptance Criteria
+
+1. THE Terraform IAM policy for the Build_Instance SHALL scope EC2 and EBS permissions to the specific AWS region and account using resource ARN patterns or condition keys
+2. THE IAM policy SHALL use aws:RequestedRegion or resource ARN region scoping to restrict operations to the build region
+3. THE IAM policy SHALL use aws:ResourceAccount condition to restrict operations to the current account
+4. THE IAM policy SHALL NOT use Resource = "*" for EC2 snapshot and image operations

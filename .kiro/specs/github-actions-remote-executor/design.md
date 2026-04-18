@@ -121,7 +121,7 @@ The system consists of the following major components:
 - Decrypts incoming /execution/{id}/output request payloads using the Shared_Key from the Encryption_Context for that execution_id
 - Encrypts /execution/{id}/output response payloads using the Shared_Key from the Encryption_Context
 - Removes the Encryption_Context when the execution record is cleaned up
-- Does NOT encrypt responses for /attest, /health, or /metrics endpoints
+- Does NOT encrypt responses for /attest or /health endpoints
 - Logs Server_Keypair generation at startup at INFO level without logging private key material or decapsulation key material
 
 **Attest Handler**
@@ -139,9 +139,11 @@ The system consists of the following major components:
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
 - Extracts the optional `nonce` from the decrypted request body for inclusion in the attestation document
 - Validates the decrypted request using the Request Validator
+- After OIDC validation, verifies the `repository` claim matches the `repository_url` in the request; rejects with HTTP 403 if mismatch
+- Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
 - Coordinates repository file retrieval
 - Generates attestation documents (without Server_Public_Key; nonce included if provided)
-- Creates execution records
+- Creates execution records (stores `repository` claim in the record)
 - Stores the Shared_Key in the Encryption_Context for the new Execution_ID
 - Initiates asynchronous script execution
 - Encrypts the response payload using the Shared_Key before returning
@@ -152,6 +154,8 @@ The system consists of the following major components:
 - Decrypts the request payload using the Shared_Key from the Encryption_Context
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field for authentication
 - Extracts the optional `nonce` from the decrypted request body
+- Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
+- Compares the `repository` claim from the validated OIDC_Token against the repository stored in the execution record; rejects with HTTP 403 if mismatch
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
 - Returns completion status and exit codes
@@ -165,7 +169,11 @@ The system consists of the following major components:
 - Fetches and caches GitHub's OIDC provider JWKS from `https://token.actions.githubusercontent.com/.well-known/jwks`
 - Verifies JWT signature against JWKS; refreshes cache on unknown key ID
 - Validates JWT claims: `iss` matches `https://token.actions.githubusercontent.com`, `aud` matches configured Expected_Audience, `repository` matches an entry in configured Allowed_Repositories, `exp` is not past current time
-- Returns 401 for missing/invalid/expired tokens and signature failures; returns 403 for valid tokens from unauthorized repositories
+- After OIDC validation succeeds on /execute, verifies that the `repository` claim matches the `repository_url` field in the Execution_Request; rejects with HTTP 403 if mismatch (before repository cloning begins)
+- When Allowed_Branches is configured, validates the `ref` claim against allowed branch patterns; rejects with HTTP 403 if no match
+- When REQUIRE_PROTECTED_REF is true, validates the `ref_protected` claim is "true"; rejects with HTTP 403 if not
+- Skips branch validation when Allowed_Branches is not configured; skips protected ref validation when REQUIRE_PROTECTED_REF is not configured or false
+- Returns 401 for missing/invalid/expired tokens and signature failures; returns 403 for valid tokens from unauthorized repositories or repository/branch/ref mismatches
 - Does NOT require authentication for /health or /attest endpoints
 - Validates request structure and required fields
 - Validates repository URL format
@@ -177,6 +185,8 @@ The system consists of the following major components:
 - Clones the entire repository at the specified commit into a temporary directory under `temp_storage_path` using `git clone --depth 1`
 - Authenticates using the GitHub token embedded in the clone URL (`https://{token}@github.com/owner/repo.git`)
 - Checks out the exact commit after cloning
+- After successful clone, strips the GitHub token from `.git/config` by running `git remote set-url origin https://github.com/{owner}/{repo}.git` (without the token)
+- After token stripping, removes the `.git` directory entirely from the cloned repository before mounting into the Execution_Container
 - Validates the script file exists within the cloned repository
 - Returns the path to the cloned repository directory and the relative script path
 - Handles clone failures (authentication errors, repository not found, network errors)
@@ -206,12 +216,16 @@ The system consists of the following major components:
 - Maintains execution state (queued, running, completed, failed, timed_out)
 - Manages execution lifecycle
 - Implements execution timeout handling
+- Before creating a new execution record, checks the count of active executions (queued and running) against MAX_CONCURRENT_EXECUTIONS atomically to prevent race conditions
+- Stores the `repository` claim from the validated OIDC_Token in the execution record at creation time
 - Cleans up completed executions after retention period
+- Periodic cleanup_expired invocation is scheduled by the server; cleanup calls remove_output on the Output_Collector and remove_encryption_context on the Encryption_Manager for each expired execution record
 
 **Script Executor**
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
 - Assigns a unique container name derived from the Execution_ID to each container
 - Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), network disabled, no privilege escalation, non-root user
+- Creates each container with cap_drop=ALL to remove all Linux capabilities; no capabilities added back unless documented as required with justification
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
 - Ensures the cloned repository directory is world-readable (`chmod -R a+rX`) before mounting, so the container's non-root user can access files regardless of the server process umask
@@ -229,6 +243,7 @@ The system consists of the following major components:
 - Stores output incrementally in thread-safe buffers, enabling polling clients to observe partial output while the container is still running
 - Supports offset-based retrieval
 - Manages output retention
+- Enforces MAX_OUTPUT_SIZE_BYTES limit on combined stdout and stderr buffers; truncates and marks output as truncated when exceeded
 
 **Execution Store**
 - Persists execution metadata and state
@@ -257,16 +272,22 @@ The system consists of the following major components:
 3. Encryption Manager decrypts the request payload using the derived Shared_Key
 4. Request Handler extracts OIDC_Token from decrypted body `oidc_token` field
 5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
-6. Request Handler validates request structure from decrypted body
-7. Request Validator validates all request body fields (repository_url, commit_hash, script_path, github_token)
-8. Repository Client authenticates and clones the repository at the specified commit into a temporary directory
-9. Attestation Generator creates attestation document with execution metadata and optional nonce (no Server_Public_Key)
-10. Execution Manager creates execution record with unique ID
-11. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
-12. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
-13. Script Executor creates a new Docker container from the configured Container_Image and begins asynchronous execution inside it
-14. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution
-15. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
+6. Request Validator verifies `repository` claim matches `repository_url` in the request; rejects with HTTP 403 if mismatch
+7. Request Validator validates optional branch/ref restrictions (Allowed_Branches, REQUIRE_PROTECTED_REF)
+8. Request Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
+9. Request Handler validates request structure from decrypted body
+10. Request Validator validates all request body fields (repository_url, commit_hash, script_path, github_token)
+11. Request Validator checks script file size against MAX_SCRIPT_SIZE_BYTES; rejects with HTTP 413 if exceeded
+12. Execution Manager checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically; rejects with HTTP 503 if at capacity
+13. Repository Client authenticates and clones the repository at the specified commit into a temporary directory
+14. Repository Client strips token from .git/config and removes .git directory
+15. Attestation Generator creates attestation document with execution metadata and optional nonce (no Server_Public_Key)
+16. Execution Manager creates execution record with unique ID (stores `repository` claim)
+17. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
+18. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
+19. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL) and begins asynchronous execution inside it
+20. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
+21. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
 
 **Output Polling Flow:**
 
@@ -275,7 +296,9 @@ The system consists of the following major components:
 3. Encryption Manager decrypts the request payload using the Shared_Key from the Encryption_Context
 4. Output Handler extracts OIDC_Token from decrypted body `oidc_token` field
 5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
-6. Output Handler retrieves execution record by ID
+6. Output Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
+7. Output Handler compares `repository` claim from OIDC_Token against repository stored in execution record; rejects with HTTP 403 if mismatch
+8. Output Handler retrieves execution record by ID
 7. Output Collector returns current status, output from offset, and completion flag
 8. Output Handler computes SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) and generates an Output_Attestation_Document with the digest in user_data and optional nonce (no Server_Public_Key)
 9. Response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code (if available) on every poll response regardless of execution status
@@ -293,7 +316,7 @@ The system consists of the following major components:
 - Execution state stored in thread-safe in-memory data structure
 - Encryption_Contexts (Shared_Keys keyed by Execution_ID) stored in thread-safe in-memory data structure alongside execution state
 - Output collection uses buffered writes to avoid blocking; each execution has a dedicated Log_Streaming_Thread (daemon thread) that reads from the Docker log stream and writes to the Output_Collector concurrently with `container.wait()`
-- Maximum concurrent Execution_Containers configurable to prevent resource exhaustion
+- Maximum concurrent Execution_Containers configurable to prevent resource exhaustion; enforced atomically before creating execution records
 - Docker daemon manages container lifecycle and resource isolation
 - Server_Keypair (composite X25519 + ML-KEM-768) generated once at startup and shared across all concurrent requests (read-only after initialization)
 
@@ -358,9 +381,9 @@ The response body is an encrypted payload. After decryption by the client:
 The attestation document in the /execute response does NOT include the Server_Public_Key in the `public_key` field.
 
 **Error Responses:**
-- 400 Bad Request: Decryption failure, malformed request, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), or validation failure
+- 400 Bad Request: Decryption failure, malformed request, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), validation failure, or duplicate nonce
 - 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
-- 403 Forbidden: Valid OIDC token from an unauthorized repository
+- 403 Forbidden: Valid OIDC token from an unauthorized repository, repository claim does not match repository_url, branch/ref restriction violation
 - 404 Not Found: Repository, commit, or file not found
 - 413 Payload Too Large: Script file exceeds size limit
 - 429 Too Many Requests: Rate limit exceeded
@@ -430,38 +453,26 @@ When Output_Attestation_Document generation fails (after decryption, any status)
 ```
 
 **Error Responses:**
-- 400 Bad Request: No Encryption_Context for execution_id, decryption failure
+- 400 Bad Request: No Encryption_Context for execution_id, decryption failure, duplicate nonce
 - 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
-- 403 Forbidden: Valid OIDC token from an unauthorized repository
+- 403 Forbidden: Valid OIDC token from an unauthorized repository, or repository claim does not match execution record's repository
 - 404 Not Found: Execution ID does not exist
 
 #### GET /health
 
-Health check endpoint for monitoring.
+Health check endpoint for monitoring. Rate-limited per IP. Returns only simple healthy/unhealthy status without Docker availability, disk space, or active execution count details.
 
 **Response (200 OK):**
 ```json
 {
-  "status": "healthy",
-  "attestation_available": true,
-  "docker_available": true,
-  "disk_space_mb": 10240,
-  "active_executions": 3
+  "status": "healthy"
 }
 ```
 
-#### GET /metrics
-
-Metrics endpoint for monitoring.
-
-**Response (200 OK):**
+**Response (503 Service Unavailable):**
 ```json
 {
-  "total_executions": 1523,
-  "successful_executions": 1450,
-  "failed_executions": 73,
-  "average_duration_ms": 3421,
-  "active_executions": 3
+  "status": "unhealthy"
 }
 ```
 
@@ -532,8 +543,9 @@ class EncryptionManager:
 
 ```python
 class RequestValidator:
-    def __init__(self, allowed_repositories: list[str], expected_audience: str):
-        """Initialize with OIDC configuration"""
+    def __init__(self, allowed_repositories: list[str], expected_audience: str,
+                 allowed_branches: list[str] | None = None, require_protected_ref: bool = False):
+        """Initialize with OIDC configuration and optional branch/ref restrictions"""
         pass
 
     def validate_oidc_token(self, oidc_token: str | None) -> OIDCValidationResult:
@@ -541,7 +553,16 @@ class RequestValidator:
         Validates the OIDC token extracted from the decrypted request body.
         Fetches JWKS from GitHub's OIDC provider, verifies JWT signature,
         and validates iss, aud, repository, and exp claims.
-        Returns 401 for missing/invalid/expired tokens, 403 for unauthorized repos.
+        When Allowed_Branches is configured, validates ref claim against allowed patterns.
+        When REQUIRE_PROTECTED_REF is true, validates ref_protected claim is "true".
+        Returns 401 for missing/invalid/expired tokens, 403 for unauthorized repos or branch/ref violations.
+        """
+        pass
+
+    def validate_repository_binding(self, oidc_claims: dict, repository_url: str) -> bool:
+        """
+        Validates that the repository claim from the OIDC token matches the
+        repository_url in the execution request. Returns False on mismatch.
         """
         pass
 
@@ -578,7 +599,8 @@ class RepositoryClient:
         pass
     
     def clone_repo(self, repo_url: str, commit: str, token: str) -> CloneResult:
-        """Clones repository at specific commit into temp directory"""
+        """Clones repository at specific commit into temp directory.
+        After cloning, strips token from .git/config and removes .git directory."""
         pass
     
     def validate_script_exists(self, clone_path: str, script_path: str) -> bool:
@@ -623,8 +645,9 @@ class AttestationGenerator:
 
 ```python
 class ExecutionManager:
-    def create_execution(self, request: ExecutionRequest) -> ExecutionID:
-        """Creates new execution record"""
+    def create_execution(self, request: ExecutionRequest, repository_claim: str) -> ExecutionID:
+        """Creates new execution record, storing the repository claim from the OIDC token.
+        Checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically before creating."""
         pass
     
     def get_execution(self, execution_id: str) -> ExecutionRecord:
@@ -636,7 +659,8 @@ class ExecutionManager:
         pass
     
     def cleanup_expired(self) -> None:
-        """Removes executions past retention period"""
+        """Removes executions past retention period. Calls remove_output on OutputCollector
+        and remove_encryption_context on EncryptionManager for each expired record."""
         pass
 ```
 
@@ -702,11 +726,16 @@ class ScriptExecutor:
 ```python
 class OutputCollector:
     def capture_output(self, execution_id: str, stream: str, data: bytes) -> None:
-        """Captures output data from execution"""
+        """Captures output data from execution. Enforces MAX_OUTPUT_SIZE_BYTES limit;
+        truncates and marks as truncated when exceeded."""
         pass
     
     def get_output(self, execution_id: str, offset: int = 0) -> OutputData:
         """Retrieves output from specified offset"""
+        pass
+
+    def remove_output(self, execution_id: str) -> None:
+        """Removes stored output for an execution"""
         pass
 ```
 
@@ -738,6 +767,7 @@ class ExecutionRecord:
     completed_at: Optional[datetime]
     exit_code: Optional[int]
     timeout_seconds: int
+    repository_claim: str  # OIDC repository claim stored at creation for output binding
 ```
 
 ### ExecutionStatus
@@ -774,6 +804,7 @@ class OutputData:
     stderr_offset: int
     complete: bool
     exit_code: Optional[int]
+    truncated: bool  # True when output exceeded MAX_OUTPUT_SIZE_BYTES
 ```
 
 ### Configuration
@@ -785,6 +816,7 @@ class ServerConfig:
     max_concurrent_executions: int
     execution_timeout_seconds: int
     max_script_size_bytes: int
+    max_output_size_bytes: int  # Maximum combined stdout/stderr buffer size
     rate_limit_per_ip: int
     rate_limit_window_seconds: int
     temp_storage_path: str
@@ -793,8 +825,12 @@ class ServerConfig:
     allowed_repositories: list[str]
     expected_audience: str
     container_image: str  # Docker image name for Execution_Containers
+    container_image_digest: str | None  # Optional SHA-256 digest for image verification
     container_memory_limit: str  # Docker memory constraint (e.g., '512m')
     container_cpu_limit: float  # Docker CPU constraint (e.g., 1.0)
+    nonce_cache_ttl_seconds: int  # TTL for nonce cache entries, matching OIDC token lifetime
+    allowed_branches: list[str] | None  # Optional branch patterns for OIDC ref claim validation
+    require_protected_ref: bool  # When true, require ref_protected claim to be "true"
 ```
 
 ### OIDCValidationResult
@@ -818,6 +854,8 @@ class OIDCTokenClaims:
     repository: str  # Must match an entry in Allowed_Repositories
     exp: int       # Unix timestamp, must not be expired
     sub: str       # Subject (e.g., repo:owner/repo:ref:refs/heads/main)
+    ref: str       # Git ref (e.g., refs/heads/main); validated against Allowed_Branches when configured
+    ref_protected: str  # "true" or "false"; validated when REQUIRE_PROTECTED_REF is true
 ```
 
 ### CloneResult
@@ -1200,23 +1238,11 @@ class EncryptionContext:
 
 **Validates: Requirements 9.8**
 
-### Property 58: Health Check Attestation Status
+### Property 58: Health Check Simple Status
 
-*For any* health check request, the response should include the attestation capability status.
+*For any* health check request, the response should include only a simple healthy/unhealthy status without Docker availability, disk space, or active execution count details.
 
-**Validates: Requirements 10.3**
-
-### Property 59: Health Check Disk Space
-
-*For any* health check request, the response should include disk space availability information.
-
-**Validates: Requirements 10.4**
-
-### Property 60: Execution Metrics Tracking
-
-*For any* set of script executions, the metrics endpoint should accurately track the count of successful and failed executions.
-
-**Validates: Requirements 10.6**
+**Validates: Requirements 10.4, 10.5**
 
 ### Property 44: Output Attestation Digest Integrity
 
@@ -1280,9 +1306,9 @@ class EncryptionContext:
 
 ### Property 111: Docker Container Security Constraints
 
-*For any* Execution_Container created by the Script_Executor, the container should be configured with: a non-root user, network access disabled, a read-only root filesystem (except for a designated execution directory), privilege escalation disabled, memory limits enforced, and CPU limits enforced.
+*For any* Execution_Container created by the Script_Executor, the container should be configured with: a non-root user, network access disabled, a read-only root filesystem (except for a designated execution directory), privilege escalation disabled, memory limits enforced, CPU limits enforced, and cap_drop=ALL (no capabilities added back unless documented as required).
 
-**Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
+**Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18**
 
 ### Property 112: Container Removal Verification
 
@@ -1388,9 +1414,9 @@ class EncryptionContext:
 
 ### Property 135: Encryption Exemption for Non-Context Endpoints
 
-*For any* request to /attest, /health, or /metrics, the response should be plain unencrypted JSON. Encryption is applied only to /execute and /execution/{id}/output endpoints.
+*For any* request to /attest or /health, the response should be plain unencrypted JSON. Encryption is applied only to /execute and /execution/{id}/output endpoints.
 
-**Validates: Requirements 43.1, 43.2, 43.3, 43.4**
+**Validates: Requirements 43.1, 43.2, 43.4**
 
 ### Property 136: Attest Attestation Excludes User Data
 
@@ -1428,17 +1454,174 @@ class EncryptionContext:
 
 **Validates: Requirements 44.11**
 
+### Property 142: OIDC Repository Claim Binding
+
+*For any* /execute request where the `repository` claim from the validated OIDC_Token does not match the `repository_url` field in the Execution_Request, the server should reject the request with HTTP 403 Forbidden.
+
+**Validates: Requirements 2.22, 2.23, 2.24**
+
+### Property 143: Branch Restriction Enforcement
+
+*For any* /execute request where Allowed_Branches is configured and the `ref` claim in the OIDC_Token does not match any allowed branch pattern, the server should reject the request with HTTP 403 Forbidden. When Allowed_Branches is not configured, the request should not be rejected on branch grounds.
+
+**Validates: Requirements 2.25, 2.26, 2.27, 2.31**
+
+### Property 144: Protected Ref Enforcement
+
+*For any* /execute request where REQUIRE_PROTECTED_REF is true and the `ref_protected` claim in the OIDC_Token is not "true", the server should reject the request with HTTP 403 Forbidden. When REQUIRE_PROTECTED_REF is not configured or false, the request should not be rejected on ref protection grounds.
+
+**Validates: Requirements 2.28, 2.29, 2.30, 2.32**
+
+### Property 145: Token Stripping and .git Removal
+
+*For any* successfully cloned repository, the Repository_Client should strip the GitHub token from .git/config and then remove the .git directory entirely before the repository is mounted into the Execution_Container.
+
+**Validates: Requirements 3.10, 3.11, 3.12**
+
+### Property 146: Output Buffer Size Enforcement
+
+*For any* script execution whose combined stdout and stderr output exceeds MAX_OUTPUT_SIZE_BYTES, the Output_Collector should truncate the output and mark the output record as truncated.
+
+**Validates: Requirements 5.15, 5.16**
+
+### Property 147: Execution Output Repository Binding
+
+*For any* /execution/{id}/output request where the `repository` claim from the validated OIDC_Token does not match the repository stored in the execution record, the server should reject the request with HTTP 403 Forbidden.
+
+**Validates: Requirements 6.13, 6.14, 6.15**
+
+### Property 148: Contextvars Log Isolation
+
+*For any* two concurrent requests or tasks, the log context for one should not be visible to or modifiable by the other, ensuring per-request isolation via contextvars.ContextVar.
+
+**Validates: Requirements 7.9, 7.10**
+
+### Property 149: Concurrency Enforcement
+
+*For any* /execute request received when the count of active executions (queued and running) equals MAX_CONCURRENT_EXECUTIONS, the server should reject the request with HTTP 503 Service Unavailable. The concurrency check should be atomic.
+
+**Validates: Requirements 8.11, 8.12**
+
+### Property 150: Script Size Enforcement
+
+*For any* script file whose size exceeds MAX_SCRIPT_SIZE_BYTES, the server should reject the request with HTTP 413 Payload Too Large.
+
+**Validates: Requirements 8.13, 8.14**
+
+### Property 151: Periodic Cleanup Scheduling
+
+*For any* running server, cleanup_expired should be invoked periodically, and each invocation should call remove_output and remove_encryption_context for expired execution records.
+
+**Validates: Requirements 8.15, 8.16**
+
+### Property 152: Capability Dropping
+
+*For any* Execution_Container created by the Script_Executor, the container should have cap_drop set to ALL with no capabilities added back unless documented as required.
+
+**Validates: Requirements 8.17, 8.18**
+
+### Property 153: Health Endpoint Rate Limiting
+
+*For any* source IP address that exceeds the configured rate limit on the /health endpoint, subsequent requests should be rejected with HTTP 429.
+
+**Validates: Requirements 10.4**
+
+### Property 154: Anti-Replay Nonce Validation
+
+*For any* encrypted /execute or /execution/{id}/output request whose nonce has been previously seen in the Nonce_Cache, the server should reject the request with HTTP 400 Bad Request. Nonce cache entries should expire after a configurable TTL matching the OIDC_Token lifetime.
+
+**Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5**
+
+### Property 155: Attest Endpoint Rate Limiting
+
+*For any* source IP address that exceeds the configured rate limit on the /attest endpoint, subsequent requests should be rejected with HTTP 429 Too Many Requests.
+
+**Validates: Requirements 37.12, 37.13**
+
+### Property 156: Container Image Digest Verification
+
+*For any* configured CONTAINER_IMAGE_DIGEST, the GHA_Server should verify the pulled image digest matches the expected digest at startup. If the digest does not match, the server should fail to start.
+
+**Validates: Requirements 34.7, 34.8, 34.9, 34.10**
+
+### Property 157: Artifact Ref Validation
+
+*For any* artifact_ref argument, the AMI_Converter should validate it against a strict regex allowlist before any shell interpolation. If the artifact_ref contains characters outside the allowlist, the converter should reject and terminate.
+
+**Validates: Requirements 15.15, 15.16**
+
+### Property 158: ORAS Checksum Verification
+
+*For any* ORAS CLI download, the AMI_Converter should verify the downloaded archive against a known SHA-256 checksum before installation. If the checksum does not match, the converter should fail with an integrity verification error.
+
+**Validates: Requirements 17.13, 17.14**
+
+### Property 159: Coldsnap Pinned Version
+
+*For any* coldsnap installation, the AMI_Converter should clone coldsnap at a specific pinned git tag or commit hash rather than HEAD.
+
+**Validates: Requirements 17.15**
+
+### Property 160: Secure SSH Key Deletion
+
+*For any* AMI build cleanup, the AMI_Converter should overwrite the temporary SSH key file with random bytes before unlinking.
+
+**Validates: Requirements 21.15**
+
+### Property 161: Debug Image Annotation
+
+*For any* KIWI image build, the Artifact_Publisher should add a `debug=true` annotation when built with --enable-ssh and `debug=false` when built without --enable-ssh.
+
+**Validates: Requirements 46.1, 46.2**
+
+### Property 162: Debug Image Production Gate
+
+*For any* artifact with `debug=true` annotation, the AMI_Converter should refuse to build the AMI unless an explicit `--allow-debug` CLI flag is provided.
+
+**Validates: Requirements 46.3, 46.4, 46.5**
+
+### Property 163: Artifact Provenance Workflow Verification
+
+*For any* AMI conversion where --expected-workflow is provided, the Signature_Verifier should verify the attestation's workflow identity matches the expected workflow path. If it does not match, the converter should terminate with an error.
+
+**Validates: Requirements 47.1, 47.2, 47.3, 47.4**
+
+### Property 164: Docker Daemon Security Configuration
+
+*For any* KIWI image build, the image should include a daemon.json at /etc/docker/daemon.json with user-namespace remapping and a restrictive seccomp profile.
+
+**Validates: Requirements 48.1, 48.2, 48.3**
+
+### Property 165: Systemd Service Hardening
+
+*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set NoNewPrivileges=true, PrivateTmp=true, ProtectSystem=strict, ProtectHome=true, RestrictAddressFamilies, and ReadWritePaths.
+
+**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6**
+
+### Property 166: AMI Build IAM Permission Scoping
+
+*For any* Terraform IAM policy for the Build_Instance, EC2 and EBS permissions should be scoped to the specific AWS region and account using resource ARN patterns or condition keys, and should NOT use Resource="*" for EC2 snapshot and image operations.
+
+**Validates: Requirements 50.1, 50.2, 50.3, 50.4**
+
+### Property 167: Build Environment Pinning
+
+*For any* GitHub Actions workflow, the runner should be pinned to a specific Ubuntu version (not ubuntu-latest). The Build_Instance AMI data source should use a specific AMI ID or name filter with a specific version instead of most_recent=true.
+
+**Validates: Requirements 11.9, 11.10**
+
 ### Error Categories
 
 The system handles errors in the following categories:
 
 1. **Client Errors (4xx)**
-   - 400 Bad Request: Malformed requests, validation failures, PQ_Hybrid_KEM decryption failures, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), missing Encryption_Context for execution_id
+   - 400 Bad Request: Malformed requests, validation failures, PQ_Hybrid_KEM decryption failures, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), missing Encryption_Context for execution_id, duplicate nonce
    - 401 Unauthorized: Missing/invalid/expired OIDC tokens (from decrypted body), JWT signature verification failures, invalid iss or aud claims
-   - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories)
+   - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories), repository claim does not match repository_url, repository claim does not match execution record, branch/ref restriction violation
    - 404 Not Found: Repository, commit, file, or execution ID not found
    - 413 Payload Too Large: Script file exceeds size limit
    - 429 Too Many Requests: Rate limit exceeded
+   - 503 Service Unavailable: Maximum concurrent executions reached
 
 2. **Server Errors (5xx)**
    - 500 Internal Server Error: Attestation failures, encryption system failures, unexpected errors
@@ -1477,8 +1660,16 @@ All error responses follow a consistent JSON structure:
 - Return 401 for invalid `aud` claim (does not match Expected_Audience)
 - Return 401 for expired tokens (`exp` claim in the past)
 - Return 403 for valid tokens from unauthorized repositories (`repository` claim not in Allowed_Repositories)
+- Return 403 for repository claim mismatch with repository_url on /execute
+- Return 403 for repository claim mismatch with execution record on /output
+- Return 403 for branch/ref restriction violations (Allowed_Branches, REQUIRE_PROTECTED_REF)
 - Cache JWKS and refresh on unknown key ID to handle key rotation
 - Log authentication failures with claim details (excluding the token itself)
+
+**Anti-Replay Errors**
+- Return 400 for duplicate nonces on /execute and /execution/{id}/output
+- Nonce cache entries expire after configurable TTL matching OIDC token lifetime
+- Log duplicate nonce rejections with request context
 
 **PQ Hybrid Encryption Errors**
 - Return 400 for /execute requests where PQ_Hybrid_KEM decryption fails (invalid Client_Public_Key with invalid X25519 or ML-KEM-768 components, corrupted ciphertext, wrong key)
@@ -1530,6 +1721,8 @@ All error responses follow a consistent JSON structure:
 - DEBUG: Detailed request/response data, GitHub API calls, attestation details
 
 **Log Context**
+- Use `contextvars.ContextVar` for per-request/per-task log context instead of a process-global mutable dictionary
+- Each request/task gets its own isolated context that is not visible to or modifiable by concurrent requests
 - Include execution ID in all execution-related logs
 - Include request ID for request tracing
 - Include timestamp in ISO 8601 format
@@ -1539,6 +1732,113 @@ All error responses follow a consistent JSON structure:
 - Rotate logs daily
 - Retain logs for configurable period (default 30 days)
 - Compress archived logs
+
+## Security Hardening Components
+
+### Anti-Replay Nonce Cache (Requirement 44)
+
+The server maintains an in-memory Nonce_Cache to prevent replay attacks on encrypted requests.
+
+**Design:**
+- The Nonce_Cache is a dictionary mapping nonce strings to their insertion timestamps
+- When an encrypted /execute or /execution/{id}/output request is received, the nonce is extracted from the decrypted payload
+- If the nonce is already in the cache, the request is rejected with HTTP 400 Bad Request
+- If the nonce is new, it is added to the cache with the current timestamp
+- Cache entries expire after a configurable TTL matching the OIDC_Token lifetime
+- A background task periodically purges expired entries
+- The cache is thread-safe for concurrent access
+
+```python
+class NonceCache:
+    def __init__(self, ttl_seconds: int):
+        """Initialize with TTL matching OIDC token lifetime."""
+        pass
+
+    def check_and_store(self, nonce: str) -> bool:
+        """Returns True if nonce is new (accepted), False if duplicate (rejected)."""
+        pass
+
+    def cleanup_expired(self) -> None:
+        """Remove expired nonce entries."""
+        pass
+```
+
+### Docker Daemon Security Configuration (Requirement 47)
+
+The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/daemon.json`.
+
+**daemon.json Configuration:**
+```json
+{
+  "userns-remap": "default",
+  "seccomp-profile": "/etc/docker/seccomp-default.json",
+  "no-new-privileges": true,
+  "live-restore": false
+}
+```
+
+**Design Rationale:**
+- User-namespace remapping isolates container root from host root, reducing the impact of container breakouts
+- A restrictive seccomp profile limits the system calls available to containers
+- The configuration is baked into the KIWI image at `/etc/docker/daemon.json` so it cannot be modified at runtime (read-only root filesystem)
+- The expected Docker daemon security configuration is documented in code comments
+
+### Systemd Service Hardening (Requirement 48)
+
+The systemd service unit for `github-actions-remote-executor` includes security hardening directives.
+
+**Service Unit Hardening:**
+```ini
+[Service]
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadWritePaths=/tmp/github-actions-remote-executor /var/run/docker.sock
+```
+
+**Design Rationale:**
+- `NoNewPrivileges=true`: Prevents the service process and its children from gaining new privileges
+- `PrivateTmp=true`: Provides a private /tmp directory isolated from other services
+- `ProtectSystem=strict`: Makes the entire filesystem read-only except for explicitly allowed paths
+- `ProtectHome=true`: Makes /home, /root, and /run/user inaccessible
+- `RestrictAddressFamilies`: Limits network socket types to IPv4, IPv6, Unix, and Netlink
+- `ReadWritePaths`: Allows write access only to the temporary storage path and Docker socket
+
+### Debug Image Annotation and Production Gate (Requirement 45)
+
+The build workflow annotates artifacts with a machine-readable `debug` flag, and the AMI converter gates production builds against debug artifacts.
+
+**Build-Time Annotation:**
+- When `--enable-ssh` is passed, the ORAS push includes `--annotation "debug=true"`
+- When `--enable-ssh` is not passed, the ORAS push includes `--annotation "debug=false"`
+
+**AMI Converter Gate:**
+- After downloading the artifact, the AMI_Converter checks for the `debug` annotation
+- If `debug=true` and `--allow-debug` is not provided, the converter refuses to build and terminates with an error
+- If `debug=true` and `--allow-debug` is provided, the converter logs a prominent warning and proceeds
+- If `debug=false`, the converter proceeds normally
+
+### Artifact Provenance Workflow Verification (Requirement 46)
+
+The AMI converter optionally verifies the producing workflow identity in the attestation.
+
+**Design:**
+- The AMI_Converter accepts an optional `--expected-workflow` CLI argument
+- When provided, after downloading the attestation bundle, the Signature_Verifier extracts the workflow identity from the attestation and compares it against the expected workflow path
+- If the workflow identity does not match, the converter terminates with an error
+- When not provided, workflow identity verification is skipped
+
+### AMI Build IAM Permission Scoping (Requirement 49)
+
+The Terraform IAM policy for the Build_Instance scopes EC2 and EBS permissions to the specific region and account.
+
+**Design:**
+- Resource ARN patterns include the specific region and account ID
+- Condition keys `aws:RequestedRegion` and `aws:ResourceAccount` restrict operations
+- No `Resource = "*"` is used for EC2 snapshot and image operations
+- This limits the blast radius of build instance compromise to only the resources in the build region/account
 
 ## Testing Strategy
 
@@ -1619,10 +1919,10 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
 - Property tests: Random execution metadata, attestation verification
 
 **OIDC Authentication Testing**
-- Unit tests: Mock JWKS endpoint, specific token claim combinations, expired tokens, wrong issuer/audience, unauthorized repositories, OIDC token extracted from decrypted body instead of Authorization header
-- Property tests: Random JWT claims with valid/invalid signatures, random repository names against Allowed_Repositories, random expiration times relative to current time
+- Unit tests: Mock JWKS endpoint, specific token claim combinations, expired tokens, wrong issuer/audience, unauthorized repositories, OIDC token extracted from decrypted body instead of Authorization header, repository claim binding (match/mismatch with repository_url), branch restriction enforcement (Allowed_Branches configured/not configured), protected ref enforcement (REQUIRE_PROTECTED_REF true/false)
+- Property tests: Random JWT claims with valid/invalid signatures, random repository names against Allowed_Repositories, random expiration times relative to current time, repository claim binding (Property 137), branch restriction enforcement (Property 138), protected ref enforcement (Property 139)
 - Test JWKS caching behavior: verify cache hit on known key ID, cache refresh on unknown key ID
-- Test 401 vs 403 distinction: invalid tokens → 401, valid token from unauthorized repo → 403
+- Test 401 vs 403 distinction: invalid tokens → 401, valid token from unauthorized repo → 403, repository mismatch → 403, branch/ref violation → 403
 - Test /health and /attest endpoint accessibility without authentication
 
 **PQ Hybrid Encryption Testing**
@@ -1657,8 +1957,8 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
 - Property tests: Random output sizes, offset values, concurrent access, partial output visible during execution
 
 **Security Testing**
-- Unit tests: Path traversal attempts, token handling, Docker container security constraints, PQ_Hybrid_KEM composite key generation, Shared_Key not persisted to disk, Server_Keypair not persisted to disk, private key material and decapsulation key material not logged
-- Property tests: Random input validation scenarios, container isolation verification, PQ_Hybrid_KEM encrypt/decrypt round-trips with random payloads, decryption failure on corrupted ciphertext
+- Unit tests: Path traversal attempts, token handling, Docker container security constraints (including cap_drop=ALL), PQ_Hybrid_KEM composite key generation, Shared_Key not persisted to disk, Server_Keypair not persisted to disk, private key material and decapsulation key material not logged, token stripping from .git/config, .git directory removal, output buffer size limits, nonce cache anti-replay, repository claim binding on /execute and /output, concurrency enforcement, script size enforcement, contextvars log isolation
+- Property tests: Random input validation scenarios, container isolation verification (including capability dropping), PQ_Hybrid_KEM encrypt/decrypt round-trips with random payloads, decryption failure on corrupted ciphertext, anti-replay nonce validation (Property 149), output buffer enforcement (Property 141), repository binding (Properties 137, 142), concurrency enforcement (Property 144), script size enforcement (Property 145)
 
 **Configuration Testing**
 - Unit tests: Specific missing config, invalid values
@@ -1667,15 +1967,17 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
 ### Integration Testing
 
 **End-to-End Scenarios**:
-1. Complete execution flow: attest → PQ_Hybrid_KEM key exchange → encrypted request → attestation → container creation → execution with streaming output → encrypted output retrieval with partial output visible during execution → container removal
-2. Error scenarios: decryption failure, authentication failure, timeout, file not found, Docker daemon unavailable, missing encryption context
+1. Complete execution flow: attest → PQ_Hybrid_KEM key exchange → encrypted request → nonce validation → repository claim binding → attestation → container creation (cap_drop=ALL) → execution with streaming output → encrypted output retrieval (repository binding) with partial output visible during execution → container removal
+2. Error scenarios: decryption failure, authentication failure, timeout, file not found, Docker daemon unavailable, missing encryption context, duplicate nonce, repository mismatch, branch/ref restriction violation, script too large, max concurrent executions
 3. Concurrent execution: multiple simultaneous encrypted requests in separate Docker containers with independent streaming threads
-4. Rate limiting: exceeding limits from single IP
-5. Cleanup: verify containers removed, temporary files cleaned up, and Encryption_Contexts removed after execution
-6. Startup: verify dangling container cleanup and Server_Keypair generation on server start
-7. Attest endpoint: verify unauthenticated access, Server_Public_Key in attestation, nonce support
-8. Encryption exemption: verify /attest, /health, /metrics return unencrypted responses
-9. Streaming output: verify polling returns incremental output while script is still running, not just after container exits
+4. Rate limiting: exceeding limits from single IP (including /health and /attest)
+5. Cleanup: verify containers removed, temporary files cleaned up, Encryption_Contexts removed after execution, periodic cleanup_expired invocation
+6. Startup: verify dangling container cleanup, Server_Keypair generation, container image pull (with optional digest verification) on server start
+7. Attest endpoint: verify unauthenticated access, Server_Public_Key in attestation, nonce support, rate limiting
+8. Encryption exemption: verify /attest, /health return unencrypted responses
+9. Token stripping: verify .git/config token removal and .git directory deletion before container mount
+10. Output buffer limits: verify truncation when MAX_OUTPUT_SIZE_BYTES exceeded
+11. Streaming output: verify polling returns incremental output while script is still running, not just after container exits
 
 **External Dependencies**:
 - Mock GitHub API for predictable testing
@@ -1717,7 +2019,13 @@ def test_pq_hybrid_encrypt_decrypt_round_trip(payload):
 - Verify attestation signature validity
 - Verify Server_Keypair and Encryption_Contexts are memory-only (not persisted to disk)
 - Verify OIDC tokens are only transmitted inside encrypted payloads
-- Verify /attest, /health, /metrics responses are never encrypted
+- Verify /attest, /health responses are never encrypted
+- Verify contextvars-based log isolation (no cross-request context leakage)
+- Verify nonce cache prevents replay attacks
+- Verify repository claim binding on both /execute and /output
+- Verify cap_drop=ALL on all Execution_Containers
+- Verify token stripping and .git removal before container mount
+- Verify output buffer size limits enforced
 
 
 ---
@@ -1823,6 +2131,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Authenticates to GitHub Container Registry
 - Bundles KIWI image and PCR measurements
 - Annotates artifacts with PCR values
+- Annotates artifacts with `debug=true` when built with --enable-ssh, `debug=false` otherwise
 - Pushes artifacts to GHCR
 - Calculates and returns artifact digest
 
@@ -1834,15 +2143,18 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Provides attestation ID and verification URL
 
 **AMI_Converter (Python Script)**
+- Validates artifact_ref against a strict regex allowlist (`^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`) before any shell interpolation; rejects and terminates if invalid
 - Provisions temporary EC2 build instance using Terraform
 - Detects user's public IP for SSH access configuration (via checkip.amazonaws.com)
 - Manages SSH connectivity with keepalive (30-second intervals) using paramiko
 - Installs required tools:
   - System dependencies: git, gcc via dnf
-  - Rust toolchain via rustup from sh.rustup.rs
-  - ORAS CLI 1.3.0 from GitHub releases
-  - GitHub CLI via dnf repository
-  - Coldsnap built from source using cargo
+  - Rust toolchain via rustup from sh.rustup.rs (trust assumption documented in code comments)
+  - ORAS CLI 1.3.0 from GitHub releases, verified against a known SHA-256 checksum before installation
+  - GitHub CLI via dnf repository (trust assumption documented in code comments)
+  - Coldsnap cloned at a specific pinned git tag or commit hash (not HEAD), built from source using cargo
+- Checks for `debug` annotation on downloaded artifact; refuses to build AMI if `debug=true` unless `--allow-debug` CLI flag is provided
+- Accepts optional `--expected-workflow` CLI argument; when provided, verifies attestation workflow identity matches
 - Verifies artifact signatures before proceeding
 - Downloads artifacts from GHCR to ~/artifacts/build-output
 - Uploads raw disk image to EBS snapshot using coldsnap
@@ -1850,6 +2162,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Registers AMI with TPM 2.0, UEFI boot mode, and ENA support using boto3
 - Saves build results with PCR measurements to JSON file
 - Cleans up all temporary infrastructure in finally block
+- Overwrites temporary SSH key file with random bytes before unlinking (documents Terraform state sensitivity)
 - Dependencies: boto3 (AWS SDK), paramiko (SSH connectivity)
 
 **Signature_Verifier (GitHub CLI)**
@@ -1857,6 +2170,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Fetches artifact manifest digest using ORAS manifest fetch
 - Downloads GitHub attestation bundle from GitHub API
 - Verifies attestation using gh attestation verify in offline mode with bundle.json
+- When --expected-workflow is provided, verifies the attestation's workflow identity matches the expected workflow path; terminates if mismatch
 - Sets GH_FORCE_TTY=1 environment variable to force output
 - Terminates build process if verification fails
 - Logs detailed verification output for debugging
@@ -1890,10 +2204,11 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 2. ORAS authenticates to GHCR using GitHub token
 3. Artifact bundle created with raw image and PCR measurements
 4. PCR4 and PCR7 added as artifact annotations
-5. Artifact pushed to GHCR
-6. Manifest digest calculated and returned
-7. GitHub attestation action triggered with artifact digest
-8. Attestation bundle pushed to registry
+5. Debug annotation added: `debug=true` if built with --enable-ssh, `debug=false` otherwise
+6. Artifact pushed to GHCR
+7. Manifest digest calculated and returned
+8. GitHub attestation action triggered with artifact digest
+9. Attestation bundle pushed to registry
 
 **Signature Verification Flow:**
 
@@ -1924,9 +2239,9 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 5. SSH connectivity verified with retries (10 attempts, 30s delay) and keepalive enabled (30s intervals)
 6. System dependencies installed via dnf: git, gcc
 7. Rust toolchain installed via rustup: `curl https://sh.rustup.rs | sh -s -- -y`
-8. ORAS CLI 1.3.0 installed from GitHub releases (linux_amd64.tar.gz)
+8. ORAS CLI 1.3.0 installed from GitHub releases (linux_amd64.tar.gz), verified against known SHA-256 checksum
 9. GitHub CLI installed via dnf repository configuration
-10. Coldsnap cloned from https://github.com/awslabs/coldsnap.git and built using `cargo install --locked coldsnap`
+10. Coldsnap cloned from https://github.com/awslabs/coldsnap.git at a specific pinned git tag/commit and built using `cargo install --locked coldsnap`
 11. Artifact signature verified using multi-step process:
     - Extract manifest digest: `oras manifest fetch | sha256sum`
     - Download attestation: `curl https://api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest}`
@@ -1949,12 +2264,12 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 19. Build result saved to JSON file with ami_id, snapshot_id, region, build_timestamp, and pcr_measurements
 20. SSH connection closed
 21. Terraform destroy executed with same variables (region, instance_type, allowed_ssh_cidr)
-22. Temporary SSH key file deleted
+22. Temporary SSH key file securely deleted (overwritten with random bytes, then unlinked)
 23. Cleanup guaranteed via finally block (executes even on failure, logs errors without failing)
 
 ### Build Concurrency Model
 
-- GitHub Actions workflow runs on ubuntu-latest runner
+- GitHub Actions workflow runs on a pinned Ubuntu version (e.g., ubuntu-24.04) rather than ubuntu-latest
 - KIWI build executes inside Docker container with privileged access
 - Loop devices shared between host and container
 - AMI conversion uses single EC2 instance per build
@@ -2086,9 +2401,25 @@ This block runs during the KIWI image build phase (inside the chroot environment
 
 When the KIWI image boots:
 1. systemd starts the `docker.service` unit (enabled during image creation)
-2. The Docker daemon (`dockerd`) starts and listens on the default Unix socket (`/var/run/docker.sock`)
-3. The Script_Executor connects to the Docker daemon via the Docker SDK for Python (`docker` package)
-4. The Script_Executor verifies Docker daemon accessibility at startup (Requirement 9, criteria 11)
+2. The Docker daemon (`dockerd`) starts with the hardened configuration from `/etc/docker/daemon.json` (user-namespace remapping, restrictive seccomp profile)
+3. The Docker daemon listens on the default Unix socket (`/var/run/docker.sock`)
+4. The Script_Executor connects to the Docker daemon via the Docker SDK for Python (`docker` package)
+5. The Script_Executor verifies Docker daemon accessibility at startup (Requirement 9, criteria 11)
+
+**Docker Daemon Security Configuration (daemon.json):**
+
+The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/daemon.json`:
+
+```json
+{
+  "userns-remap": "default",
+  "seccomp-profile": "/etc/docker/seccomp-default.json",
+  "no-new-privileges": true,
+  "live-restore": false
+}
+```
+
+This configuration is baked into the read-only erofs layer during the KIWI image build, ensuring it cannot be modified at runtime. User-namespace remapping isolates container root from host root, and the restrictive seccomp profile limits available system calls.
 
 **Design Rationale:**
 
@@ -2107,8 +2438,9 @@ The Container_Image pull is part of the GHA_Server startup sequence. The full st
 1. **Verify Configuration**: Load and validate all configuration values (Requirement 9)
 2. **Verify Docker Daemon**: Check that the Docker daemon is accessible (Requirement 9, criteria 11-12)
 3. **Cleanup Dangling Containers**: Remove any dangling Execution_Containers from previous runs (Requirement 8, criteria 10)
-4. **Pull Container_Image**: Pull the configured Container_Image from the container registry (Requirement 34)
-5. **Start Accepting Requests**: Begin listening for HTTP requests on the configured port
+4. **Pull Container_Image**: Pull the configured Container_Image from the container registry (Requirement 34). If CONTAINER_IMAGE_DIGEST is configured, verify the pulled image digest matches the expected digest; fail to start if mismatch. Support digest-pinned image references (e.g., `python:3.11-slim@sha256:...`).
+5. **Schedule Periodic Cleanup**: Schedule periodic invocation of cleanup_expired on the Execution_Manager (Requirement 8, criteria 15-16)
+6. **Start Accepting Requests**: Begin listening for HTTP requests on the configured port
 
 **Pull Behavior:**
 
@@ -2938,6 +3270,9 @@ terraform destroy -auto-approve \
 ```python
 if ssh_key_path and os.path.exists(ssh_key_path):
     try:
+        # Overwrite with random bytes before unlinking for secure deletion
+        with open(ssh_key_path, 'wb') as f:
+            f.write(os.urandom(os.path.getsize(ssh_key_path)))
         os.unlink(ssh_key_path)
     except Exception:
         pass
@@ -2946,8 +3281,10 @@ if ssh_key_path and os.path.exists(ssh_key_path):
 **Details:**
 - Temporary file created with mkstemp
 - Permissions: 0600 (owner read/write only)
+- Overwritten with random bytes before deletion to prevent recovery
 - Deleted after Terraform destroy
 - Deletion errors silently ignored
+- Note: Terraform state also contains sensitive SSH key material (documented)
 
 ### Error Handling During Cleanup
 
@@ -3125,6 +3462,7 @@ This approach ensures that the remote executor service has all required dependen
 oras push <artifact-path>:<tag> \
   --annotation "pcr4=<value>" \
   --annotation "pcr7=<value>" \
+  --annotation "debug=<true|false>" \
   <file1>:<media-type> \
   <file2>:<media-type>
 ```
@@ -3398,7 +3736,9 @@ python scripts/build-ami.py \
   --artifact-ref <ghcr-artifact-reference> \
   --region <aws-region> \
   --instance-type <ec2-instance-type> \
-  --output-file <result-json-file>
+  --output-file <result-json-file> \
+  [--allow-debug] \
+  [--expected-workflow <workflow-file-path>]
 ```
 
 **Build Result Format:**
@@ -3511,8 +3851,10 @@ output "security_group_id" {
    - Assume role policy for EC2
 
 10. **aws_iam_role_policy.this**
-    - EC2 snapshot/image permissions
-    - EBS direct API permissions
+    - EC2 snapshot/image permissions scoped to specific region and account
+    - EBS direct API permissions scoped to specific region and account
+    - Uses resource ARN patterns and condition keys (aws:RequestedRegion, aws:ResourceAccount)
+    - Does NOT use Resource="*" for EC2/EBS operations
 
 11. **aws_iam_instance_profile.this**
     - Links role to instance
@@ -3533,7 +3875,7 @@ output "security_group_id" {
    - Lists available AZs in region
 
 2. **data.aws_ami.amazon_linux_2023**
-   - Finds latest AL2023 AMI
+   - Uses a specific AMI ID or name filter with a specific version instead of most_recent = true
    - Filters: x86_64, hvm, kernel-*
 
 3. **data.aws_iam_policy_document.assume_role**
@@ -3541,6 +3883,8 @@ output "security_group_id" {
 
 4. **data.aws_iam_policy_document.this**
    - Snapshot/image permissions policy
+   - EC2 and EBS permissions scoped to specific region and account using resource ARN patterns or condition keys (aws:RequestedRegion, aws:ResourceAccount)
+   - Does NOT use Resource="*" for EC2 snapshot and image operations
 
 ### SSH Command Execution Interface
 
@@ -4364,17 +4708,39 @@ The build system requires both unit testing and property-based testing:
 - Verify rejection of artifacts with invalid signatures
 - Verify rejection of artifacts from wrong repository
 - Verify attestation bundle integrity
+- Verify workflow identity verification when --expected-workflow is provided (Property 158)
 
 **Access Control Testing**:
 - Verify SSH access restricted to user's IP
 - Verify GHCR authentication required for private repos
 - Verify AWS credentials required for infrastructure
 - Verify GitHub token permissions sufficient for attestation
+- Verify IAM permissions scoped to region/account (Property 161)
 
 **Artifact Integrity Testing**:
 - Verify PCR measurements match between annotations and file
 - Verify artifact digest matches manifest
 - Verify downloaded files match expected checksums
+- Verify ORAS checksum verification (Property 153)
+- Verify artifact_ref validation against strict regex (Property 152)
+
+**Build Tool Integrity Testing**:
+- Verify coldsnap pinned to specific git tag/commit (Property 154)
+- Verify ORAS SHA-256 checksum verification before installation
+- Verify trust assumptions documented for rustup and GitHub CLI
+
+**Debug Image Testing**:
+- Verify debug=true/false annotation on ORAS push (Property 156)
+- Verify AMI converter refuses debug artifacts without --allow-debug (Property 157)
+- Verify --allow-debug flag allows debug artifact conversion with warning
+
+**Secure Cleanup Testing**:
+- Verify SSH key overwritten with random bytes before unlinking (Property 155)
+- Verify Terraform state sensitivity documented
+
+**Build Environment Pinning Testing**:
+- Verify GitHub Actions runner pinned to specific Ubuntu version (Property 162)
+- Verify Build_Instance AMI uses specific version instead of most_recent=true
 
 
 ---

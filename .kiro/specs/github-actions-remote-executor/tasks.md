@@ -2463,11 +2463,471 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 130. Checkpoint - Ensure all streaming output tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 131. Implement OIDC repository claim binding on /execute
+  - [ ] 131.1 Add repository claim vs repository_url comparison in src/server.py
+    - After OIDC validation succeeds on /execute, extract the `repository` claim from the validated token
+    - Compare the `repository` claim against the `repository_url` field in the decrypted Execution_Request (extract owner/repo from the URL)
+    - If mismatch, reject with HTTP 403 Forbidden and an error message indicating repository mismatch
+    - Perform this check before repository cloning begins
+    - _Requirements: 2.22, 2.23, 2.24_
+
+  - [ ] 131.2 Write property test for OIDC Repository Claim Binding
+    - **Property 142: OIDC Repository Claim Binding**
+    - **Validates: Requirements 2.22, 2.23, 2.24**
+
+  - [ ] 131.3 Write unit tests for repository claim binding
+    - Test matching repository claim and repository_url (allowed)
+    - Test mismatched repository claim and repository_url (403)
+    - Test various URL formats (with/without .git suffix, trailing slashes)
+    - _Requirements: 2.22, 2.23, 2.24_
+
+- [ ] 132. Implement extended OIDC claim restrictions (branch and protected ref)
+  - [ ] 132.1 Add ALLOWED_BRANCHES and REQUIRE_PROTECTED_REF config to src/config.py
+    - Add optional `allowed_branches` field (comma-separated list, default None)
+    - Add optional `require_protected_ref` field (boolean, default False)
+    - Parse ALLOWED_BRANCHES env var into a list of branch patterns
+    - Parse REQUIRE_PROTECTED_REF env var as boolean
+    - _Requirements: 2.25, 2.28_
+
+  - [ ] 132.2 Add branch and ref validation to src/validation.py
+    - When `allowed_branches` is configured, validate the `ref` claim against allowed branch patterns; reject with HTTP 403 if no match
+    - When `require_protected_ref` is True, validate the `ref_protected` claim is "true"; reject with HTTP 403 if not
+    - Skip branch validation when `allowed_branches` is not configured
+    - Skip protected ref validation when `require_protected_ref` is not configured or False
+    - _Requirements: 2.26, 2.27, 2.29, 2.30, 2.31, 2.32_
+
+  - [ ] 132.3 Write property test for Branch Restriction Enforcement
+    - **Property 143: Branch Restriction Enforcement**
+    - **Validates: Requirements 2.25, 2.26, 2.27, 2.31**
+
+  - [ ] 132.4 Write property test for Protected Ref Enforcement
+    - **Property 144: Protected Ref Enforcement**
+    - **Validates: Requirements 2.28, 2.29, 2.30, 2.32**
+
+  - [ ] 132.5 Write unit tests for branch and protected ref validation
+    - Test with ALLOWED_BRANCHES configured: matching ref (allowed), non-matching ref (403)
+    - Test with ALLOWED_BRANCHES not configured: any ref allowed
+    - Test with REQUIRE_PROTECTED_REF=true: ref_protected="true" (allowed), ref_protected="false" (403)
+    - Test with REQUIRE_PROTECTED_REF=false or unset: any ref_protected value allowed
+    - _Requirements: 2.25, 2.26, 2.27, 2.28, 2.29, 2.30, 2.31, 2.32_
+
+- [ ] 133. Implement token stripping and .git directory removal
+  - [ ] 133.1 Update src/repository.py clone_repo to strip token and remove .git
+    - After successful clone, run `git remote set-url origin https://github.com/{owner}/{repo}.git` to strip the token from .git/config
+    - After token stripping, remove the `.git` directory entirely using `shutil.rmtree`
+    - Perform both operations before the cloned repo is mounted into the Execution_Container
+    - _Requirements: 3.10, 3.11, 3.12_
+
+  - [ ] 133.2 Write property test for Token Stripping and .git Removal
+    - **Property 145: Token Stripping and .git Removal**
+    - **Validates: Requirements 3.10, 3.11, 3.12**
+
+  - [ ] 133.3 Write unit tests for token stripping and .git removal
+    - Test that git remote set-url is called after clone
+    - Test that .git directory is removed after token stripping
+    - Test ordering: clone → strip token → remove .git → mount
+    - _Requirements: 3.10, 3.11, 3.12_
+
+- [ ] 134. Checkpoint - Ensure OIDC binding and repo security tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 135. Implement output buffer size limits
+  - [ ] 135.1 Add MAX_OUTPUT_SIZE_BYTES config to src/config.py
+    - Add `max_output_size_bytes` field with a sensible default (e.g., 10MB)
+    - Read from MAX_OUTPUT_SIZE_BYTES environment variable
+    - _Requirements: 5.15_
+
+  - [ ] 135.2 Enforce output size limit in src/output_collector.py
+    - Track combined stdout and stderr buffer size
+    - When appending output would exceed MAX_OUTPUT_SIZE_BYTES, truncate the output
+    - Mark the output record as truncated (add a `truncated` flag)
+    - _Requirements: 5.15, 5.16_
+
+  - [ ] 135.3 Write property test for Output Buffer Size Enforcement
+    - **Property 146: Output Buffer Size Enforcement**
+    - **Validates: Requirements 5.15, 5.16**
+
+  - [ ] 135.4 Write unit tests for output buffer size limits
+    - Test output within limit (not truncated)
+    - Test output exceeding limit (truncated, flag set)
+    - Test exact boundary condition
+    - _Requirements: 5.15, 5.16_
+
+- [ ] 136. Implement execution output repository binding
+  - [ ] 136.1 Store repository claim in execution record
+    - When creating an execution record in src/execution_manager.py, accept and store the `repository` claim from the validated OIDC_Token
+    - Add `repository` field to the execution record data structure
+    - _Requirements: 6.14_
+
+  - [ ] 136.2 Verify repository claim on /output retrieval in src/server.py
+    - On /execution/{id}/output, after OIDC validation, compare the `repository` claim from the token against the repository stored in the execution record
+    - Reject with HTTP 403 if mismatch
+    - _Requirements: 6.15, 6.16_
+
+  - [ ] 136.3 Write property test for Execution Output Repository Binding
+    - **Property 147: Execution Output Repository Binding**
+    - **Validates: Requirements 6.14, 6.15, 6.16**
+
+  - [ ] 136.4 Write unit tests for output repository binding
+    - Test matching repository (allowed)
+    - Test mismatched repository (403)
+    - Test repository stored at creation and checked at retrieval
+    - _Requirements: 6.14, 6.15, 6.16_
+
+- [ ] 137. Implement contextvars-based logging
+  - [ ] 137.1 Replace global mutable log context with contextvars.ContextVar in src/logging_config.py
+    - Replace the process-global mutable dictionary with a `contextvars.ContextVar` for per-request/per-task log context
+    - Update log formatter to read from the ContextVar
+    - Ensure each request/task gets its own isolated context
+    - _Requirements: 7.9, 7.10_
+
+  - [ ] 137.2 Update src/server.py and src/script_executor.py to use contextvars
+    - Replace all mutations of the global log context dict with ContextVar token-based set/reset
+    - Ensure background tasks (script execution) copy the context or create a new one
+    - _Requirements: 7.9, 7.10_
+
+  - [ ] 137.3 Write property test for Contextvars Log Isolation
+    - **Property 148: Contextvars Log Isolation**
+    - **Validates: Requirements 7.9, 7.10**
+
+  - [ ] 137.4 Write unit tests for contextvars logging
+    - Test that concurrent requests have isolated log contexts
+    - Test that background tasks do not leak context to other requests
+    - _Requirements: 7.9, 7.10_
+
+- [ ] 138. Implement concurrency enforcement
+  - [ ] 138.1 Add atomic concurrency check in src/execution_manager.py
+    - Before creating a new execution record, check the count of active executions (queued and running) against MAX_CONCURRENT_EXECUTIONS
+    - Use a lock or atomic operation to prevent race conditions
+    - Return a rejection indicator when at capacity
+    - _Requirements: 8.11, 8.12_
+
+  - [ ] 138.2 Wire concurrency check into /execute endpoint in src/server.py
+    - Before creating the execution record, call the concurrency check
+    - Return HTTP 503 Service Unavailable when at capacity
+    - _Requirements: 8.11, 8.12_
+
+  - [ ] 138.3 Write property test for Concurrency Enforcement
+    - **Property 149: Concurrency Enforcement**
+    - **Validates: Requirements 8.11, 8.12**
+
+  - [ ] 138.4 Write unit tests for concurrency enforcement
+    - Test that requests are accepted when below capacity
+    - Test that requests are rejected with 503 when at capacity
+    - Test atomicity under concurrent request simulation
+    - _Requirements: 8.11, 8.12_
+
+- [ ] 139. Implement script size enforcement
+  - [ ] 139.1 Add file size check after clone in src/server.py
+    - After cloning the repository and before execution, check the script file size against MAX_SCRIPT_SIZE_BYTES
+    - Return HTTP 413 Payload Too Large if exceeded
+    - _Requirements: 8.13, 8.14_
+
+  - [ ] 139.2 Write property test for Script Size Enforcement
+    - **Property 150: Script Size Enforcement**
+    - **Validates: Requirements 8.13, 8.14**
+
+  - [ ] 139.3 Write unit tests for script size enforcement
+    - Test script within size limit (allowed)
+    - Test script exceeding size limit (413)
+    - _Requirements: 8.13, 8.14_
+
+- [ ] 140. Implement periodic cleanup scheduling
+  - [ ] 140.1 Schedule periodic cleanup_expired invocation in src/server.py or src/main.py
+    - Use asyncio or a background task to periodically invoke `cleanup_expired` on the ExecutionManager
+    - Cleanup should call `remove_output` on the OutputCollector and `remove_encryption_context` on the EncryptionManager for each expired record
+    - _Requirements: 8.15, 8.16_
+
+  - [ ] 140.2 Write property test for Periodic Cleanup Scheduling
+    - **Property 151: Periodic Cleanup Scheduling**
+    - **Validates: Requirements 8.15, 8.16**
+
+  - [ ] 140.3 Write unit tests for periodic cleanup
+    - Test that cleanup_expired is invoked periodically
+    - Test that expired records trigger remove_output and remove_encryption_context
+    - _Requirements: 8.15, 8.16_
+
+- [ ] 141. Implement capability dropping for execution containers
+  - [ ] 141.1 Add cap_drop=["ALL"] to container creation in src/script_executor.py
+    - Add `cap_drop=["ALL"]` to the Docker container creation call
+    - Do not add back any capabilities
+    - _Requirements: 8.17, 8.18_
+
+  - [ ] 141.2 Write property test for Capability Dropping
+    - **Property 152: Capability Dropping**
+    - **Validates: Requirements 8.17, 8.18**
+
+  - [ ] 141.3 Write unit tests for capability dropping
+    - Test that container is created with cap_drop=["ALL"]
+    - Test that no cap_add is present
+    - _Requirements: 8.17, 8.18_
+
+- [ ] 142. Checkpoint - Ensure runtime security hardening tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 143. Harden health endpoint and remove /metrics
+  - [ ] 143.1 Apply rate limiting to /health endpoint in src/server.py
+    - Remove /health from rate limiting exemptions
+    - Ensure /health is subject to the same per-IP rate limiting as other endpoints
+    - _Requirements: 10.4_
+
+  - [ ] 143.2 Simplify /health response
+    - Return only a simple healthy/unhealthy status
+    - Remove Docker availability, disk space, and active execution count from the response
+    - _Requirements: 10.5_
+
+  - [ ] 143.3 Remove GET /metrics endpoint entirely
+    - Remove the /metrics route from src/server.py
+    - Remove metrics tracking code (total executions, success/failure counts, average duration)
+    - _Requirements: 10.5 (removed)_
+
+  - [ ] 143.4 Write property test for Health Endpoint Rate Limiting
+    - **Property 153: Health Endpoint Rate Limiting**
+    - **Validates: Requirements 10.4**
+
+  - [ ] 143.5 Update existing health and metrics tests
+    - Update tests to reflect simplified /health response
+    - Remove /metrics endpoint tests
+    - Update Property 58, 59, 60 tests as needed
+    - _Requirements: 10.4, 10.5_
+
+- [ ] 144. Implement anti-replay nonce cache
+  - [ ] 144.1 Create NonceCache class in src/server.py or a new src/nonce_cache.py
+    - Implement `NonceCache` with configurable TTL (NONCE_CACHE_TTL_SECONDS)
+    - Implement `check_and_store(nonce)` returning True if new, False if duplicate
+    - Implement `cleanup_expired()` to purge expired entries
+    - Thread-safe for concurrent access
+    - _Requirements: 45.1, 45.4_
+
+  - [ ] 144.2 Add NONCE_CACHE_TTL_SECONDS config to src/config.py
+    - Add `nonce_cache_ttl_seconds` field with default matching OIDC token lifetime
+    - _Requirements: 45.4_
+
+  - [ ] 144.3 Wire nonce validation into /execute and /output endpoints
+    - After decryption, extract nonce from decrypted payload
+    - Check nonce against NonceCache; reject with HTTP 400 if duplicate
+    - _Requirements: 45.2, 45.3, 45.5_
+
+  - [ ] 144.4 Write property test for Anti-Replay Nonce Validation
+    - **Property 154: Anti-Replay Nonce Validation**
+    - **Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5**
+
+  - [ ] 144.5 Write unit tests for nonce cache
+    - Test new nonce accepted
+    - Test duplicate nonce rejected with 400
+    - Test nonce expiry after TTL
+    - Test concurrent nonce checks
+    - _Requirements: 45.1, 45.2, 45.3, 45.4, 45.5_
+
+- [ ] 145. Apply rate limiting to /attest endpoint
+  - [ ] 145.1 Remove /attest from rate limiting exemptions in src/server.py
+    - Remove /attest from the list of paths exempt from rate limiting
+    - Ensure /attest is subject to per-IP rate limiting
+    - _Requirements: 37.12, 37.13_
+
+  - [ ] 145.2 Write property test for Attest Endpoint Rate Limiting
+    - **Property 155: Attest Endpoint Rate Limiting**
+    - **Validates: Requirements 37.12, 37.13**
+
+  - [ ] 145.3 Write unit tests for /attest rate limiting
+    - Test that /attest requests are rate limited per IP
+    - Test that exceeding rate limit returns 429
+    - _Requirements: 37.12, 37.13_
+
+- [ ] 146. Implement container image digest pinning
+  - [ ] 146.1 Add CONTAINER_IMAGE_DIGEST config to src/config.py
+    - Add optional `container_image_digest` field (default None)
+    - Read from CONTAINER_IMAGE_DIGEST environment variable
+    - _Requirements: 34.7_
+
+  - [ ] 146.2 Verify pulled image digest in src/script_executor.py pull_container_image
+    - After pulling the image, retrieve its digest
+    - If CONTAINER_IMAGE_DIGEST is configured, compare against the pulled image digest
+    - If mismatch, raise an error to prevent server startup
+    - Support digest-pinned image references (e.g., `image@sha256:...`)
+    - _Requirements: 34.8, 34.9, 34.10_
+
+  - [ ] 146.3 Write property test for Container Image Digest Verification
+    - **Property 156: Container Image Digest Verification**
+    - **Validates: Requirements 34.7, 34.8, 34.9, 34.10**
+
+  - [ ] 146.4 Write unit tests for container image digest pinning
+    - Test matching digest (startup succeeds)
+    - Test mismatched digest (startup fails)
+    - Test no digest configured (skip verification)
+    - _Requirements: 34.7, 34.8, 34.9, 34.10_
+
+- [ ] 147. Checkpoint - Ensure all runtime security hardening tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 148. Implement artifact ref input validation in build-ami.py
+  - [ ] 148.1 Add strict regex validation for artifact_ref in scripts/build-ami.py
+    - Validate artifact_ref against `^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`
+    - Reject and terminate before any shell interpolation if invalid
+    - _Requirements: 15.15, 15.16_
+
+  - [ ] 148.2 Write property test for Artifact Ref Validation
+    - **Property 157: Artifact Ref Validation**
+    - **Validates: Requirements 15.15, 15.16**
+
+  - [ ] 148.3 Write unit tests for artifact ref validation
+    - Test valid artifact refs (accepted)
+    - Test refs with shell metacharacters (rejected)
+    - Test refs with spaces, semicolons, pipes (rejected)
+    - _Requirements: 15.15, 15.16_
+
+- [ ] 149. Implement ORAS checksum verification and coldsnap version pinning
+  - [ ] 149.1 Add SHA-256 checksum verification for ORAS download in scripts/build-ami.py
+    - After downloading the ORAS tar.gz, compute its SHA-256 checksum
+    - Compare against a known expected checksum hardcoded in the script
+    - Fail with an integrity verification error if mismatch
+    - _Requirements: 17.13, 17.14_
+
+  - [ ] 149.2 Pin coldsnap clone to a specific git tag or commit
+    - Change the coldsnap `git clone` to checkout a specific tag or commit hash
+    - _Requirements: 17.15_
+
+  - [ ] 149.3 Add trust assumption documentation comments
+    - Add code comments documenting trust assumptions for rustup installer and GitHub CLI package repository
+    - _Requirements: 17.16_
+
+  - [ ] 149.4 Write property test for ORAS Checksum Verification
+    - **Property 158: ORAS Checksum Verification**
+    - **Validates: Requirements 17.13, 17.14**
+
+  - [ ] 149.5 Write property test for Coldsnap Pinned Version
+    - **Property 159: Coldsnap Pinned Version**
+    - **Validates: Requirements 17.15**
+
+- [ ] 150. Implement secure SSH key deletion
+  - [ ] 150.1 Update cleanup_infrastructure in scripts/build-ami.py
+    - Before unlinking the SSH key file, overwrite it with random bytes (e.g., `os.urandom(len)`)
+    - Then unlink the file
+    - Add a comment documenting Terraform state sensitivity
+    - _Requirements: 21.15, 21.16_
+
+  - [ ] 150.2 Write property test for Secure SSH Key Deletion
+    - **Property 160: Secure SSH Key Deletion**
+    - **Validates: Requirements 21.15**
+
+- [ ] 151. Checkpoint - Ensure build security hardening tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 152. Implement debug image annotation
+  - [ ] 152.1 Add debug annotation to ORAS push in .github/workflows/build-attestable-image.yml
+    - When building with --enable-ssh, add `--annotation "debug=true"` to the ORAS push command
+    - When building without --enable-ssh, add `--annotation "debug=false"` to the ORAS push command
+    - _Requirements: 45.1, 45.2_
+
+  - [ ] 152.2 Add --allow-debug CLI flag to scripts/build-ami.py
+    - Add `--allow-debug` as a boolean flag (store_true)
+    - After downloading the artifact, check for the `debug` annotation using `oras manifest fetch`
+    - If `debug=true` and `--allow-debug` is not provided, refuse to build and terminate with error
+    - If `debug=true` and `--allow-debug` is provided, log a prominent warning and proceed
+    - _Requirements: 45.3, 45.4, 45.5_
+
+  - [ ] 152.3 Write property test for Debug Image Annotation
+    - **Property 161: Debug Image Annotation**
+    - **Validates: Requirements 46.1, 46.2**
+
+  - [ ] 152.4 Write property test for Debug Image Production Gate
+    - **Property 162: Debug Image Production Gate**
+    - **Validates: Requirements 46.3, 46.4, 46.5**
+
+- [ ] 153. Implement artifact provenance workflow verification
+  - [ ] 153.1 Add --expected-workflow CLI arg to scripts/build-ami.py
+    - Add optional `--expected-workflow` argument specifying the expected workflow file path
+    - When provided, after downloading the attestation bundle, extract the workflow identity and compare
+    - If mismatch, terminate with an error indicating workflow mismatch
+    - When not provided, skip workflow identity verification
+    - _Requirements: 46.1, 46.2, 46.3, 46.4_
+
+  - [ ] 153.2 Write property test for Artifact Provenance Workflow Verification
+    - **Property 163: Artifact Provenance Workflow Verification**
+    - **Validates: Requirements 47.1, 47.2, 47.3, 47.4**
+
+- [ ] 154. Implement Docker daemon security configuration
+  - [ ] 154.1 Add daemon.json to KIWI image
+    - Create `kiwi-descriptions/root/etc/docker/daemon.json` with user-namespace remapping and restrictive seccomp profile
+    - Include `"userns-remap": "default"`, `"no-new-privileges": true`, and seccomp profile reference
+    - Add code comments documenting the expected Docker daemon security configuration
+    - _Requirements: 47.1, 47.2, 47.3, 47.4_
+
+  - [ ] 154.2 Write property test for Docker Daemon Security Configuration
+    - **Property 164: Docker Daemon Security Configuration**
+    - **Validates: Requirements 48.1, 48.2, 48.3**
+
+- [ ] 155. Implement systemd service hardening
+  - [ ] 155.1 Update kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service
+    - Set `NoNewPrivileges=true`
+    - Set `PrivateTmp=true`
+    - Set `ProtectSystem=strict`
+    - Set `ProtectHome=true`
+    - Set `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK`
+    - Set `ReadWritePaths=/tmp/github-actions-remote-executor /var/run/docker.sock`
+    - _Requirements: 48.1, 48.2, 48.3, 48.4, 48.5, 48.6_
+
+  - [ ] 155.2 Write property test for Systemd Service Hardening
+    - **Property 165: Systemd Service Hardening**
+    - **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6**
+
+- [ ] 156. Implement AMI build IAM permission scoping
+  - [ ] 156.1 Update terraform/build-ami/iam.tf to scope permissions
+    - Replace `Resource = "*"` with resource ARN patterns scoped to the specific region and account
+    - Add `aws:RequestedRegion` or resource ARN region scoping condition keys
+    - Add `aws:ResourceAccount` condition to restrict operations to the current account
+    - _Requirements: 49.1, 49.2, 49.3, 49.4_
+
+  - [ ] 156.2 Write property test for AMI Build IAM Permission Scoping
+    - **Property 166: AMI Build IAM Permission Scoping**
+    - **Validates: Requirements 50.1, 50.2, 50.3, 50.4**
+
+- [ ] 157. Implement build environment pinning
+  - [ ] 157.1 Pin GitHub Actions runner to specific Ubuntu version
+    - Change `ubuntu-latest` to a specific version (e.g., `ubuntu-24.04`) in `.github/workflows/build-attestable-image.yml`
+    - _Requirements: 11.9_
+
+  - [ ] 157.2 Pin Build_Instance AMI to specific version
+    - Change `most_recent = true` in `terraform/build-ami/data.tf` to use a specific AMI ID or name filter with a specific version
+    - _Requirements: 11.10_
+
+  - [ ] 157.3 Add builder package documentation comments
+    - Add comments to the Dockerfile about DNF package version limitations and why exact NEVRA pinning is not used
+    - _Requirements: 11.11, 11.12_
+
+  - [ ] 157.4 Write property test for Build Environment Pinning
+    - **Property 167: Build Environment Pinning**
+    - **Validates: Requirements 11.9, 11.10**
+
+- [ ] 158. Checkpoint - Ensure all build/deploy security hardening tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 159. Write integration tests for security hardening changes
+  - [ ] 159.1 Write integration tests for OIDC repository binding end-to-end
+    - Test /execute with matching repository claim and URL (success)
+    - Test /execute with mismatched repository claim and URL (403)
+    - Test /output with matching repository claim and execution record (success)
+    - Test /output with mismatched repository claim and execution record (403)
+    - _Requirements: 2.22, 2.23, 2.24, 6.14, 6.15, 6.16_
+
+  - [ ] 159.2 Write integration tests for anti-replay nonce validation
+    - Test /execute with unique nonce (success)
+    - Test /execute with duplicate nonce (400)
+    - Test /output with duplicate nonce (400)
+    - _Requirements: 44.1, 44.2, 44.3, 44.5_
+
+  - [ ] 159.3 Write integration tests for concurrency enforcement
+    - Test that MAX_CONCURRENT_EXECUTIONS is enforced with 503
+    - _Requirements: 8.11, 8.12_
+
+- [ ] 160. Final checkpoint - Ensure all security hardening tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property tests validate the 141 correctness properties from the design document
+- Property tests validate the 167 correctness properties from the design document
 - The runtime implementation (tasks 1-16) uses Python with FastAPI for the HTTP server
 - The build implementation (tasks 17-31) uses GitHub Actions, KIWI NG, ORAS, Terraform, and Python
 - The deployment implementation (tasks 32-36) uses Terraform and Python to provision the target EC2 instance and supporting infrastructure
@@ -2497,7 +2957,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
 - Git package provisioning (task 90) adds the git package to the KIWI image so the Repository_Client can clone repositories at runtime using git commands
 - Container image pre-pull (tasks 76-79) originally baked the configured Container_Image into the KIWI image during build; tasks 80-84 reverse this by removing the build-time pre-pull code and implementing server-startup pull instead — the GHA_Server now pulls the Container_Image from the registry at startup before accepting requests
-- All 141 properties should be tested with hypothesis library (minimum 100 iterations each)
+- All 167 properties should be tested with hypothesis library (minimum 100 iterations each)
 - Checkpoints ensure incremental validation throughout implementation
 - Build tasks (17-32) can be implemented independently from runtime tasks (1-16)
 - AMI build process uses Terraform to provision temporary EC2 infrastructure with complete VPC/networking setup
@@ -2524,6 +2984,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Cleanup verification checks for EC2 instances, AMIs, and EBS snapshots using project-specific tags and resource IDs
 - HPKE encrypted communication (tasks 91-104) adds end-to-end encryption for /execute and /execution/{id}/output using Hybrid Public Key Encryption (RFC 9180)
 - PQ Hybrid KEM migration (tasks 113-124) replaces HPKE with PQ_Hybrid_KEM (X25519 + ML-KEM-768) for post-quantum resistance; the `wolfcrypt-py` package (via `wolfcrypt.ciphers` module: `MlKemType`, `MlKemPrivate`, `MlKemPublic`) provides FIPS 203 ML-KEM-768 key generation, encapsulation, and decapsulation
+- Security hardening (tasks 125-154) implements fixes from the security review: OIDC repository claim binding, extended OIDC claim restrictions, token stripping/.git removal, output buffer limits, execution output repository binding, contextvars logging, concurrency enforcement, script size enforcement, periodic cleanup, capability dropping, health endpoint hardening, /metrics removal, anti-replay nonce cache, /attest rate limiting, container image digest pinning, artifact ref validation, ORAS checksum verification, coldsnap pinning, secure SSH key deletion, debug image annotation, artifact provenance workflow verification, Docker daemon security configuration, systemd service hardening, AMI build IAM permission scoping, and build environment pinning
 - The `cryptography` library (already included via PyJWT[crypto]) provides X25519 key generation support; `wolfcrypt-py` provides ML-KEM-768 support
 - Server_Keypair is a composite key (X25519 + ML-KEM-768) generated once at startup and held in memory; never persisted to disk
 - Server_Public_Key is serialized as length-prefixed concatenation (4-byte big-endian length + component bytes) of X25519 public key (32 bytes) + ML-KEM-768 encapsulation key (1184 bytes)
