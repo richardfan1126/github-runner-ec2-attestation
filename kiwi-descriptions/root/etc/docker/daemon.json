@@ -1,0 +1,6 @@
+{
+    "userns-remap": "default",
+    "seccomp-profile": "/etc/docker/seccomp-default.json",
+    "no-new-privileges": true,
+    "live-restore": false
+}
