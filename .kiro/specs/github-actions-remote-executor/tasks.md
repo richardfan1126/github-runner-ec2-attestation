@@ -2903,7 +2903,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 167: Build Environment Pinning**
     - **Validates: Requirements 11.9, 11.10**
 
-- [ ] 158. Checkpoint - Ensure all build/deploy security hardening tests pass
+- [x] 158. Checkpoint - Ensure all build/deploy security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 159. Write integration tests for security hardening changes

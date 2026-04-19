@@ -67,6 +67,7 @@ class TestCompleteBuildFlow:
              patch.object(build_ami, 'verify_artifact_signature', return_value=True), \
              patch.object(build_ami, 'pull_artifact_from_ghcr'), \
              patch.object(build_ami, 'validate_artifact_files'), \
+             patch.object(build_ami, 'check_debug_annotation'), \
              patch.object(build_ami, 'validate_pcr_measurements', return_value=pcr_measurements), \
              patch.object(build_ami, 'upload_snapshot', return_value="snap-abc123"), \
              patch.object(build_ami, 'wait_for_snapshot'), \
@@ -233,6 +234,7 @@ class TestCleanupOnVariousFailures:
              patch.object(build_ami, 'verify_artifact_signature', return_value=True), \
              patch.object(build_ami, 'pull_artifact_from_ghcr'), \
              patch.object(build_ami, 'validate_artifact_files'), \
+             patch.object(build_ami, 'check_debug_annotation'), \
              patch.object(build_ami, 'validate_pcr_measurements', return_value=pcr_measurements), \
              patch.object(build_ami, 'upload_snapshot', side_effect=RuntimeError("coldsnap upload failed")), \
              patch.object(build_ami, 'cleanup_infrastructure') as mock_cleanup, \
@@ -262,6 +264,7 @@ class TestCleanupOnVariousFailures:
              patch.object(build_ami, 'verify_artifact_signature', return_value=True), \
              patch.object(build_ami, 'pull_artifact_from_ghcr'), \
              patch.object(build_ami, 'validate_artifact_files'), \
+             patch.object(build_ami, 'check_debug_annotation'), \
              patch.object(build_ami, 'validate_pcr_measurements', return_value=pcr_measurements), \
              patch.object(build_ami, 'upload_snapshot', return_value="snap-abc"), \
              patch.object(build_ami, 'wait_for_snapshot'), \
