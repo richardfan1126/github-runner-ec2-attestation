@@ -331,3 +331,117 @@ def test_property_79_ssh_keepalive_maintenance():
     assert "time.sleep(delay)" in build_ami_content or "time.sleep(30)" in build_ami_content, \
         "SSH connection retries must have delay between attempts"
 
+
+# Property 166: AMI Build IAM Permission Scoping
+def test_property_166_ami_build_iam_permission_scoping():
+    """
+    Property 166: AMI Build IAM Permission Scoping
+
+    For any Terraform IAM policy for the Build_Instance, EC2 and EBS permissions
+    should be scoped to the specific AWS region and account using resource ARN
+    patterns or condition keys, and should NOT use Resource="*" for EC2 snapshot
+    and image operations.
+
+    Validates: Requirements 50.1, 50.2, 50.3, 50.4
+    """
+    import re
+
+    terraform_dir = Path(__file__).parent.parent.parent / "terraform" / "build-ami"
+    iam_file = terraform_dir / "iam.tf"
+
+    assert iam_file.exists(), "IAM configuration file must exist"
+    iam_content = iam_file.read_text()
+
+    # EC2 mutation actions that MUST NOT use Resource = "*"
+    ec2_mutation_actions = [
+        "ec2:CreateSnapshot",
+        "ec2:DeleteSnapshot",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:RegisterImage",
+        "ec2:DeregisterImage",
+        "ec2:ModifyImageAttribute",
+    ]
+
+    # EBS direct API actions that MUST NOT use Resource = "*"
+    ebs_actions = [
+        "ebs:CompleteSnapshot",
+        "ebs:GetSnapshotBlock",
+        "ebs:ListChangedBlocks",
+        "ebs:ListSnapshotBlocks",
+        "ebs:PutSnapshotBlock",
+        "ebs:StartSnapshot",
+    ]
+
+    # Find the build_instance_policy resource block
+    policy_resource_match = re.search(
+        r'resource\s+"aws_iam_policy"\s+"build_instance_policy".*?^}',
+        iam_content,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert policy_resource_match, "build_instance_policy resource must exist"
+    policy_block = policy_resource_match.group(0)
+
+    # Parse individual statement blocks from the policy
+    # Each statement is delimited by { ... } within the Statement array
+    statement_pattern = re.compile(
+        r'\{\s*\n\s*Sid\s*=.*?\n(?:.*?\n)*?\s*\}', re.DOTALL
+    )
+    statements = statement_pattern.findall(policy_block)
+    assert len(statements) > 0, "Policy must have at least one statement with Sid"
+
+    for stmt_text in statements:
+        # Extract actions from this statement
+        actions_match = re.findall(r'"((?:ec2|ebs):\w+)"', stmt_text)
+
+        # Extract Resource value
+        resource_match = re.search(r'Resource\s*=\s*"([^"]*)"', stmt_text)
+        resource = resource_match.group(1) if resource_match else ""
+
+        # Requirement 50.4: EC2 mutation actions must NOT use Resource = "*"
+        has_mutation_action = any(a in ec2_mutation_actions for a in actions_match)
+        if has_mutation_action:
+            assert resource != "*", (
+                f"EC2 mutation actions must NOT use Resource='*'. "
+                f"Actions: {actions_match}, Resource: {resource}"
+            )
+
+        # EBS actions must NOT use Resource = "*"
+        has_ebs_action = any(a in ebs_actions for a in actions_match)
+        if has_ebs_action:
+            assert resource != "*", (
+                f"EBS actions must NOT use Resource='*'. "
+                f"Actions: {actions_match}, Resource: {resource}"
+            )
+
+        # Requirement 50.1 & 50.2: Verify region scoping
+        has_ec2_or_ebs = any(
+            a.startswith("ec2:") or a.startswith("ebs:") for a in actions_match
+        )
+        if has_ec2_or_ebs:
+            resource_has_region = "aws_region.current.name" in resource
+            condition_has_region = "aws:RequestedRegion" in stmt_text
+            assert resource_has_region or condition_has_region, (
+                f"EC2/EBS statement must be scoped to region via ARN or condition key. "
+                f"Actions: {actions_match}"
+            )
+
+        # Requirement 50.3: Non-describe actions must have account scoping
+        describe_only = all("Describe" in a or "List" in a for a in actions_match)
+        if has_ec2_or_ebs and not describe_only:
+            resource_has_account = "aws_caller_identity.current.account_id" in resource
+            condition_has_account = "aws:ResourceAccount" in stmt_text
+            assert resource_has_account or condition_has_account, (
+                f"Non-describe EC2/EBS statement must be scoped to account. "
+                f"Actions: {actions_match}"
+            )
+
+    # Verify data sources exist for region and account lookups
+    data_file = terraform_dir / "data.tf"
+    assert data_file.exists(), "data.tf must exist"
+    data_content = data_file.read_text()
+
+    assert 'data "aws_caller_identity" "current"' in data_content, \
+        "aws_caller_identity data source must be defined for account scoping"
+    assert 'data "aws_region" "current"' in data_content, \
+        "aws_region data source must be defined for region scoping"
+

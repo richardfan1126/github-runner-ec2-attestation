@@ -27,23 +27,56 @@ resource "aws_iam_policy" "build_instance_policy" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "EC2ResourceLevelActions"
         Effect = "Allow"
         Action = [
           "ec2:CreateSnapshot",
           "ec2:DeleteSnapshot",
-          "ec2:DescribeSnapshots",
-          "ec2:DescribeSnapshotAttribute",
           "ec2:ModifySnapshotAttribute",
           "ec2:RegisterImage",
           "ec2:DeregisterImage",
-          "ec2:DescribeImages",
-          "ec2:DescribeImageAttribute",
-          "ec2:ModifyImageAttribute",
-          "ec2:CreateTags"
+          "ec2:ModifyImageAttribute"
         ]
-        Resource = "*"
+        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion"  = data.aws_region.current.name
+            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+          }
+        }
       },
       {
+        Sid    = "EC2DescribeActions"
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeSnapshots",
+          "ec2:DescribeSnapshotAttribute",
+          "ec2:DescribeImages",
+          "ec2:DescribeImageAttribute"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = data.aws_region.current.name
+          }
+        }
+      },
+      {
+        Sid    = "EC2CreateTags"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateTags"
+        ]
+        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion"  = data.aws_region.current.name
+            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+      {
+        Sid    = "EBSDirectAPIActions"
         Effect = "Allow"
         Action = [
           "ebs:CompleteSnapshot",
@@ -53,7 +86,13 @@ resource "aws_iam_policy" "build_instance_policy" {
           "ebs:PutSnapshotBlock",
           "ebs:StartSnapshot"
         ]
-        Resource = "*"
+        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:snapshot/*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion"  = data.aws_region.current.name
+            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+          }
+        }
       }
     ]
   })

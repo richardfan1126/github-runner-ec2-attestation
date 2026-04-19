@@ -2875,14 +2875,14 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 165: Systemd Service Hardening**
     - **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8**
 
-- [ ] 156. Implement AMI build IAM permission scoping
-  - [ ] 156.1 Update terraform/build-ami/iam.tf to scope permissions
+- [x] 156. Implement AMI build IAM permission scoping
+  - [x] 156.1 Update terraform/build-ami/iam.tf to scope permissions
     - Replace `Resource = "*"` with resource ARN patterns scoped to the specific region and account
     - Add `aws:RequestedRegion` or resource ARN region scoping condition keys
     - Add `aws:ResourceAccount` condition to restrict operations to the current account
     - _Requirements: 49.1, 49.2, 49.3, 49.4_
 
-  - [ ] 156.2 Write property test for AMI Build IAM Permission Scoping
+  - [x] 156.2 Write property test for AMI Build IAM Permission Scoping
     - **Property 166: AMI Build IAM Permission Scoping**
     - **Validates: Requirements 50.1, 50.2, 50.3, 50.4**
 
