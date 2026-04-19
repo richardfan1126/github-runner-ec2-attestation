@@ -4,7 +4,16 @@
 
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023.10.20260302.1
 
-# Install system dependencies with exact versions
+# Lock DNF to the specific AL2023 release matching the base image.
+# This ensures packages are resolved from the exact repository snapshot,
+# preventing silent drift when repos are updated upstream.
+RUN echo "2023.10.20260302" > /etc/dnf/vars/releasever
+
+# Install system dependencies.
+# DNF packages are installed without explicit NEVRA (Name-Epoch:Version-Release.Architecture)
+# version pinning because Amazon Linux 2023 DNF repositories do not guarantee availability
+# of specific package versions over time. The --releasever lock above mitigates this by
+# pinning to a specific repository snapshot.
 # See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/build-sample-ami.html
 RUN dnf install -y \
     kiwi-cli \

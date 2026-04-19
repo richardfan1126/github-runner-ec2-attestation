@@ -2886,20 +2886,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 166: AMI Build IAM Permission Scoping**
     - **Validates: Requirements 50.1, 50.2, 50.3, 50.4**
 
-- [ ] 157. Implement build environment pinning
-  - [ ] 157.1 Pin GitHub Actions runner to specific Ubuntu version
+- [x] 157. Implement build environment pinning
+  - [x] 157.1 Pin GitHub Actions runner to specific Ubuntu version
     - Change `ubuntu-latest` to a specific version (e.g., `ubuntu-24.04`) in `.github/workflows/build-attestable-image.yml`
     - _Requirements: 11.9_
 
-  - [ ] 157.2 Pin Build_Instance AMI to specific version
+  - [x] 157.2 Pin Build_Instance AMI to specific version
     - Change `most_recent = true` in `terraform/build-ami/data.tf` to use a specific AMI ID or name filter with a specific version
     - _Requirements: 11.10_
 
-  - [ ] 157.3 Add builder package documentation comments
+  - [x] 157.3 Add builder package documentation comments
     - Add comments to the Dockerfile about DNF package version limitations and why exact NEVRA pinning is not used
     - _Requirements: 11.11, 11.12_
 
-  - [ ] 157.4 Write property test for Build Environment Pinning
+  - [x] 157.4 Write property test for Build Environment Pinning
     - **Property 167: Build Environment Pinning**
     - **Validates: Requirements 11.9, 11.10**
 
