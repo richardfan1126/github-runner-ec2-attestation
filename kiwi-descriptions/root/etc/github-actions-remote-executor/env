@@ -14,7 +14,7 @@ RATE_LIMIT_PER_IP=100
 RATE_LIMIT_WINDOW_SECONDS=60
 
 # Storage Configuration
-TEMP_STORAGE_PATH=/tmp/gha-executor
+TEMP_STORAGE_PATH=/var/lib/gha-executor
 OUTPUT_RETENTION_HOURS=24
 
 # NitroTPM Configuration
