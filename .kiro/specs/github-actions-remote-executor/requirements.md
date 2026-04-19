@@ -968,11 +968,13 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 #### Acceptance Criteria
 
 1. THE systemd service unit for the github-actions-remote-executor SHALL set NoNewPrivileges to true
-2. THE systemd service unit SHALL set PrivateTmp to true
+2. THE systemd service unit SHALL NOT set PrivateTmp to true, because the service creates temporary directories under TEMP_STORAGE_PATH and bind-mounts them into Docker containers via the Docker daemon; PrivateTmp would place those directories in a private namespace invisible to the Docker daemon, causing all container bind mounts to fail
 3. THE systemd service unit SHALL set ProtectSystem to strict
 4. THE systemd service unit SHALL set ProtectHome to true
 5. THE systemd service unit SHALL set RestrictAddressFamilies to AF_INET AF_INET6 AF_UNIX AF_NETLINK
-6. THE systemd service unit SHALL set ReadWritePaths to include only the directories required for operation (temporary storage path and Docker socket path)
+6. THE systemd service unit SHALL set ReadWritePaths to include only the directories required for operation (TEMP_STORAGE_PATH and Docker socket path)
+7. THE TEMP_STORAGE_PATH configuration value SHALL be set to a path outside of /tmp (e.g. /var/lib/gha-executor) to avoid conflicts with PrivateTmp on other services and to ensure Docker bind mounts resolve correctly
+8. THE env configuration file SHALL set TEMP_STORAGE_PATH to /var/lib/gha-executor
 
 ### Requirement 50: AMI Build IAM Permission Scoping
 

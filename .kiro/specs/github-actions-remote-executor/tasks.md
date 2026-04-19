@@ -2860,16 +2860,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [ ] 155. Implement systemd service hardening
   - [ ] 155.1 Update kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service
     - Set `NoNewPrivileges=true`
-    - Set `PrivateTmp=true`
+    - Do NOT set `PrivateTmp=true` (leave as default false) — PrivateTmp would make TEMP_STORAGE_PATH invisible to the Docker daemon, breaking all container bind mounts
     - Set `ProtectSystem=strict`
     - Set `ProtectHome=true`
     - Set `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK`
-    - Set `ReadWritePaths=/tmp/github-actions-remote-executor /var/run/docker.sock`
-    - _Requirements: 48.1, 48.2, 48.3, 48.4, 48.5, 48.6_
+    - Set `ReadWritePaths=/var/lib/gha-executor /var/run/docker.sock`
+    - _Requirements: 49.1, 49.2, 49.3, 49.4, 49.5, 49.6_
 
-  - [ ] 155.2 Write property test for Systemd Service Hardening
+  - [ ] 155.2 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
+    - Change `TEMP_STORAGE_PATH` from `/tmp/gha-executor` to `/var/lib/gha-executor`
+    - _Requirements: 49.7, 49.8_
+
+  - [ ] 155.3 Write property test for Systemd Service Hardening
     - **Property 165: Systemd Service Hardening**
-    - **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6**
+    - **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8**
 
 - [ ] 156. Implement AMI build IAM permission scoping
   - [ ] 156.1 Update terraform/build-ami/iam.tf to scope permissions

@@ -1594,9 +1594,9 @@ class EncryptionContext:
 
 ### Property 165: Systemd Service Hardening
 
-*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set NoNewPrivileges=true, PrivateTmp=true, ProtectSystem=strict, ProtectHome=true, RestrictAddressFamilies, and ReadWritePaths.
+*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=true, RestrictAddressFamilies, and ReadWritePaths. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp).
 
-**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6**
+**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8**
 
 ### Property 166: AMI Build IAM Permission Scoping
 
@@ -1783,7 +1783,7 @@ The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/d
 - The configuration is baked into the KIWI image at `/etc/docker/daemon.json` so it cannot be modified at runtime (read-only root filesystem)
 - The expected Docker daemon security configuration is documented in code comments
 
-### Systemd Service Hardening (Requirement 48)
+### Systemd Service Hardening (Requirement 49)
 
 The systemd service unit for `github-actions-remote-executor` includes security hardening directives.
 
@@ -1791,20 +1791,24 @@ The systemd service unit for `github-actions-remote-executor` includes security 
 ```ini
 [Service]
 NoNewPrivileges=true
-PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-ReadWritePaths=/tmp/github-actions-remote-executor /var/run/docker.sock
+ReadWritePaths=/var/lib/gha-executor /var/run/docker.sock
 ```
 
 **Design Rationale:**
 - `NoNewPrivileges=true`: Prevents the service process and its children from gaining new privileges
-- `PrivateTmp=true`: Provides a private /tmp directory isolated from other services
+- `PrivateTmp` is intentionally NOT set to true: The service creates temporary directories under `TEMP_STORAGE_PATH` and passes those host paths to the Docker daemon as bind-mount sources. With `PrivateTmp=true`, systemd places the service's `/tmp` in a private namespace (e.g., `/tmp/systemd-private-xxx-.../tmp/`). The Docker daemon runs outside this namespace, so it cannot see the private paths — every container bind mount would fail with "path not found". To avoid this, `PrivateTmp` is left at its default (false), and `TEMP_STORAGE_PATH` is moved out of `/tmp` entirely to `/var/lib/gha-executor`
 - `ProtectSystem=strict`: Makes the entire filesystem read-only except for explicitly allowed paths
 - `ProtectHome=true`: Makes /home, /root, and /run/user inaccessible
 - `RestrictAddressFamilies`: Limits network socket types to IPv4, IPv6, Unix, and Netlink
-- `ReadWritePaths`: Allows write access only to the temporary storage path and Docker socket
+- `ReadWritePaths`: Allows write access only to `/var/lib/gha-executor` (temporary storage for repo clones and attestation temp files) and the Docker socket
+
+**TEMP_STORAGE_PATH Change:**
+- The `TEMP_STORAGE_PATH` environment variable is changed from `/tmp/gha-executor` to `/var/lib/gha-executor`
+- This path is outside `/tmp`, ensuring Docker bind mounts resolve correctly regardless of any `PrivateTmp` configuration
+- The `ReadWritePaths` directive in the systemd unit must match this path
 
 ### Debug Image Annotation and Production Gate (Requirement 45)
 
