@@ -2906,25 +2906,25 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 158. Checkpoint - Ensure all build/deploy security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 159. Write integration tests for security hardening changes
-  - [ ] 159.1 Write integration tests for OIDC repository binding end-to-end
+- [x] 159. Write integration tests for security hardening changes
+  - [x] 159.1 Write integration tests for OIDC repository binding end-to-end
     - Test /execute with matching repository claim and URL (success)
     - Test /execute with mismatched repository claim and URL (403)
     - Test /output with matching repository claim and execution record (success)
     - Test /output with mismatched repository claim and execution record (403)
     - _Requirements: 2.22, 2.23, 2.24, 6.14, 6.15, 6.16_
 
-  - [ ] 159.2 Write integration tests for anti-replay nonce validation
+  - [x] 159.2 Write integration tests for anti-replay nonce validation
     - Test /execute with unique nonce (success)
     - Test /execute with duplicate nonce (400)
     - Test /output with duplicate nonce (400)
     - _Requirements: 44.1, 44.2, 44.3, 44.5_
 
-  - [ ] 159.3 Write integration tests for concurrency enforcement
+  - [x] 159.3 Write integration tests for concurrency enforcement
     - Test that MAX_CONCURRENT_EXECUTIONS is enforced with 503
     - _Requirements: 8.11, 8.12_
 
-- [ ] 160. Final checkpoint - Ensure all security hardening tests pass
+- [x] 160. Final checkpoint - Ensure all security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
