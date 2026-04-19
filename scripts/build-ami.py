@@ -911,6 +911,7 @@ def validate_pcr_measurements(ssh_client: paramiko.SSHClient) -> dict:
 def verify_artifact_signature(
     ssh_client: paramiko.SSHClient,
     artifact_ref: str,
+    expected_workflow: Optional[str] = None,
 ) -> bool:
     """
     Verify artifact signature using gh attestation.
@@ -918,6 +919,8 @@ def verify_artifact_signature(
     Args:
         ssh_client: Connected paramiko SSHClient
         artifact_ref: GitHub Container Registry artifact reference
+        expected_workflow: Optional expected workflow file path for provenance verification.
+            When provided, the attestation's workflow identity is verified against this path.
     
     Returns:
         True if verification succeeds, False otherwise
@@ -959,13 +962,52 @@ def verify_artifact_signature(
         stream_output=True
     )
     
-    if exit_code == 0:
-        logger.info("✓ Artifact attestation verification SUCCEEDED")
-        return True
-    else:
+    if exit_code != 0:
         logger.error("✗ Artifact signature verification FAILED")
         logger.error(f"command output: {stderr}")
         return False
+
+    logger.info("✓ Artifact attestation verification SUCCEEDED")
+
+    # Workflow identity verification (Requirement 47.1-47.4)
+    if expected_workflow is not None:
+        logger.info(f"Verifying workflow identity against expected: {expected_workflow}")
+
+        # Extract workflow identity from the attestation bundle's DSSE envelope payload
+        workflow_extract_cmd = (
+            "cat bundle.json"
+            " | jq -r '.dsseEnvelope.payload'"
+            " | base64 -d"
+            " | jq -r '.predicate.invocation.configSource.entryPoint'"
+        )
+
+        wf_exit_code, wf_stdout, wf_stderr = execute_remote_command(
+            ssh_client,
+            workflow_extract_cmd,
+            stream_output=False
+        )
+
+        if wf_exit_code != 0:
+            logger.error("✗ Failed to extract workflow identity from attestation bundle")
+            logger.error(f"command output: {wf_stderr}")
+            return False
+
+        actual_workflow = wf_stdout.strip()
+        logger.info(f"Attestation workflow identity: {actual_workflow}")
+
+        # Compare: the expected workflow path should appear as a suffix/substring
+        # in the attestation's workflow reference
+        if expected_workflow not in actual_workflow:
+            logger.error("✗ WORKFLOW IDENTITY MISMATCH")
+            logger.error(f"  Expected workflow: {expected_workflow}")
+            logger.error(f"  Actual workflow:   {actual_workflow}")
+            return False
+
+        logger.info("✓ Workflow identity verification SUCCEEDED")
+    else:
+        logger.info("Skipping workflow identity verification (--expected-workflow not provided)")
+
+    return True
 
 def upload_snapshot(ssh_client: paramiko.SSHClient, region: str) -> str:
     """
@@ -1271,6 +1313,15 @@ def parse_arguments() -> argparse.Namespace:
         help='Allow building AMI from debug (SSH-enabled) artifacts. '
              'Without this flag, debug artifacts are rejected.'
     )
+
+    parser.add_argument(
+        '--expected-workflow',
+        type=str,
+        default=None,
+        help='Expected workflow file path for provenance verification '
+             '(e.g., .github/workflows/build-attestable-image.yml). '
+             'When provided, the attestation workflow identity is verified against this path.'
+    )
     
     return parser.parse_args()
 
@@ -1350,7 +1401,8 @@ def main() -> int:
         
         signature_valid = verify_artifact_signature(
             ssh_client,
-            args.artifact_ref
+            args.artifact_ref,
+            expected_workflow=args.expected_workflow
         )
 
         if not signature_valid:

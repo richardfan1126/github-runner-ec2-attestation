@@ -2834,15 +2834,15 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Property 162: Debug Image Production Gate**
     - **Validates: Requirements 46.3, 46.4, 46.5**
 
-- [ ] 153. Implement artifact provenance workflow verification
-  - [ ] 153.1 Add --expected-workflow CLI arg to scripts/build-ami.py
+- [x] 153. Implement artifact provenance workflow verification
+  - [x] 153.1 Add --expected-workflow CLI arg to scripts/build-ami.py
     - Add optional `--expected-workflow` argument specifying the expected workflow file path
     - When provided, after downloading the attestation bundle, extract the workflow identity and compare
     - If mismatch, terminate with an error indicating workflow mismatch
     - When not provided, skip workflow identity verification
     - _Requirements: 46.1, 46.2, 46.3, 46.4_
 
-  - [ ] 153.2 Write property test for Artifact Provenance Workflow Verification
+  - [x] 153.2 Write property test for Artifact Provenance Workflow Verification
     - **Property 163: Artifact Provenance Workflow Verification**
     - **Validates: Requirements 47.1, 47.2, 47.3, 47.4**
 
