@@ -490,8 +490,8 @@ def install_oras(ssh_client: paramiko.SSHClient) -> None:
     oras_version = "1.3.0"
     
     # Expected SHA-256 checksum for oras_1.3.0_linux_amd64.tar.gz
-    # TODO: Update with the real checksum from the ORAS v1.3.0 GitHub release
-    ORAS_SHA256_CHECKSUM = "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6"
+    # Source: https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_checksums.txt
+    ORAS_SHA256_CHECKSUM = "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64"
     
     # Download ORAS archive
     download_cmd = f"""
