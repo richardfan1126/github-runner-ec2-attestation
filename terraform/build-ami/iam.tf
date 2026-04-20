@@ -37,11 +37,14 @@ resource "aws_iam_policy" "build_instance_policy" {
           "ec2:DeregisterImage",
           "ec2:ModifyImageAttribute"
         ]
-        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = [
+          "arn:aws:ec2:${data.aws_region.current.name}::snapshot/*",
+          "arn:aws:ec2:${data.aws_region.current.name}::image/*",
+          "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*"
+        ]
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion"  = data.aws_region.current.name
-            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+            "aws:RequestedRegion" = data.aws_region.current.name
           }
         }
       },
@@ -67,11 +70,14 @@ resource "aws_iam_policy" "build_instance_policy" {
         Action = [
           "ec2:CreateTags"
         ]
-        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = [
+          "arn:aws:ec2:${data.aws_region.current.name}::snapshot/*",
+          "arn:aws:ec2:${data.aws_region.current.name}::image/*",
+          "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:volume/*"
+        ]
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion"  = data.aws_region.current.name
-            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+            "aws:RequestedRegion" = data.aws_region.current.name
           }
         }
       },
@@ -86,11 +92,10 @@ resource "aws_iam_policy" "build_instance_policy" {
           "ebs:PutSnapshotBlock",
           "ebs:StartSnapshot"
         ]
-        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:snapshot/*"
+        Resource = "arn:aws:ec2:${data.aws_region.current.name}::snapshot/*"
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion"  = data.aws_region.current.name
-            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+            "aws:RequestedRegion" = data.aws_region.current.name
           }
         }
       }
