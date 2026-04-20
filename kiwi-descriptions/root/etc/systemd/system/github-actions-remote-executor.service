@@ -20,7 +20,7 @@ ProtectHome=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 StateDirectory=gha-executor
 LogsDirectory=github-actions-executor
-ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/docker.sock
+ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/docker.sock /tmp
 
 [Install]
 WantedBy=multi-user.target
