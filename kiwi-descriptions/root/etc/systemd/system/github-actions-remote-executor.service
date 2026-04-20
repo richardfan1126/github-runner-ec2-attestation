@@ -18,7 +18,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-ReadWritePaths=/var/lib/gha-executor /var/run/docker.sock
+StateDirectory=gha-executor
+LogsDirectory=github-actions-executor
+ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/docker.sock
 
 [Install]
 WantedBy=multi-user.target
