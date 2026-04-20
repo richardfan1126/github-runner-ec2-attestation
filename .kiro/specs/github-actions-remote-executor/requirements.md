@@ -404,7 +404,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE AMI_Converter SHALL wait for instance status checks to pass using EC2 waiter
 13. THE AMI_Converter SHALL save the SSH private key to a temporary file with 600 permissions
 14. IF instance provisioning fails, THEN THE AMI_Converter SHALL fail with a descriptive error
-15. THE AMI_Converter SHALL validate the artifact_ref argument against a strict allowlist pattern matching `^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`
+15. THE AMI_Converter SHALL validate the artifact_ref argument against a strict allowlist pattern matching `^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*:[a-zA-Z0-9._-]+$` (supporting ghcr.io/owner/repo/package:tag format with optional additional path segments)
 16. IF artifact_ref contains characters outside the allowlist, THEN reject and terminate before executing any remote commands
 
 ### Requirement 16: SSH Connectivity Verification

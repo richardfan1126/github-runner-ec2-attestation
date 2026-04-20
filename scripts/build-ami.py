@@ -51,8 +51,11 @@ def validate_artifact_reference(artifact_ref: str) -> None:
     """
     Validate artifact reference format against a strict allowlist pattern.
 
-    Expected format: ghcr.io/owner/repo:tag where owner, repo, and tag
-    contain only alphanumeric characters, dots, hyphens, and underscores.
+    Expected format: ghcr.io/owner/repo/package:tag where each path segment
+    and the tag contain only alphanumeric characters, dots, hyphens, and
+    underscores. At least two path segments (owner/repo) are required; an
+    optional third segment (package name) is also supported, matching the
+    GHCR package naming convention ghcr.io/<owner>/<repo>/<package>:<tag>.
 
     Args:
         artifact_ref: GitHub Container Registry artifact reference
@@ -61,11 +64,11 @@ def validate_artifact_reference(artifact_ref: str) -> None:
         ValueError: If artifact reference format is invalid or contains
                     characters outside the allowlist
     """
-    pattern = r'^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$'
+    pattern = r'^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*:[a-zA-Z0-9._-]+$'
     if not re.match(pattern, artifact_ref):
         raise ValueError(
             f"Invalid artifact reference format: {artifact_ref}. "
-            "Expected format: ghcr.io/owner/repo:tag "
+            "Expected format: ghcr.io/owner/repo/package:tag "
             "(only alphanumeric, dots, hyphens, and underscores allowed)"
         )
 

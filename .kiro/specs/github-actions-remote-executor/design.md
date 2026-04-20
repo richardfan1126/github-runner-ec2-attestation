@@ -2147,7 +2147,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Provides attestation ID and verification URL
 
 **AMI_Converter (Python Script)**
-- Validates artifact_ref against a strict regex allowlist (`^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`) before any shell interpolation; rejects and terminates if invalid
+- Validates artifact_ref against a strict regex allowlist (`^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*:[a-zA-Z0-9._-]+$`, supporting ghcr.io/owner/repo/package:tag format) before any shell interpolation; rejects and terminates if invalid
 - Provisions temporary EC2 build instance using Terraform
 - Detects user's public IP for SSH access configuration (via checkip.amazonaws.com)
 - Manages SSH connectivity with keepalive (30-second intervals) using paramiko
