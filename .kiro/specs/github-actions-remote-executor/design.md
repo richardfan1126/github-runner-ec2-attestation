@@ -1582,25 +1582,25 @@ class EncryptionContext:
 
 ### Property 163: Artifact Provenance Workflow Verification
 
-*For any* AMI conversion where --expected-workflow is provided, the Signature_Verifier should verify the attestation's workflow identity matches the expected workflow path. If it does not match, the converter should terminate with an error.
+*For any* AMI conversion where --expected-workflow is provided, the Signature_Verifier should run `gh attestation verify --format json` (without GH_FORCE_TTY) to produce machine-readable output, extract the workflow identity from the certificate's SubjectAlternativeName (SAN) field using `jq -r '.[0].verificationResult.signature.certificate.subjectAlternativeName'`, and verify the expected workflow path appears as a substring of the SAN. If it does not match, the converter should terminate with an error.
 
-**Validates: Requirements 47.1, 47.2, 47.3, 47.4**
+**Validates: Requirements 47.1, 47.2, 47.3, 47.4, 47.5, 47.6, 47.7, 47.8**
 
 ### Property 164: Docker Daemon Security Configuration
 
-*For any* KIWI image build, the image should include a daemon.json at /etc/docker/daemon.json with user-namespace remapping and a restrictive seccomp profile.
+*For any* KIWI image build, the image should include a daemon.json at /etc/docker/daemon.json with `no-new-privileges` set to true and `live-restore` set to false.
 
-**Validates: Requirements 48.1, 48.2, 48.3**
+**Validates: Requirements 48.1, 48.2, 48.3, 48.4**
 
 ### Property 165: Systemd Service Hardening
 
-*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=true, RestrictAddressFamilies, and ReadWritePaths. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp).
+*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=true, RestrictAddressFamilies, StateDirectory=gha-executor, LogsDirectory=github-actions-executor, and ReadWritePaths including /var/lib/gha-executor, /var/log/github-actions-executor, /var/run/docker.sock, and /tmp. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp).
 
-**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8**
+**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10**
 
 ### Property 166: AMI Build IAM Permission Scoping
 
-*For any* Terraform IAM policy for the Build_Instance, EC2 and EBS permissions should be scoped to the specific AWS region and account using resource ARN patterns or condition keys, and should NOT use Resource="*" for EC2 snapshot and image operations.
+*For any* Terraform IAM policy for the Build_Instance, EC2 and EBS permissions should use explicit resource ARN patterns scoped to the build region (snapshot, image, and volume ARNs) with an `aws:RequestedRegion` condition, and should NOT use Resource="*" for EC2 snapshot and image operations.
 
 **Validates: Requirements 50.1, 50.2, 50.3, 50.4**
 
@@ -1770,16 +1770,15 @@ The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/d
 **daemon.json Configuration:**
 ```json
 {
-  "userns-remap": "default",
-  "seccomp-profile": "/etc/docker/seccomp-default.json",
   "no-new-privileges": true,
   "live-restore": false
 }
 ```
 
 **Design Rationale:**
-- User-namespace remapping isolates container root from host root, reducing the impact of container breakouts
-- A restrictive seccomp profile limits the system calls available to containers
+- `no-new-privileges`: Prevents privilege escalation via setuid/setgid binaries inside containers
+- `live-restore: false`: Ensures containers stop when the daemon restarts, preventing orphaned containers from persisting across daemon restarts
+- `userns-remap` and `seccomp-profile` were removed because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) that is not present in the KIWI image; the per-container security constraints (cap_drop=ALL, no-new-privileges, read-only root filesystem, network disabled) provide the primary isolation layer
 - The configuration is baked into the KIWI image at `/etc/docker/daemon.json` so it cannot be modified at runtime (read-only root filesystem)
 - The expected Docker daemon security configuration is documented in code comments
 
@@ -1794,7 +1793,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-ReadWritePaths=/var/lib/gha-executor /var/run/docker.sock
+StateDirectory=gha-executor
+LogsDirectory=github-actions-executor
+ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/docker.sock /tmp
 ```
 
 **Design Rationale:**
@@ -1803,12 +1804,14 @@ ReadWritePaths=/var/lib/gha-executor /var/run/docker.sock
 - `ProtectSystem=strict`: Makes the entire filesystem read-only except for explicitly allowed paths
 - `ProtectHome=true`: Makes /home, /root, and /run/user inaccessible
 - `RestrictAddressFamilies`: Limits network socket types to IPv4, IPv6, Unix, and Netlink
-- `ReadWritePaths`: Allows write access only to `/var/lib/gha-executor` (temporary storage for repo clones and attestation temp files) and the Docker socket
+- `StateDirectory=gha-executor`: Instructs systemd to create and manage `/var/lib/gha-executor` with correct ownership; this is the preferred way to declare persistent state directories under `ProtectSystem=strict`
+- `LogsDirectory=github-actions-executor`: Instructs systemd to create and manage `/var/log/github-actions-executor` for service log files
+- `ReadWritePaths`: Allows write access to `/var/lib/gha-executor` (temporary storage for repo clones and attestation temp files), `/var/log/github-actions-executor` (log files), the Docker socket, and `/tmp` (needed for Python's `tempfile` module and other transient operations)
 
 **TEMP_STORAGE_PATH Change:**
 - The `TEMP_STORAGE_PATH` environment variable is changed from `/tmp/gha-executor` to `/var/lib/gha-executor`
 - This path is outside `/tmp`, ensuring Docker bind mounts resolve correctly regardless of any `PrivateTmp` configuration
-- The `ReadWritePaths` directive in the systemd unit must match this path
+- The `StateDirectory` directive in the systemd unit manages this path, and `ReadWritePaths` explicitly allows writes to it
 
 ### Debug Image Annotation and Production Gate (Requirement 45)
 
@@ -1830,19 +1833,27 @@ The AMI converter optionally verifies the producing workflow identity in the att
 
 **Design:**
 - The AMI_Converter accepts an optional `--expected-workflow` CLI argument
-- When provided, after downloading the attestation bundle, the Signature_Verifier extracts the workflow identity from the attestation and compares it against the expected workflow path
-- If the workflow identity does not match, the converter terminates with an error
+- When provided, after verifying the attestation, the Signature_Verifier runs `gh attestation verify` with `--format json` (without GH_FORCE_TTY, which would inject ANSI codes that break jq parsing) and saves the output to `attestation_result.json`
+- The Signature_Verifier also runs `gh attestation verify` with GH_FORCE_TTY=1 (without --format json) separately to produce human-readable output for logging
+- The workflow identity is extracted from the certificate's SubjectAlternativeName (SAN) field using `jq -r '.[0].verificationResult.signature.certificate.subjectAlternativeName' attestation_result.json`
+- The SAN is populated directly from GitHub's OIDC token and cannot be forged by the workflow that produced the attestation; its format is `https://github.com/<owner>/<repo>/<path/to/workflow.yml>@refs/...`
+- If the expected workflow path appears as a substring of the SAN, the identity check passes
+- If the SAN does not contain the expected workflow path, the converter terminates with an error
 - When not provided, workflow identity verification is skipped
 
 ### AMI Build IAM Permission Scoping (Requirement 49)
 
-The Terraform IAM policy for the Build_Instance scopes EC2 and EBS permissions to the specific region and account.
+The Terraform IAM policy for the Build_Instance scopes EC2 and EBS permissions to the specific region.
 
 **Design:**
-- Resource ARN patterns include the specific region and account ID
-- Condition keys `aws:RequestedRegion` and `aws:ResourceAccount` restrict operations
+- Resource ARN patterns use explicit resource-type paths scoped to the build region:
+  - Snapshots: `arn:aws:ec2:{region}::snapshot/*`
+  - Images: `arn:aws:ec2:{region}::image/*`
+  - Volumes: `arn:aws:ec2:{region}:{account}:volume/*`
+- The `aws:RequestedRegion` condition key restricts all operations to the build region
+- The `aws:ResourceAccount` condition is not used because snapshot and image ARNs in AWS do not include an account ID segment (they use the `::` double-colon format), making account-level scoping via ARN patterns impractical for those resource types; region scoping via ARN and `aws:RequestedRegion` provides the primary blast-radius reduction
 - No `Resource = "*"` is used for EC2 snapshot and image operations
-- This limits the blast radius of build instance compromise to only the resources in the build region/account
+- This limits the blast radius of build instance compromise to only the resources in the build region
 
 ## Testing Strategy
 

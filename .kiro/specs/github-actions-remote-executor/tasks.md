@@ -2837,25 +2837,27 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 153. Implement artifact provenance workflow verification
   - [x] 153.1 Add --expected-workflow CLI arg to scripts/build-ami.py
     - Add optional `--expected-workflow` argument specifying the expected workflow file path
-    - When provided, after downloading the attestation bundle, extract the workflow identity and compare
-    - If mismatch, terminate with an error indicating workflow mismatch
+    - When provided, run `gh attestation verify --format json` (without GH_FORCE_TTY) and save to attestation_result.json
+    - Also run `gh attestation verify` with GH_FORCE_TTY=1 (without --format json) separately for human-readable logging
+    - Extract workflow identity from certificate's SubjectAlternativeName (SAN) using `jq -r '.[0].verificationResult.signature.certificate.subjectAlternativeName' attestation_result.json`
+    - Verify expected workflow path appears as substring of SAN; if mismatch, terminate with error
     - When not provided, skip workflow identity verification
-    - _Requirements: 46.1, 46.2, 46.3, 46.4_
+    - _Requirements: 47.1, 47.2, 47.3, 47.4, 47.5, 47.6, 47.7, 47.8_
 
   - [x] 153.2 Write property test for Artifact Provenance Workflow Verification
     - **Property 163: Artifact Provenance Workflow Verification**
-    - **Validates: Requirements 47.1, 47.2, 47.3, 47.4**
+    - **Validates: Requirements 47.1, 47.2, 47.3, 47.4, 47.5, 47.6, 47.7, 47.8**
 
 - [x] 154. Implement Docker daemon security configuration
   - [x] 154.1 Add daemon.json to KIWI image
-    - Create `kiwi-descriptions/root/etc/docker/daemon.json` with user-namespace remapping and restrictive seccomp profile
-    - Include `"userns-remap": "default"`, `"no-new-privileges": true`, and seccomp profile reference
-    - Add code comments documenting the expected Docker daemon security configuration
-    - _Requirements: 47.1, 47.2, 47.3, 47.4_
+    - Create `kiwi-descriptions/root/etc/docker/daemon.json` with `no-new-privileges: true` and `live-restore: false`
+    - Remove `userns-remap` and `seccomp-profile` settings (require additional OS-level configuration not present in KIWI image)
+    - Add code comments documenting the expected Docker daemon security configuration and rationale for removed settings
+    - _Requirements: 48.1, 48.2, 48.3, 48.4_
 
   - [x] 154.2 Write property test for Docker Daemon Security Configuration
     - **Property 164: Docker Daemon Security Configuration**
-    - **Validates: Requirements 48.1, 48.2, 48.3**
+    - **Validates: Requirements 48.1, 48.2, 48.3, 48.4**
 
 - [x] 155. Implement systemd service hardening
   - [x] 155.1 Update kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service
@@ -2864,8 +2866,10 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Set `ProtectSystem=strict`
     - Set `ProtectHome=true`
     - Set `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK`
-    - Set `ReadWritePaths=/var/lib/gha-executor /var/run/docker.sock`
-    - _Requirements: 49.1, 49.2, 49.3, 49.4, 49.5, 49.6_
+    - Set `StateDirectory=gha-executor` (systemd creates and manages /var/lib/gha-executor)
+    - Set `LogsDirectory=github-actions-executor` (systemd creates and manages /var/log/github-actions-executor)
+    - Set `ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/docker.sock /tmp`
+    - _Requirements: 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10_
 
   - [x] 155.2 Update kiwi-descriptions/root/etc/github-actions-remote-executor/env
     - Change `TEMP_STORAGE_PATH` from `/tmp/gha-executor` to `/var/lib/gha-executor`
@@ -2873,14 +2877,15 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
   - [x] 155.3 Write property test for Systemd Service Hardening
     - **Property 165: Systemd Service Hardening**
-    - **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8**
+    - **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10**
 
 - [x] 156. Implement AMI build IAM permission scoping
   - [x] 156.1 Update terraform/build-ami/iam.tf to scope permissions
-    - Replace `Resource = "*"` with resource ARN patterns scoped to the specific region and account
-    - Add `aws:RequestedRegion` or resource ARN region scoping condition keys
-    - Add `aws:ResourceAccount` condition to restrict operations to the current account
-    - _Requirements: 49.1, 49.2, 49.3, 49.4_
+    - Replace `Resource = "*"` with explicit resource ARN patterns scoped to the build region
+    - Use `arn:aws:ec2:{region}::snapshot/*`, `arn:aws:ec2:{region}::image/*`, and `arn:aws:ec2:{region}:{account}:volume/*`
+    - Add `aws:RequestedRegion` condition key to restrict operations to the build region
+    - Remove `aws:ResourceAccount` condition (snapshot/image ARNs use `::` format without account ID)
+    - _Requirements: 50.1, 50.2, 50.3, 50.4_
 
   - [x] 156.2 Write property test for AMI Build IAM Permission Scoping
     - **Property 166: AMI Build IAM Permission Scoping**

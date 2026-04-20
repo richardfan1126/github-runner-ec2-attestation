@@ -942,9 +942,13 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 #### Acceptance Criteria
 
 1. THE AMI_Converter SHALL accept an optional --expected-workflow CLI argument specifying the expected workflow file path
-2. WHEN --expected-workflow is provided, THE Signature_Verifier SHALL verify that the attestation's workflow identity matches the expected workflow path
-3. IF the attestation's workflow identity does not match the expected workflow, THEN THE AMI_Converter SHALL terminate with an error indicating workflow mismatch
-4. WHEN --expected-workflow is not provided, THE Signature_Verifier SHALL skip workflow identity verification
+2. WHEN --expected-workflow is provided, THE Signature_Verifier SHALL run `gh attestation verify` with `--format json` to produce machine-readable output, then extract the workflow identity from the certificate's SubjectAlternativeName (SAN) field in the JSON result
+3. THE Signature_Verifier SHALL extract the SAN using `jq -r '.[0].verificationResult.signature.certificate.subjectAlternativeName' attestation_result.json`; the SAN is populated directly from GitHub's OIDC token and cannot be forged by the workflow that produced the attestation
+4. IF the extracted SAN contains the expected workflow path as a substring, THE Signature_Verifier SHALL consider the workflow identity verified
+5. IF the SAN does not contain the expected workflow path, THEN THE AMI_Converter SHALL terminate with an error indicating workflow mismatch
+6. THE Signature_Verifier SHALL NOT set GH_FORCE_TTY when running `gh attestation verify --format json`, because ANSI escape codes injected by GH_FORCE_TTY break jq parsing of the JSON output
+7. THE Signature_Verifier SHALL separately run `gh attestation verify` with GH_FORCE_TTY=1 (without --format json) to produce human-readable output for logging purposes
+8. WHEN --expected-workflow is not provided, THE Signature_Verifier SHALL skip workflow identity verification
 
 ### Requirement 48: Docker Daemon Security Configuration
 
@@ -955,8 +959,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 #### Acceptance Criteria
 
 1. THE KIWI image SHALL include a daemon.json configuration file for the Docker daemon at /etc/docker/daemon.json
-2. THE daemon.json SHALL enable user-namespace remapping to isolate container root from host root
-3. THE daemon.json SHALL set a restrictive default seccomp profile
+2. THE daemon.json SHALL set `no-new-privileges` to true to prevent privilege escalation via setuid/setgid
+3. THE daemon.json SHALL set `live-restore` to false to ensure containers stop when the daemon restarts
 4. THE KIWI image build SHALL document the expected Docker daemon security configuration in code comments
 
 ### Requirement 49: Systemd Service Hardening
@@ -972,9 +976,11 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 3. THE systemd service unit SHALL set ProtectSystem to strict
 4. THE systemd service unit SHALL set ProtectHome to true
 5. THE systemd service unit SHALL set RestrictAddressFamilies to AF_INET AF_INET6 AF_UNIX AF_NETLINK
-6. THE systemd service unit SHALL set ReadWritePaths to include only the directories required for operation (TEMP_STORAGE_PATH and Docker socket path)
-7. THE TEMP_STORAGE_PATH configuration value SHALL be set to a path outside of /tmp (e.g. /var/lib/gha-executor) to avoid conflicts with PrivateTmp on other services and to ensure Docker bind mounts resolve correctly
-8. THE env configuration file SHALL set TEMP_STORAGE_PATH to /var/lib/gha-executor
+6. THE systemd service unit SHALL set StateDirectory to gha-executor so systemd creates and manages /var/lib/gha-executor
+7. THE systemd service unit SHALL set LogsDirectory to github-actions-executor so systemd creates and manages /var/log/github-actions-executor
+8. THE systemd service unit SHALL set ReadWritePaths to include /var/lib/gha-executor, /var/log/github-actions-executor, /var/run/docker.sock, and /tmp
+9. THE TEMP_STORAGE_PATH configuration value SHALL be set to a path outside of /tmp (e.g. /var/lib/gha-executor) to avoid conflicts with PrivateTmp on other services and to ensure Docker bind mounts resolve correctly
+10. THE env configuration file SHALL set TEMP_STORAGE_PATH to /var/lib/gha-executor
 
 ### Requirement 50: AMI Build IAM Permission Scoping
 
@@ -984,7 +990,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 #### Acceptance Criteria
 
-1. THE Terraform IAM policy for the Build_Instance SHALL scope EC2 and EBS permissions to the specific AWS region and account using resource ARN patterns or condition keys
-2. THE IAM policy SHALL use aws:RequestedRegion or resource ARN region scoping to restrict operations to the build region
-3. THE IAM policy SHALL use aws:ResourceAccount condition to restrict operations to the current account
+1. THE Terraform IAM policy for the Build_Instance SHALL scope EC2 and EBS permissions to the specific AWS region using resource ARN patterns
+2. THE IAM policy SHALL use explicit resource ARN patterns for snapshots (`arn:aws:ec2:{region}::snapshot/*`), images (`arn:aws:ec2:{region}::image/*`), and volumes (`arn:aws:ec2:{region}:{account}:volume/*`) instead of a wildcard resource
+3. THE IAM policy SHALL use `aws:RequestedRegion` condition key to restrict operations to the build region
 4. THE IAM policy SHALL NOT use Resource = "*" for EC2 snapshot and image operations
