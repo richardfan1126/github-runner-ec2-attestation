@@ -952,7 +952,14 @@ def verify_artifact_signature(
     curl -sL "https://api.github.com/repos/{owner}/{repo}/attestations/sha256:${{DIGEST}}" \
         | jq -cr '.attestations[0].bundle' > bundle.json
 
-    # Offline attestation verify
+    # Offline attestation verify with JSON output for policy enforcement
+    # Do NOT set GH_FORCE_TTY here — it injects ANSI escape codes that break jq parsing
+    gh attestation verify oci://{artifact_ref} \
+        -R {identity} \
+        -b bundle.json \
+        --format json > attestation_result.json
+
+    # Also print human-readable output for logging
     # Set GH_FORCE_TTY=1 to force gh outputting result
     GH_FORCE_TTY=1 gh attestation verify oci://{artifact_ref} \
         -R {identity} \
@@ -976,12 +983,13 @@ def verify_artifact_signature(
     if expected_workflow is not None:
         logger.info(f"Verifying workflow identity against expected: {expected_workflow}")
 
-        # Extract workflow identity from the attestation bundle's DSSE envelope payload
+        # Extract workflow identity from the certificate's SubjectAlternativeName (SAN).
+        # The SAN is populated directly from GitHub's OIDC token and cannot be forged
+        # by the workflow that produced the attestation, unlike the predicate payload.
+        # SAN format: https://github.com/<owner>/<repo>/<path/to/workflow.yml>@refs/...
         workflow_extract_cmd = (
-            "cat bundle.json"
-            " | jq -r '.dsseEnvelope.payload'"
-            " | base64 -d"
-            " | jq -r '.predicate.invocation.configSource.entryPoint'"
+            "jq -r '.[0].verificationResult.signature.certificate.subjectAlternativeName'"
+            " attestation_result.json"
         )
 
         wf_exit_code, wf_stdout, wf_stderr = execute_remote_command(
@@ -991,15 +999,16 @@ def verify_artifact_signature(
         )
 
         if wf_exit_code != 0:
-            logger.error("✗ Failed to extract workflow identity from attestation bundle")
+            logger.error("✗ Failed to extract workflow identity from attestation result")
             logger.error(f"command output: {wf_stderr}")
             return False
 
         actual_workflow = wf_stdout.strip()
         logger.info(f"Attestation workflow identity: {actual_workflow}")
 
-        # Compare: the expected workflow path should appear as a suffix/substring
-        # in the attestation's workflow reference
+        # Compare: the expected workflow path should appear as a substring
+        # of the SAN URL (e.g. ".github/workflows/build.yml" within
+        # "https://github.com/owner/repo/.github/workflows/build.yml@refs/heads/main")
         if expected_workflow not in actual_workflow:
             logger.error("✗ WORKFLOW IDENTITY MISMATCH")
             logger.error(f"  Expected workflow: {expected_workflow}")
