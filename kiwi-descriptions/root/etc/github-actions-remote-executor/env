@@ -21,7 +21,7 @@ OUTPUT_RETENTION_HOURS=24
 TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest
 
 # OIDC Authentication Configuration
-ALLOWED_REPOSITORIES=richardfan1126/github-runner-ec2-attestation
+ALLOWED_REPOSITORIES=richardfan1126/github-runner-ec2-attestation-caller
 EXPECTED_AUDIENCE=test-workflow
 
 # Container Execution Configuration
