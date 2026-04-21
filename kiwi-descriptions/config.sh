@@ -56,6 +56,23 @@ else
 fi
 
 ################################
+# Harden Console / Login Access#
+################################
+
+# Lock the root account so it cannot be used for password-based login,
+# even if a console or serial interface were somehow accessible.
+echo "Locking root account..."
+passwd -l root
+echo "✓ Root account locked"
+
+# Mask the serial getty so no login prompt is ever spawned on ttyS0.
+# The serial console is still active for read-only log output (console=ttyS0
+# in the kernel cmdline), but masking the unit prevents interactive login.
+echo "Masking serial-getty@ttyS0.service..."
+systemctl mask serial-getty@ttyS0.service
+echo "✓ serial-getty@ttyS0.service masked"
+
+################################
 # Install Python Dependencies  #
 ################################
 echo "=== Installing Python Dependencies ==="

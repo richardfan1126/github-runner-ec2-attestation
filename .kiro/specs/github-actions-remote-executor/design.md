@@ -1598,6 +1598,12 @@ class EncryptionContext:
 
 **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10**
 
+### Property 168: Host Login Access Hardening
+
+*For any* KIWI image build (production or debug), the `config.sh` script should lock the root account via `passwd -l root` and mask `serial-getty@ttyS0.service` via `systemctl mask`, unconditionally and outside the `ENABLE_SSH` conditional block. When SSH debug access is enabled, the `ec2-user` account should remain unaffected by the root lock, and SSH connectivity over the network should be unaffected by the serial getty mask.
+
+**Validates: Requirements 51.1, 51.2, 51.3, 51.4**
+
 ### Property 166: AMI Build IAM Permission Scoping
 
 *For any* Terraform IAM policy for the Build_Instance, EC2 and EBS permissions should use explicit resource ARN patterns scoped to the build region (snapshot, image, and volume ARNs) with an `aws:RequestedRegion` condition, and should NOT use Resource="*" for EC2 snapshot and image operations.
@@ -1812,6 +1818,20 @@ ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/d
 - The `TEMP_STORAGE_PATH` environment variable is changed from `/tmp/gha-executor` to `/var/lib/gha-executor`
 - This path is outside `/tmp`, ensuring Docker bind mounts resolve correctly regardless of any `PrivateTmp` configuration
 - The `StateDirectory` directive in the systemd unit manages this path, and `ReadWritePaths` explicitly allows writes to it
+
+### Host Login Access Hardening (Requirement 51)
+
+The KIWI image `config.sh` script unconditionally locks the root account and masks the serial console login prompt during image creation, regardless of whether SSH debug access is enabled.
+
+**Design:**
+- `passwd -l root` is called unconditionally in `config.sh`, outside the `ENABLE_SSH` conditional block, so it applies to every image build (production and debug)
+- `systemctl mask serial-getty@ttyS0.service` is called unconditionally in `config.sh` for the same reason
+
+**Design Rationale:**
+- **Root account lock**: The KIWI image has no password set for root by default, but locking the account explicitly (`passwd -l`) prevents any future password-based login attempt from succeeding, even if a console or out-of-band access path were somehow reachable. This is a defence-in-depth measure on top of the `<ignore name="openssh-server"/>` directive.
+- **Serial getty mask**: The kernel cmdline includes `console=ttyS0` so that boot logs and service output are visible via the EC2 serial console (read-only in AWS). Without masking the getty unit, systemd would spawn a login prompt on that same tty. Masking `serial-getty@ttyS0.service` prevents the interactive login prompt while leaving the console available for log streaming.
+- **No impact on SSH debug access**: The debug flow uses `ec2-user` (created by `useradd` in the `ENABLE_SSH` block) with key-based auth via cloud-init. `passwd -l root` only locks the root account; `ec2-user` is unaffected. `systemctl mask serial-getty@ttyS0.service` only blocks a login prompt on the serial console; SSH listens on the network via `sshd` and is completely unrelated.
+- **Baked into the read-only erofs layer**: Because these commands run during `config.sh` (the KIWI image preparation phase), the resulting state is baked into the read-only erofs base layer and cannot be modified at runtime.
 
 ### Debug Image Annotation and Production Gate (Requirement 45)
 

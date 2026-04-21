@@ -982,6 +982,17 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 9. THE TEMP_STORAGE_PATH configuration value SHALL be set to a path outside of /tmp (e.g. /var/lib/gha-executor) to avoid conflicts with PrivateTmp on other services and to ensure Docker bind mounts resolve correctly
 10. THE env configuration file SHALL set TEMP_STORAGE_PATH to /var/lib/gha-executor
 
+### Requirement 51: Host Login Access Hardening
+
+**User Story:** As a security engineer, I want the root account locked and the serial console login prompt disabled in the KIWI image, so that no interactive login is possible even if a console or out-of-band access path were somehow reachable
+
+#### Acceptance Criteria
+
+1. THE config.sh script SHALL lock the root account unconditionally (regardless of ENABLE_SSH) by running `passwd -l root` during image creation, preventing password-based login via any console path
+2. THE config.sh script SHALL mask the serial-getty@ttyS0.service unit unconditionally by running `systemctl mask serial-getty@ttyS0.service` during image creation, preventing a login prompt from being spawned on the serial console
+3. THE serial console (console=ttyS0 in the kernel cmdline) SHALL remain active for read-only log output; masking the getty unit only prevents interactive login, not log streaming
+4. WHEN SSH debug access is enabled (ENABLE_SSH=true), the root account lock and serial getty mask SHALL remain in effect; debug access is provided exclusively via the ec2-user account over SSH, which is unaffected by these controls
+
 ### Requirement 50: AMI Build IAM Permission Scoping
 
 **User Story:** As a security engineer, I want the AMI build instance IAM permissions scoped to the specific region and account, so that compromise of the build instance does not grant account-wide image manipulation capability
