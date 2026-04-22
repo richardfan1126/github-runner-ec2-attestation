@@ -1,204 +1,151 @@
 # Security Review
 
-Date: 2026-04-18
+Date: 2026-04-21
 
 ## Findings
 
-### 1. Critical: OIDC authorization is not bound to the repository being executed
+### 1. High: `/attest` is an unauthenticated, unthrottled NitroTPM operation
 
-- `src/validation.py:177` accepts any OIDC token whose `repository` claim is present in `ALLOWED_REPOSITORIES`.
-- `src/server.py:345` validates the OIDC token, but `src/server.py:415` then clones `body["repository_url"]` without verifying that the requested repository matches the validated claim.
-- This allows a workflow from an allowed repository to present a valid token for that repository while requesting execution of a different repository that is reachable with the supplied GitHub token.
-- Impact: the service can attest and execute code from a repository that was not actually authorized by the OIDC identity.
-
-### 2. High: `MAX_CONCURRENT_EXECUTIONS` is configured but not enforced
-
-- `src/config.py:20` requires `MAX_CONCURRENT_EXECUTIONS`.
-- `src/server.py:376` validates request structure, but there is no concurrency gate before `src/server.py:476` creates a new execution record and `src/server.py:502` starts async execution.
-- `src/execution_manager.py:40` always creates new execution records; it does not reject work when active executions exceed the configured cap.
-- Impact: an authenticated caller can queue or start unbounded work and exhaust Docker, CPU, memory, or disk resources.
-
-### 3. High: Execution output is stored in unbounded memory and is not reclaimed
-
-- `src/output_collector.py:11` stores stdout and stderr in in-memory `bytearray` buffers.
-- `src/output_collector.py:36` appends output without any size limit.
-- `src/output_collector.py:126` has a `remove_output()` method, but I did not find any call site using it.
-- `src/execution_manager.py:151` has `cleanup_expired()`, but I did not find it invoked anywhere.
-- Impact: a script can exhaust process memory by printing large output, and completed executions can retain memory indefinitely.
-
-### 4. Medium: GitHub tokens are exposed through clone URL handling
-
-- `src/repository.py:105` builds `clone_url = f"https://{token}@github.com/{owner}/{repo}.git"`.
-- `src/repository.py:112` passes that URL to `git clone`, exposing the token in process arguments and writing it into repository configuration.
-- `src/script_executor.py:129` runs `chmod -R a+rX` on the cloned repository before execution so the unprivileged container user can read it.
-- Because the whole repository is mounted read-only at `/workspace` (`src/script_executor.py:142`), the executed script can read `.git/config` and print the embedded token into stdout/stderr.
-- Impact: repository credentials can be exfiltrated through command output returned by the service.
-
-### 5. Medium: `MAX_SCRIPT_SIZE_BYTES` is dead configuration and never enforced
-
-- `src/config.py:22` and `src/main.py:55` treat `MAX_SCRIPT_SIZE_BYTES` as an execution safety control.
-- I did not find any enforcement path in request validation, repository checkout, or execution startup.
-- `src/repository.py:175` only checks that the requested path exists; it does not check file size before execution.
-- Impact: operators may believe large scripts are blocked when they are not, leaving an avoidable resource-exhaustion gap.
-
-### 6. Medium: Public monitoring endpoints leak operational state on the internet-facing interface
-
-- `terraform/deploy/main.tf:72` exposes the API port to `0.0.0.0/0`.
-- `src/server.py:844` exposes `/health` without authentication and returns Docker availability, disk space, and active execution count.
-- `src/server.py:904` exposes `/metrics` without authentication and returns execution totals, failure counts, and average duration.
-- `src/server.py:199` exempts `/health` from rate limiting, and `/metrics` is still reachable anonymously.
-- Impact: unauthenticated internet clients can profile system capacity, detect load, and time attacks or abuse accordingly.
-
-### 7. Information: Default deployment is a public HTTP service, while the baked audience is not instance-specific
-
-- `terraform/deploy/main.tf:72` allows inbound traffic from anywhere on port 8080 and `terraform/deploy/main.tf:114` assigns a public IP.
-- `terraform/deploy/outputs.tf:28` publishes the endpoint as `http://<public-ip>:8080`.
-- `kiwi-descriptions/root/etc/github-actions-remote-executor/env:25` bakes `EXPECTED_AUDIENCE=test-workflow` into the AMI instead of an instance-specific value.
-- `README.md:31` describes `EXPECTED_AUDIENCE` as a value that should ensure tokens were issued for this specific Remote Executor instance.
-- Impact: the deployed identity model does not match the documented trust model. Operators can easily deploy multiple instances that all accept the same OIDC audience, and the service is exposed over plain HTTP by default.
-
-### 8. Medium: The AMI build path trusts network-fetched tool installers without integrity verification
-
-- `scripts/build-ami.py:469` installs Rust via `curl ... | sh`.
-- `scripts/build-ami.py:501` downloads ORAS from GitHub releases and installs it without checking a signature or checksum.
-- `scripts/build-ami.py:543` adds the GitHub CLI package repo and installs from it directly.
-- `scripts/build-ami.py:589` clones `awslabs/coldsnap` from GitHub and installs it from the fetched source.
-- Impact: these steps are part of the trusted build path for the attestable AMI. A compromise of an upstream distribution channel or repository can backdoor the produced image before any later attestation step.
-
-### 9. High: Encrypted requests are replayable because nonces are not validated
-
-- `src/server.py:328` decrypts the `/execute` request and `src/server.py:345` authenticates it, but there is no nonce cache, sequence number, or one-time token check.
-- `src/server.py:454` forwards the client nonce only into attestation generation.
-- `src/server.py:624` and `src/server.py:638` do the same on `/execution/{id}/output`; `src/server.py:659` reads the nonce and `src/server.py:721` only includes it in output attestation.
-- `src/attestation.py:126` and `src/attestation.py:291` show the nonce is written into the attestation command, not validated for uniqueness or freshness.
-- Impact: anyone who can capture a valid encrypted request can replay it while the OIDC token remains valid, causing duplicate executions or repeated output fetches without learning the plaintext.
-
-### 10. High: `/attest` is an unauthenticated, unthrottled NitroTPM operation
-
-- `src/server.py:199` exempts `/attest` from rate limiting.
-- `src/server.py:772` exposes `/attest` without authentication.
-- `src/server.py:803` invokes `generate_attestation()` on every request, which calls the NitroTPM attestation binary.
+- `src/server.py` exposes `/attest` without authentication.
+- `src/server.py` invokes `generate_attestation()` on every request, which calls the NitroTPM attestation binary.
+- The rate-limiting middleware applies to `/attest`, but the default `RATE_LIMIT_PER_IP=100` requests per 60 seconds is generous enough that a distributed attacker can still trigger significant TPM load before being blocked.
 - Impact: an internet client can repeatedly trigger expensive attestation work and degrade service availability even before reaching the authenticated execution flow.
 
-### 11. High: `scripts/build-ami.py` is vulnerable to shell injection via `artifact_ref`
+### 2. High: Container isolation relies on ambient Docker daemon defaults rather than a pinned hardened host configuration
 
-- `scripts/build-ami.py:49` only performs superficial format checks on `artifact_ref`; it does not reject shell metacharacters.
-- `scripts/build-ami.py:694` interpolates `artifact_ref` directly into `oras pull` in a remote shell command.
-- `scripts/build-ami.py:848` interpolates `artifact_ref`, `owner`, and `repo` directly into a multi-line remote shell command used during signature verification.
-- Impact: a crafted artifact reference can execute arbitrary commands on the AMI build instance. Because that instance has an IAM role permitting snapshot and AMI operations, this can compromise the build pipeline and any image it produces.
-
-### 12. Low: Logging context is global and mutable across concurrent requests
-
-- `src/logging_config.py:15` stores log context in a single process-global dictionary.
-- `src/server.py:172` and `src/server.py:192` set and clear that global context per request.
-- `src/server.py:488` and `src/script_executor.py:97` also mutate the same global context from request handlers and background execution threads.
-- Impact: concurrent requests and executions can overwrite each other’s `request_id` and `execution_id`, weakening auditability and making incident investigation less trustworthy in a security-sensitive service.
-
-### 13. Medium: Execution shared keys appear to persist indefinitely in memory
-
-- `src/server.py:483` stores a per-execution shared key in the encryption context map.
-- `src/encryption.py:252` retains that key until `remove_encryption_context()` is called.
-- `src/execution_manager.py:151` only removes expired contexts during `cleanup_expired()`, but I did not find any production call site that schedules or invokes that cleanup path.
-- Impact: completed execution sessions can remain decryptable for the life of the process if a client-side shared key is later exposed, and long-lived processes accumulate stale authorization material in memory.
-
-### 14. Medium: SSH-enabled debug images are published under the same artifact conventions as normal images
-
-- `.github/workflows/build-attestable-image.yml:42` enables the SSH debug path when `workflow_dispatch` sets `enable_ssh=true`.
-- `kiwi-descriptions/config.sh:23` then enables `sshd`, and `kiwi-descriptions/config.sh:51` grants `ec2-user` passwordless sudo in that image.
-- `.github/workflows/build-attestable-image.yml:47` only adds a workflow summary warning; `.github/workflows/build-attestable-image.yml:92` generates the same tag format, and `.github/workflows/build-attestable-image.yml:114` pushes to the same `attestable-image` namespace without a dedicated debug marker annotation.
-- `README.md:63` describes the resulting artifact reference using the standard production-looking format.
-- Impact: an SSH-enabled, passwordless-sudo debug image can still be attested, published, and later consumed by the AMI build flow as if it were a normal artifact unless operators manually track the workflow context.
-
-### 15. Low: The AMI build instance SSH private key is exported through Terraform outputs
-
-- `terraform/build-ami/ssh_key.tf:1` generates a new private key in Terraform.
-- `terraform/build-ami/outputs.tf:11` exposes that private key as the `ssh_private_key` output (marked sensitive but still present in state).
-- `scripts/build-ami.py:227` reads the private key from Terraform output and `scripts/build-ami.py:1215` writes it to disk for SSH access.
-- Impact: the ephemeral build-instance credential is materialized in local Terraform state and process memory, increasing the blast radius of workstation or CI compromise during the AMI build flow.
-
-### 16. Medium: OIDC policy is repo-scoped only and does not restrict branch, workflow, or trust level
-
-- `src/validation.py:138` / `src/validation.py:239` verify signature, issuer, and audience.
-- `src/validation.py:177` / `src/validation.py:278` then authorize solely on the `repository` claim.
-- I did not find any checks on claims such as `sub`, `ref`, `ref_protected`, `environment`, or `job_workflow_ref`, even though the model comment in `src/models.py:96` shows `sub` carries branch/ref context.
-- Impact: any workflow in an allowed repository that can mint a GitHub OIDC token for the configured audience is treated as equally trusted. That broadens authorization to include unprotected branches, less-trusted workflows, and other execution contexts that may not meet the intended security bar.
-
-### 17. Medium: Artifact provenance verification is bound to repository identity, not a specific trusted workflow
-
-- `scripts/build-ami.py:836` derives only `owner/repo` identity from the artifact reference.
-- `scripts/build-ami.py:858` verifies the attestation with `gh attestation verify ... -R {identity}`.
-- I did not find any verification of the producing workflow file, branch, ref protection status, or debug-image mode before accepting the artifact and converting it into an AMI.
-- Impact: any attested artifact from the same repository can satisfy the provenance check, even if it was produced by a different workflow or a less-trusted repository state than operators intended to trust for AMI creation.
-
-### 18. Low: `/execution/{id}/output` does not bind the execution record to the OIDC repository claim
-
-- `src/server.py:638` validates the supplied OIDC token on the output endpoint.
-- `src/server.py:672` then loads the execution record by `execution_id`, but I did not find any comparison between that execution’s repository and the validated OIDC claims.
-- Impact: if an execution ID and its shared key are exposed, any token from any repository in `ALLOWED_REPOSITORIES` can be used to fetch that execution’s output; the endpoint does not enforce that the caller comes from the same repository that created the execution.
-
-### 19. High: Container isolation relies on ambient Docker daemon defaults rather than a pinned hardened host configuration
-
-- `kiwi-descriptions/config.sh:17` enables the Docker daemon in the AMI.
-- I did not find a Docker `daemon.json`, user-namespace remap, custom seccomp profile, or SELinux/AppArmor policy under `kiwi-descriptions/root/etc`.
-- `src/script_executor.py:118` applies some per-container flags, but host-level isolation behavior is otherwise whatever the distro Docker defaults are on the built AMI.
+- `kiwi-descriptions/config.sh` enables the Docker daemon in the AMI.
+- There is no Docker `daemon.json`, user-namespace remap, custom seccomp profile, or SELinux/AppArmor policy under `kiwi-descriptions/root/etc`.
+- `src/script_executor.py` applies per-container flags (`read_only`, `network_mode="none"`, `no-new-privileges`, `cap_drop=["ALL"]`, `user="nobody"`), but host-level isolation behavior is otherwise whatever the distro Docker defaults are on the built AMI.
 - Impact: the safety of running untrusted code depends heavily on ambient daemon/kernel defaults that are not explicitly hardened or locked by this project.
 
-### 20. High: Execution containers do not explicitly drop Linux capabilities
+### 3. Medium: Default deployment is a public HTTP service with a shared, non-instance-specific audience
 
-- `src/script_executor.py:134` creates containers with `read_only=True`, `network_mode="none"`, `security_opt=["no-new-privileges"]`, and `user="nobody"`.
-- I did not find `cap_drop=["ALL"]` or an explicit allowlist of capabilities.
-- Impact: the container keeps Docker’s default capability set rather than a minimal one. Even with a non-root user, this is weaker than a deliberate least-privilege isolation model for untrusted script execution.
+- `terraform/deploy/main.tf` allows inbound traffic from anywhere on port 8080 and assigns a public IP.
+- `terraform/deploy/outputs.tf` publishes the endpoint as `http://<public-ip>:8080`.
+- `kiwi-descriptions/root/etc/github-actions-remote-executor/env` bakes `EXPECTED_AUDIENCE=test-workflow` into the AMI instead of an instance-specific value.
+- `README.md` describes `EXPECTED_AUDIENCE` as a value that should ensure tokens were issued for this specific Remote Executor instance.
+- Impact: the deployed identity model does not match the documented trust model. Operators can easily deploy multiple instances that all accept the same OIDC audience, and the service is exposed over plain HTTP by default.
 
-### 21. Medium: The full cloned repository, including VCS metadata, is exposed inside the execution container
+### 4. Medium: OIDC policy is repo-scoped only by default and does not restrict branch, workflow, or trust level
 
-- `src/script_executor.py:129` makes the cloned repository world-readable with `chmod -R a+rX`.
-- `src/script_executor.py:142` bind-mounts the entire clone read-only at `/workspace`.
-- Impact: executed scripts can read `.git/`, repository config, workflow files, and any other checked-out material in the clone. This weakens intra-job isolation and amplifies the credential-exposure issue already noted for `.git/config`.
+- `src/validation.py` verifies signature, issuer, and audience, then authorizes solely on the `repository` claim.
+- `src/config.py` supports optional `ALLOWED_BRANCHES` (glob patterns) and `REQUIRE_PROTECTED_REF` controls, and `src/validation.py` enforces them via `_validate_branch_and_ref()`.
+- Neither control is set in the default AMI env file (`kiwi-descriptions/root/etc/github-actions-remote-executor/env`), so a default deployment authorizes any workflow in an allowed repository regardless of branch, ref protection status, or workflow identity.
+- Impact: any workflow in an allowed repository that can mint a GitHub OIDC token for the configured audience is treated as equally trusted. That broadens authorization to include unprotected branches, less-trusted workflows, and other execution contexts that may not meet the intended security bar.
 
-### 22. Medium: The host executor service is not strongly sandboxed, increasing post-escape impact
+### 5. Medium: Artifact provenance verification is not bound to a specific trusted workflow by default
 
-- `kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service:13` sets `NoNewPrivileges=false`.
-- I did not find service hardening controls such as `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `RestrictAddressFamilies`, `SystemCallFilter`, or a dedicated non-root service account in that unit.
-- Impact: if a container breakout or Docker-daemon abuse occurs, the host-side executor process runs in a comparatively soft environment.
+- `scripts/build-ami.py` accepts an optional `--expected-workflow` argument. When provided, it extracts the workflow SAN from the attestation certificate and verifies the expected workflow path appears in it.
+- `--expected-workflow` defaults to `None`; when omitted, the workflow identity check is skipped entirely.
+- Impact: any attested artifact from the same repository can satisfy the provenance check, even if it was produced by a different workflow or a less-trusted repository state than operators intended to trust for AMI creation.
 
-### 23. Medium: The execution container image is tag-based and not pinned or verified
+### 6. Medium: The AMI build path trusts the Rust installer without integrity verification
 
-- `kiwi-descriptions/root/etc/github-actions-remote-executor/env:28` sets `CONTAINER_IMAGE=python:3.11-slim`.
-- `src/main.py:108` only ensures the configured image is present by pulling it if needed.
-- I did not find digest pinning, signature verification, or an allowlist policy for execution images.
+- `scripts/build-ami.py` installs Rust via `curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`.
+- Unlike ORAS (which has a hardcoded SHA-256 checksum verified before extraction) and coldsnap (which is cloned at a pinned version tag), the Rust installer is piped directly to a shell with no checksum or signature verification.
+- Impact: a compromise of `sh.rustup.rs` or a network-level attack can execute arbitrary commands on the AMI build instance. Because that instance has IAM permissions for snapshot and AMI operations, this can backdoor the produced image before any later attestation step.
+
+### 7. Medium: Execution container image is not digest-pinned by default
+
+- `kiwi-descriptions/root/etc/github-actions-remote-executor/env` sets `CONTAINER_IMAGE=python:3.11-slim` with no digest.
+- `src/config.py` supports an optional `CONTAINER_IMAGE_DIGEST` environment variable, and `src/script_executor.py` verifies the digest when configured.
+- `CONTAINER_IMAGE_DIGEST` is not set in the default env file.
 - Impact: upstream tag drift or registry compromise can silently change the code, packages, and isolation surface of the runtime container environment.
 
-### 24. High: The AMI build instance IAM role is broadly wildcarded across EC2/EBS image operations
+### 8. Medium: The trusted build path depends on a mutable GitHub-hosted runner image and a floating AL2023 mirrorlist
 
-- `terraform/build-ami/iam.tf:24` grants the build instance `ec2:CreateSnapshot`, `ec2:DeleteSnapshot`, `ec2:RegisterImage`, `ec2:DeregisterImage`, `ec2:ModifyImageAttribute`, `ec2:ModifySnapshotAttribute`, and related actions on `Resource = "*"`.
-- `terraform/build-ami/iam.tf:43` similarly grants EBS direct snapshot APIs on `Resource = "*"`.
-- Impact: compromise of the build instance or its automation path gives account-wide image/snapshot manipulation capability rather than narrowly scoped permission to only the resources created for this build.
-
-### 25. Medium: The trusted build path depends on mutable upstream build hosts and AMIs
-
-- `.github/workflows/build-attestable-image.yml:23` runs on `ubuntu-latest`, which is a moving GitHub-hosted runner image.
-- `terraform/build-ami/data.tf:6` selects `most_recent = true` for the Amazon Linux 2023 build instance AMI.
-- `kiwi-descriptions/appliance.kiwi:43` uses the AL2023 `latest` mirrorlist path.
+- `.github/workflows/build-attestable-image.yml` runs on `ubuntu-latest`, which is a moving GitHub-hosted runner image.
+- `kiwi-descriptions/appliance.kiwi` uses the AL2023 `latest` mirrorlist path.
+- `terraform/build-ami/data.tf` pins the build instance AMI to a specific name filter, which is an improvement, but the runner and mirrorlist remain floating.
 - Impact: reproducibility and provenance are weakened because materially different upstream build environments can be selected over time without any repo change.
 
-### 26. Low: The builder image comments claim pinned package versions, but package installation is effectively floating
+### 9. Low: The AMI build instance SSH private key is exported through Terraform outputs
 
-- `.github/docker/Dockerfile.kiwi-builder:2` says the builder uses pinned versions for reproducible builds.
-- The base image tag is pinned, but `.github/docker/Dockerfile.kiwi-builder:9` installs DNF packages without explicit NEVRA version pinning.
-- Impact: rebuilds against the same Dockerfile can still consume different package versions from the configured repositories, reducing build determinism in the trusted image-construction path.
+- `terraform/build-ami/ssh_key.tf` generates a new private key in Terraform.
+- `terraform/build-ami/outputs.tf` exposes that private key as the `ssh_private_key` output (marked sensitive but still present in state).
+- `scripts/build-ami.py` reads the private key from Terraform output, writes it to a temp file, and securely overwrites it before deletion after use.
+- Impact: the ephemeral build-instance credential is materialized in local Terraform state, increasing the blast radius of workstation or CI compromise during the AMI build flow.
+
+### 10. Low: `ExecutionManager._execution_durations` list grows unboundedly
+
+- `src/execution_manager.py` appends a float to `_execution_durations` for every completed execution.
+- `cleanup_expired()` removes execution records and their associated encryption contexts and output buffers, but does not trim `_execution_durations`.
+- Impact: in a long-running process with high execution volume, this list accumulates indefinitely, causing slow memory growth.
+
+### 11. Medium: JWKS cache has no TTL — stale or revoked signing keys remain trusted for the process lifetime
+
+- `src/validation.py` caches the GitHub OIDC JWKS response in `_jwks_cache` on first use.
+- The cache is only refreshed when a `kid` lookup misses; there is no time-based expiry.
+- If GitHub rotates or revokes a signing key, the server continues accepting tokens signed with the old key until the process restarts or a new `kid` triggers a refresh.
+- Impact: key rotation events are not reflected promptly. A revoked key remains trusted indefinitely in a long-running deployment.
+
+### 12. Medium: `RateLimiter._requests` dict grows unboundedly under distributed traffic
+
+- `src/server.py` `RateLimiter` maps each source IP to a list of request timestamps.
+- Old timestamps are pruned per-IP only when that IP makes a subsequent request; IPs that never make a second request are never evicted from the dict.
+- A distributed attacker sending one request from each of many source IPs causes the dict to grow without bound.
+- Impact: slow memory exhaustion in a long-running service under distributed or spoofed-source traffic, exploitable by an external attacker without authentication.
+
+### 13. Medium: ORAS installed without checksum verification in the CI build workflow
+
+- `.github/workflows/build-attestable-image.yml` installs ORAS 1.1.0 with a bare `curl | tar` pipeline and no SHA-256 checksum verification.
+- This is inconsistent with `scripts/build-ami.py`, which verifies a hardcoded checksum before extracting ORAS 1.3.0.
+- The two paths also use different ORAS versions (1.1.0 vs 1.3.0).
+- Impact: a compromise of the GitHub releases CDN or a MITM during the CI run can substitute a malicious ORAS binary that tampers with or exfiltrates the artifact pushed to GHCR, undermining the entire provenance chain before any attestation step.
+
+### 14. Medium: `validate_script_path` does not reject absolute paths or null bytes
+
+- `src/validation.py` `validate_script_path()` checks for `../` and `..\\` traversal sequences but does not reject absolute paths (e.g., `/etc/passwd`) or null bytes (`\x00`).
+- `os.path.join(clone_path, script_path)` silently discards the clone prefix when `script_path` is absolute, so the size check in `server.py` reads the host file at the absolute path rather than a file inside the clone.
+- Impact: a caller supplying an absolute `script_path` bypasses the intent of the path validation. The script executor passes the path to Docker as `bash /workspace/<script_path>`, which is sandboxed, but the pre-execution `os.path.getsize` check runs on the host and will read arbitrary host files.
+
+### 15. Low: `terraform.tfstate` files are committed to the repository
+
+- `terraform/deploy/terraform.tfstate`, `terraform/deploy/terraform.tfstate.backup`, `terraform/build-ami/terraform.tfstate`, and `terraform/build-ami/terraform.tfstate.backup` are present in the repository.
+- Terraform state files store resource metadata in plaintext, including the SSH private key from `terraform/build-ami/outputs.tf` (marked `sensitive` but stored unencrypted in state), AMI IDs, instance IDs, VPC/subnet IDs, and security group IDs.
+- Impact: anyone with read access to the repository or its git history can extract infrastructure topology and the ephemeral build-instance SSH credential. This is a concrete materialization of the blast-radius concern noted in Finding 9.
+
+### 16. Low: SSH host key not verified during AMI build — MITM risk on build connection
+
+- `scripts/build-ami.py` `verify_ssh_connectivity()` uses `paramiko.AutoAddPolicy()`, which silently accepts any host key on first connection.
+- An attacker who can intercept traffic between the build workstation and the EC2 instance can observe or modify commands executed on the build instance, including the artifact pull and AMI creation steps.
+- The build instance holds IAM permissions for snapshot and AMI operations, so a successful MITM can backdoor the produced image.
+- Impact: the SSH channel that drives the trusted build path provides no host authentication guarantee.
+
+## Resolved Findings (from previous review dated 2026-04-18)
+
+The following issues identified in the prior review have been remediated and verified against the current codebase.
+
+| # | Previous Severity | Description | Resolution |
+|---|-------------------|-------------|------------|
+| 1 | Critical | OIDC authorization not bound to the repository being executed | `server.py` now parses `owner/repo` from `repository_url` and rejects requests where it does not match the OIDC `repository` claim. The output endpoint binds the claim to the stored `execution_record.repository`. |
+| 2 | High | `MAX_CONCURRENT_EXECUTIONS` not enforced | `ExecutionManager.try_create_execution()` atomically checks active execution count against the cap under a single lock acquisition. `server.py` returns HTTP 503 when at capacity. |
+| 3 | High | Execution output stored in unbounded memory, not reclaimed | `OutputCollector` enforces a configurable `max_output_size_bytes` cap (default 10 MB) and truncates at that limit. A `periodic_cleanup` background task in the `lifespan` context manager invokes `cleanup_expired()` every 60 seconds. |
+| 4 | Medium | GitHub tokens exposed through clone URL handling | `repository.py` strips the token from `.git/config` via `git remote set-url` immediately after cloning, then removes the `.git` directory entirely with `shutil.rmtree`. |
+| 5 | Medium | `MAX_SCRIPT_SIZE_BYTES` dead configuration, never enforced | `server.py` checks `os.path.getsize(script_full_path)` against `config.max_script_size_bytes` after cloning and returns HTTP 413 if exceeded. |
+| 6 | Medium | Public monitoring endpoints leak operational state | `/health` now returns only `{"status": "healthy"}`. The `/metrics` endpoint has been removed entirely. |
+| 9 | High | Encrypted requests are replayable | `src/nonce_cache.py` implements a thread-safe TTL-based nonce cache. Both `/execute` and `/execution/{id}/output` reject duplicate nonces with HTTP 400. |
+| 11 | High | `scripts/build-ami.py` vulnerable to shell injection via `artifact_ref` | `validate_artifact_reference()` enforces a strict allowlist regex (`^ghcr\.io/[a-zA-Z0-9._-]+/...`) rejecting all shell metacharacters before any remote command is constructed. |
+| 12 | Low | Logging context is global and mutable across concurrent requests | `logging_config.py` now uses `contextvars.ContextVar`. Each request and background thread gets an isolated copy; `script_executor.py` creates a fresh `contextvars.copy_context()` per execution thread. |
+| 13 | Medium | Execution shared keys persist indefinitely in memory | `cleanup_expired()` now calls `encryption_manager.remove_encryption_context()` for each expired execution. The periodic cleanup task ensures this runs regularly. |
+| 14 | Medium | SSH-enabled debug images published under same artifact conventions | The workflow sets a `debug` OCI annotation on every push. `build-ami.py` reads the annotation via `oras manifest fetch` and raises an error if `debug=true` and `--allow-debug` was not passed. |
+| 18 | Low | `/execution/{id}/output` does not bind execution record to OIDC repository claim | The output endpoint now compares `oidc_result.claims["repository"]` against `execution_record.repository` and returns HTTP 403 on mismatch. |
+| 20 | High | Execution containers do not explicitly drop Linux capabilities | `script_executor.py` now passes `cap_drop=["ALL"]` to `containers.create()`. |
+| 21 | Medium | Full cloned repository including VCS metadata exposed inside container | `repository.py` removes the `.git` directory with `shutil.rmtree` after cloning. The bind-mounted workspace contains only the working tree. |
+| 22 | Medium | Host executor service not strongly sandboxed | The systemd unit now sets `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `RestrictAddressFamilies`, and explicit `ReadWritePaths`. |
+| 24 | High | AMI build instance IAM role broadly wildcarded across EC2/EBS operations | `terraform/build-ami/iam.tf` now scopes all mutating actions to specific snapshot, image, and volume ARN patterns in the current region/account with `aws:RequestedRegion` conditions. |
+| 8 (partial) | Medium | ORAS downloaded without integrity verification | `install_oras()` now verifies a hardcoded SHA-256 checksum before extracting the archive. |
+| 14 (partial) | Medium | coldsnap cloned from floating HEAD | `install_coldsnap()` now clones at a pinned version tag (`v0.9.0`) with `--depth 1` and uses `cargo install --locked`. |
+| 25 (partial) | Medium | Build instance AMI selected with `most_recent = true` | `terraform/build-ami/data.tf` now pins to a specific AMI name filter rather than floating `most_recent`. |
+| 26 | Low | Builder image DNF packages float despite comment claiming pinned versions | `Dockerfile.kiwi-builder` now locks `releasever` to a specific AL2023 snapshot via `/etc/dnf/vars/releasever`, and the comment accurately describes this mitigation. |
 
 ## Coverage Gaps
 
-- I did not find tests that assert the OIDC `repository` claim must match the requested `repository_url`.
-- I did not find enforcement tests for `MAX_CONCURRENT_EXECUTIONS`.
-- I did not find output-size or retention cleanup tests that would prevent the memory growth issue above.
-- I did not find tests asserting `MAX_SCRIPT_SIZE_BYTES` is enforced.
-- I did not find tests or deployment safeguards requiring TLS or an instance-specific OIDC audience.
-- I did not find anti-replay tests for encrypted `/execute` or `/execution/{id}/output` requests.
-- I did not find tests that reject shell metacharacters in `artifact_ref` before using it in the build pipeline.
-- I did not find a production cleanup path that expires stale execution encryption contexts.
-- I did not find machine-readable tagging or policy checks that distinguish SSH-enabled debug images from normal attestable images.
-- I did not find tests constraining OIDC authorization to specific refs, protected branches, environments, or workflow identities.
-- I did not find provenance checks that pin AMI conversion to a specific trusted workflow definition.
-- I did not inspect a live built AMI, so I could not verify the effective Docker seccomp profile, capability set, SELinux/AppArmor enforcement, or user-namespace behavior at runtime.
+- There are no tests asserting that branch/ref OIDC restrictions are enforced when `ALLOWED_BRANCHES` or `REQUIRE_PROTECTED_REF` are set.
+- There are no tests or deployment safeguards requiring TLS or an instance-specific OIDC audience.
+- There are no provenance checks that pin AMI conversion to a specific trusted workflow definition by default.
+- There are no tests constraining the container image to a digest-pinned reference.
+- There are no tests for `RateLimiter` memory growth under high-cardinality source IPs.
+- There are no tests asserting that absolute `script_path` values are rejected by `validate_script_path`.
+- I did not inspect a live built AMI, so I could not verify the effective Docker seccomp profile, user-namespace behavior, or SELinux/AppArmor enforcement at runtime.
 - I did not perform dependency CVE triage against the locked package set or the mutable upstream build environments.
