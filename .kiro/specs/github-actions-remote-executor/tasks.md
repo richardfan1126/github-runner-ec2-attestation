@@ -2982,19 +2982,19 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Parse `.env.example` and `kiwi-descriptions/root/etc/github-actions-remote-executor/env` to verify both files contain a `CONTAINER_IMAGE_DIGEST` entry (even if empty), confirming operators are prompted to configure digest pinning
     - **Validates: Requirements 34.7**
 
-- [ ] 163. Pin AL2023 mirrorlist in appliance.kiwi
-  - [ ] 163.1 Replace floating `latest` mirrorlist URL with a pinned version in appliance.kiwi
+- [x] 163. Pin AL2023 mirrorlist in appliance.kiwi
+  - [x] 163.1 Replace floating `latest` mirrorlist URL with a pinned version in appliance.kiwi
     - In `kiwi-descriptions/appliance.kiwi`, find the AL2023 repository definition that uses the `latest` mirrorlist path (e.g., `https://al2023-repos-us-east-1-9761ab97.s3.dualstack.us-east-1.amazonaws.com/core/mirrors/latest/...` or similar)
     - Replace `latest` with a specific AL2023 release version (e.g., `2023.6` or the current pinned version used in the Dockerfile)
     - Add a comment explaining the pinning rationale and how to update it
     - _Requirements: 11.9_
 
-  - [ ] 163.2 Write property test for AL2023 Mirrorlist Pinning
+  - [x] 163.2 Write property test for AL2023 Mirrorlist Pinning
     - **Property 171: AL2023 Mirrorlist Pinning**
     - Parse `kiwi-descriptions/appliance.kiwi` XML and verify that no repository URL contains `/latest/` as a path component; all repository URLs should reference a specific version
     - **Validates: Requirements 11.9**
 
-  - [ ] 163.3 Write unit tests for mirrorlist pinning
+  - [x] 163.3 Write unit tests for mirrorlist pinning
     - Test that appliance.kiwi does not contain any repository URL with `/latest/` path component
     - Test that all repository URLs in appliance.kiwi reference a specific version string
     - _Requirements: 11.9_

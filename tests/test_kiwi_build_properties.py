@@ -435,3 +435,119 @@ def test_git_package_inclusion_in_kiwi_image():
     assert "git" in package_names, (
         "git package must be listed in <packages type='image'> section"
     )
+
+
+# Feature: github-actions-remote-executor, Property 171: AL2023 Mirrorlist Pinning
+@given(dummy=st.integers(min_value=0, max_value=999))
+@settings(max_examples=100)
+def test_property_171_al2023_mirrorlist_pinned(dummy: int):
+    """
+    Property 171: AL2023 Mirrorlist Pinning
+
+    For any check, no repository URL in kiwi-descriptions/appliance.kiwi
+    should contain '/latest/' as a path component. All repository URLs must
+    reference a specific release version to ensure reproducible builds and
+    deterministic PCR measurements.
+
+    **Validates: Requirements 11.9**
+    """
+    import xml.etree.ElementTree as ET
+    import re
+
+    appliance_path = Path("kiwi-descriptions/appliance.kiwi")
+    assert appliance_path.exists(), "appliance.kiwi must exist"
+
+    tree = ET.parse(appliance_path)
+    root = tree.getroot()
+
+    repo_urls = []
+    for repo_elem in root.findall("repository"):
+        source_elem = repo_elem.find("source")
+        if source_elem is not None:
+            path_attr = source_elem.get("path", "")
+            if path_attr:
+                repo_urls.append(path_attr)
+
+    assert repo_urls, "appliance.kiwi must define at least one repository"
+
+    for url in repo_urls:
+        # Split on '/' and check no path segment equals 'latest'
+        path_segments = url.split("/")
+        assert "latest" not in path_segments, (
+            f"Repository URL '{url}' contains '/latest/' as a path component; "
+            "pin to a specific AL2023 release version (e.g. 2023.10.20260302)"
+        )
+
+    # Additionally verify each URL contains a version-like segment
+    # (a segment matching the AL2023 release pattern YYYY.M.YYYYMMDD or similar)
+    version_pattern = re.compile(r"^\d{4}\.\d+\.\d+$")
+    for url in repo_urls:
+        path_segments = url.split("/")
+        has_version = any(version_pattern.match(seg) for seg in path_segments)
+        assert has_version, (
+            f"Repository URL '{url}' does not contain a specific version segment "
+            "(expected a segment matching YYYY.M.YYYYMMDD, e.g. 2023.10.20260302)"
+        )
+
+
+def test_al2023_mirrorlist_no_latest_path():
+    """
+    Unit test: appliance.kiwi must not contain any repository URL with '/latest/'
+    as a path component.
+
+    **Validates: Requirements 11.9**
+    """
+    import xml.etree.ElementTree as ET
+
+    appliance_path = Path("kiwi-descriptions/appliance.kiwi")
+    assert appliance_path.exists(), "appliance.kiwi must exist"
+
+    tree = ET.parse(appliance_path)
+    root = tree.getroot()
+
+    for repo_elem in root.findall("repository"):
+        source_elem = repo_elem.find("source")
+        if source_elem is not None:
+            url = source_elem.get("path", "")
+            path_segments = url.split("/")
+            assert "latest" not in path_segments, (
+                f"Repository URL '{url}' uses floating '/latest/' path; "
+                "it must be pinned to a specific AL2023 release version"
+            )
+
+
+def test_al2023_mirrorlist_references_specific_version():
+    """
+    Unit test: all repository URLs in appliance.kiwi must reference a specific
+    version string (matching the AL2023 release pattern YYYY.M.YYYYMMDD).
+
+    **Validates: Requirements 11.9**
+    """
+    import re
+    import xml.etree.ElementTree as ET
+
+    appliance_path = Path("kiwi-descriptions/appliance.kiwi")
+    assert appliance_path.exists(), "appliance.kiwi must exist"
+
+    tree = ET.parse(appliance_path)
+    root = tree.getroot()
+
+    version_pattern = re.compile(r"^\d{4}\.\d+\.\d+$")
+
+    repo_urls = []
+    for repo_elem in root.findall("repository"):
+        source_elem = repo_elem.find("source")
+        if source_elem is not None:
+            url = source_elem.get("path", "")
+            if url:
+                repo_urls.append(url)
+
+    assert repo_urls, "appliance.kiwi must define at least one repository"
+
+    for url in repo_urls:
+        path_segments = url.split("/")
+        has_version = any(version_pattern.match(seg) for seg in path_segments)
+        assert has_version, (
+            f"Repository URL '{url}' does not reference a specific version; "
+            "expected a path segment matching YYYY.M.YYYYMMDD (e.g. 2023.10.20260302)"
+        )

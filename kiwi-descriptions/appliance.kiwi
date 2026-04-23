@@ -39,8 +39,14 @@
         </type>
     </preferences>
 
+    <!-- AL2023 mirrorlist pinned to a specific release version for build reproducibility.
+         Using a floating `latest` path would silently pull different package versions on
+         each build, breaking reproducibility and making PCR measurements non-deterministic.
+         To update: change the version below to the desired AL2023 release (e.g. 2023.6.x)
+         and verify the new URL is reachable before committing. The version here should
+         match the releasever set in .github/docker/Dockerfile.kiwi-builder. -->
     <repository priority="2" package_gpgcheck="true" sourcetype="mirrorlist" customize="add-gpg-key.sh">
-            <source path="https://cdn.amazonlinux.com/al2023/core/mirrors/latest/$basearch/mirror.list"/>
+            <source path="https://cdn.amazonlinux.com/al2023/core/mirrors/2023.10.20260302/$basearch/mirror.list"/>
     </repository>
 
     <packages type="image">
