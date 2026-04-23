@@ -174,3 +174,78 @@ def test_digest_pinned_reference_extracts_and_verifies(
 
     # Should not raise because digest matches
     executor.pull_container_image()
+
+
+# ---------------------------------------------------------------------------
+# Property 170: Container Image Digest Default Configuration
+# ---------------------------------------------------------------------------
+
+def _parse_env_file(path: str) -> dict:
+    """Parse a dotenv-style file and return a dict of key -> value (or None for empty)."""
+    entries = {}
+    with open(path) as f:
+        for line in f:
+            stripped = line.strip()
+            # Skip blank lines and comment-only lines
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "=" in stripped:
+                key, _, value = stripped.partition("=")
+                entries[key.strip()] = value.strip()
+    return entries
+
+
+def test_env_example_contains_container_image_digest_entry():
+    """
+    Property 170: Container Image Digest Default Configuration
+
+    Parse .env.example to verify it contains a CONTAINER_IMAGE_DIGEST entry
+    (even if empty), confirming operators are prompted to configure digest
+    pinning.
+
+    **Validates: Requirements 34.7**
+    """
+    import os
+
+    # Locate .env.example relative to this test file (repo root)
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env_example_path = os.path.join(repo_root, ".env.example")
+
+    entries = _parse_env_file(env_example_path)
+
+    assert "CONTAINER_IMAGE_DIGEST" in entries, (
+        ".env.example must contain a CONTAINER_IMAGE_DIGEST entry so operators "
+        "are prompted to configure digest pinning"
+    )
+
+
+def test_kiwi_env_file_contains_container_image_digest_entry():
+    """
+    Property 170: Container Image Digest Default Configuration
+
+    Parse kiwi-descriptions/root/etc/github-actions-remote-executor/env to
+    verify it contains a CONTAINER_IMAGE_DIGEST entry (even if empty),
+    confirming operators are prompted to configure digest pinning in the
+    baked AMI environment file.
+
+    **Validates: Requirements 34.7**
+    """
+    import os
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    kiwi_env_path = os.path.join(
+        repo_root,
+        "kiwi-descriptions",
+        "root",
+        "etc",
+        "github-actions-remote-executor",
+        "env",
+    )
+
+    entries = _parse_env_file(kiwi_env_path)
+
+    assert "CONTAINER_IMAGE_DIGEST" in entries, (
+        "kiwi-descriptions/root/etc/github-actions-remote-executor/env must "
+        "contain a CONTAINER_IMAGE_DIGEST entry so operators are prompted to "
+        "configure digest pinning in the AMI image"
+    )

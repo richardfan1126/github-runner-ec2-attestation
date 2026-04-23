@@ -2962,22 +2962,22 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Mock execute_remote_command for all tests
     - _Requirements: 17.17_
 
-- [ ] 162. Add CONTAINER_IMAGE_DIGEST to default env files
-  - [ ] 162.1 Add CONTAINER_IMAGE_DIGEST placeholder to .env.example
+- [x] 162. Add CONTAINER_IMAGE_DIGEST to default env files
+  - [x] 162.1 Add CONTAINER_IMAGE_DIGEST placeholder to .env.example
     - Add `CONTAINER_IMAGE_DIGEST=` (empty, with a comment) to `.env.example` after the `CONTAINER_IMAGE` line
     - Comment should explain: "Optional SHA-256 digest for container image verification (e.g., sha256:abc123...). When set, the server verifies the pulled image matches this digest at startup."
     - _Requirements: 34.7, 34.8_
 
-  - [ ] 162.2 Add CONTAINER_IMAGE_DIGEST placeholder to KIWI env file
+  - [x] 162.2 Add CONTAINER_IMAGE_DIGEST placeholder to KIWI env file
     - Add `CONTAINER_IMAGE_DIGEST=` (empty, with a comment) to `kiwi-descriptions/root/etc/github-actions-remote-executor/env` after the `CONTAINER_IMAGE` line
     - Same comment as above
     - _Requirements: 34.7, 34.8_
 
-  - [ ] 162.3 Add digest pinning note to README.md
+  - [x] 162.3 Add digest pinning note to README.md
     - In the configuration section of `README.md`, add a note after the `CONTAINER_IMAGE` entry explaining that `CONTAINER_IMAGE_DIGEST` should be set in production to pin the container image to a specific digest and prevent tag drift
     - _Requirements: 34.7_
 
-  - [ ] 162.4 Write property test for Container Image Digest Default Configuration
+  - [x] 162.4 Write property test for Container Image Digest Default Configuration
     - **Property 170: Container Image Digest Default Configuration**
     - Parse `.env.example` and `kiwi-descriptions/root/etc/github-actions-remote-executor/env` to verify both files contain a `CONTAINER_IMAGE_DIGEST` entry (even if empty), confirming operators are prompted to configure digest pinning
     - **Validates: Requirements 34.7**

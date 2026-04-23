@@ -30,6 +30,7 @@ All configuration is done through environment variables. See `.env.example` for 
 - `ALLOWED_REPOSITORIES`: Comma-separated list of GitHub repositories authorized to execute scripts (e.g., `owner/repo1,owner/repo2`)
 - `EXPECTED_AUDIENCE`: Expected `aud` claim in OIDC tokens, used to ensure tokens were issued for this Remote Executor instance (e.g., `https://your-remote-executor.example.com`)
 - `CONTAINER_IMAGE`: Docker image used for script execution (e.g., `python:3.11-slim`)
+- `CONTAINER_IMAGE_DIGEST`: Optional SHA-256 digest to pin the container image (e.g., `sha256:abc123...`). **Recommended for production** — set this to prevent tag drift and ensure the server always runs the exact expected image. When set, the server verifies the pulled image matches this digest at startup and refuses to start if there is a mismatch.
 - `CONTAINER_MEMORY_LIMIT`: Memory limit for execution containers (e.g., `512m`)
 - `CONTAINER_CPU_LIMIT`: CPU limit for execution containers (e.g., `1.0`)
 

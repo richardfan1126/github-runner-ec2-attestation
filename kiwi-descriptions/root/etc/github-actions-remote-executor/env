@@ -26,5 +26,7 @@ EXPECTED_AUDIENCE=test-workflow
 
 # Container Execution Configuration
 CONTAINER_IMAGE=python:3.11-slim
+# Optional SHA-256 digest for container image verification (e.g., sha256:abc123...). When set, the server verifies the pulled image matches this digest at startup.
+CONTAINER_IMAGE_DIGEST=
 CONTAINER_MEMORY_LIMIT=512m
 CONTAINER_CPU_LIMIT=1.0
