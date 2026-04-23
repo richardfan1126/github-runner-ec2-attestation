@@ -3045,8 +3045,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that the periodic cleanup task calls cleanup_stale_ips
     - _Requirements: 8.5_
 
-- [ ] 166. Add ORAS checksum verification to CI workflow
-  - [ ] 166.1 Update "Install ORAS" step in build-attestable-image.yml to verify checksum and upgrade to 1.3.0
+- [x] 166. Add ORAS checksum verification to CI workflow
+  - [x] 166.1 Update "Install ORAS" step in build-attestable-image.yml to verify checksum and upgrade to 1.3.0
     - In `.github/workflows/build-attestable-image.yml`, update the "Install ORAS" step:
       1. Change `VERSION="1.1.0"` to `VERSION="1.3.0"` to match the version used in `scripts/build-ami.py`
       2. After downloading the tar.gz, add a SHA-256 checksum verification step using `echo "<expected_sha256>  oras_1.3.0_linux_amd64.tar.gz" | sha256sum -c`
@@ -3054,12 +3054,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
       4. If the checksum does not match, fail with `exit 1` and an error message
     - _Requirements: 17.13, 17.14_
 
-  - [ ] 166.2 Write property test for CI ORAS Checksum Verification
+  - [x] 166.2 Write property test for CI ORAS Checksum Verification
     - **Property 174: CI ORAS Checksum Verification**
     - Parse `.github/workflows/build-attestable-image.yml` and verify the "Install ORAS" step contains: a checksum verification command (`sha256sum -c` or equivalent) and that the ORAS version matches the version used in `scripts/build-ami.py`
     - **Validates: Requirements 17.13, 17.14**
 
-  - [ ] 166.3 Write unit tests for CI ORAS installation
+  - [x] 166.3 Write unit tests for CI ORAS installation
     - Test that the workflow ORAS version matches the version in build-ami.py
     - Test that the workflow contains a sha256sum verification step for the ORAS download
     - Parse the workflow YAML to verify these properties

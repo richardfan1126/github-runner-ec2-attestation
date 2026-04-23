@@ -95,8 +95,16 @@ jobs:
       
       - name: Install ORAS
         run: |
-          VERSION="1.1.0"
+          VERSION="1.3.0"
+          # Expected SHA-256 checksum for oras_1.3.0_linux_amd64.tar.gz
+          # Source: https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_checksums.txt
+          EXPECTED_SHA256="6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64"
           curl -LO "https://github.com/oras-project/oras/releases/download/v${VERSION}/oras_${VERSION}_linux_amd64.tar.gz"
+          # Verify SHA-256 checksum before extracting (Requirements: 17.13, 17.14)
+          echo "${EXPECTED_SHA256}  oras_${VERSION}_linux_amd64.tar.gz" | sha256sum -c || {
+            echo "::error::ORAS archive checksum verification failed. Expected ${EXPECTED_SHA256}."
+            exit 1
+          }
           mkdir -p oras-install/
           tar -zxf oras_*.tar.gz -C oras-install/
           sudo mv oras-install/oras /usr/local/bin/
