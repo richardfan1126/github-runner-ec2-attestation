@@ -461,13 +461,20 @@ def install_rust(ssh_client: paramiko.SSHClient) -> None:
     # rustup-init binaries only have SHA-256 checksums, not GPG signatures. (Requirement: 17.17)
     
     # Step 1: Import the official Rust project GPG signing key
+    # Fetch the key directly from the Rust project's own infrastructure via HTTPS
+    # to avoid requiring dirmngr (keyserver daemon).
+    # --batch and --no-tty suppress gpg-agent interaction errors that occur in
+    # non-interactive SSH sessions where /dev/tty and gpg-agent are unavailable.
+    # We verify success by checking stderr for the "imported" confirmation rather
+    # than relying on the exit code, which may be non-zero due to agent errors
+    # even when the key import itself succeeded.
     logger.info("  Importing Rust project GPG signing key...")
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        'gpg --recv-keys 85AB96E6FA1BE5FE',
+        'curl --proto "=https" --tlsv1.2 -sSf "https://static.rust-lang.org/rust-key.gpg.ascii" | gpg --batch --no-tty --import',
         stream_output=True
     )
-    if exit_code != 0:
+    if 'key 85AB96E6FA1BE5FE' not in stderr or ('imported' not in stderr and 'not changed' not in stderr):
         raise RuntimeError(f"Failed to import Rust GPG signing key: {stderr}")
     
     # Step 2: Download the standalone tarball
@@ -684,10 +691,13 @@ def install_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     if exit_code != 0:
         raise RuntimeError(f"Failed to clone coldsnap repository: {stderr}")
     
-    # Build and install coldsnap using cargo install --locked
+    # Build and install coldsnap using cargo install --locked.
+    # PATH must include the cargo bin dir so that cargo can locate rustc internally —
+    # non-login SSH sessions do not source ~/.bashrc or ~/.profile, so the directory
+    # is not on PATH by default even though we installed Rust there.
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        "cd coldsnap && /home/ec2-user/.cargo/bin/cargo install --locked coldsnap",
+        "cd coldsnap && PATH=/home/ec2-user/.cargo/bin:$PATH /home/ec2-user/.cargo/bin/cargo install --locked coldsnap",
         stream_output=True
     )
     if exit_code != 0:
