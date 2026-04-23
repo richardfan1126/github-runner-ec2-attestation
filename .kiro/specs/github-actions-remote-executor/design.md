@@ -108,7 +108,7 @@ The system consists of the following major components:
 - Listens for incoming HTTP requests on configured port
 - Routes requests to appropriate handlers
 - Manages concurrent connections
-- Implements rate limiting per source IP
+- Implements rate limiting per source IP; the rate limiter periodically evicts stale IP entries (IPs whose last request timestamp is outside the current window) during the periodic cleanup task to prevent the per-IP tracking dictionary from growing without bound under distributed traffic
 
 **Encryption Manager**
 - Generates a Server_Keypair (composite: X25519 key pair + ML-KEM-768 key pair) at server startup and holds it in memory for the server's entire lifetime; the keypair is never persisted to disk
@@ -178,7 +178,7 @@ The system consists of the following major components:
 - Validates request structure and required fields
 - Validates repository URL format
 - Validates Git commit SHA format
-- Validates script file path
+- Validates script file path: rejects empty paths, path traversal sequences (`../`, `..\`), absolute paths (starting with `/` or `\`), and null bytes (`\x00`); absolute paths are explicitly rejected because `os.path.join(clone_path, script_path)` silently discards the clone prefix when given an absolute path, which would cause the pre-execution size check to read arbitrary host files
 - Validates file size limits
 
 **Repository Client**
@@ -220,6 +220,7 @@ The system consists of the following major components:
 - Stores the `repository` claim from the validated OIDC_Token in the execution record at creation time
 - Cleans up completed executions after retention period
 - Periodic cleanup_expired invocation is scheduled by the server; cleanup calls remove_output on the Output_Collector and remove_encryption_context on the Encryption_Manager for each expired execution record
+- Stores execution durations in a bounded `collections.deque(maxlen=10000)` rather than an unbounded list, so that the duration history does not grow without bound in long-running deployments
 
 **Script Executor**
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
@@ -1612,9 +1613,9 @@ class EncryptionContext:
 
 ### Property 167: Build Environment Pinning
 
-*For any* GitHub Actions workflow, the runner should be pinned to a specific Ubuntu version (not ubuntu-latest). The Build_Instance AMI data source should use a specific AMI ID or name filter with a specific version instead of most_recent=true.
+*For any* GitHub Actions workflow, the runner should be pinned to a specific Ubuntu version (not ubuntu-latest). The Build_Instance AMI data source should use a specific AMI ID or name filter with a specific version instead of most_recent=true. The KIWI image description (`appliance.kiwi`) should pin the AL2023 package repository URL to a specific release version instead of the floating `latest` mirrorlist path.
 
-**Validates: Requirements 11.9, 11.10**
+**Validates: Requirements 11.9, 11.10, 11.13**
 
 ### Error Categories
 
@@ -2150,6 +2151,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Configures loop devices for KIWI image building
 - Executes KIWI NG build script inside container (optionally with `--enable-ssh` flag — see [PART 5: DEBUG DESIGN](#part-5-debug-design))
 - Extracts PCR measurements from build output
+- Installs ORAS CLI (same version as AMI_Converter) with SHA-256 checksum verification before extraction; fails the workflow if the checksum does not match
 - Publishes artifacts to GHCR with ORAS
 - Triggers GitHub attestation service
 - Generates workflow summary with verification instructions (includes SSH warning when debug access is enabled)
@@ -2184,7 +2186,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Manages SSH connectivity with keepalive (30-second intervals) using paramiko
 - Installs required tools:
   - System dependencies: git, gcc via dnf
-  - Rust toolchain via rustup from sh.rustup.rs (trust assumption documented in code comments)
+  - Rust toolchain via official standalone installer tarball: downloads `rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz` and its detached GPG signature (`.asc`) from `https://static.rust-lang.org/dist/`, verifies the GPG signature using the official Rust project signing key (85AB96E6FA1BE5FE) before extracting, runs `install.sh`, then removes the tarball and signature (trust assumption documented in code comments; standalone tarballs are GPG-signed per https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers)
   - ORAS CLI 1.3.0 from GitHub releases, verified against a known SHA-256 checksum before installation
   - GitHub CLI via dnf repository (trust assumption documented in code comments)
   - Coldsnap cloned at a specific pinned git tag or commit hash (not HEAD), built from source using cargo
@@ -2229,9 +2231,10 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 6. KIWI NG build script executed inside container (with `--enable-ssh` if `workflow_dispatch` input is true — see [PART 5: DEBUG DESIGN](#part-5-debug-design))
 7. Raw disk image and PCR measurements generated
 8. PCR4 and PCR7 extracted from pcr_measurements.json
-9. Artifacts pushed to GHCR with ORAS (with PCR annotations)
-10. GitHub attestation service signs artifacts
-11. Workflow summary generated with verification instructions (SSH warning appended if debug access enabled)
+9. ORAS CLI installed with SHA-256 checksum verification (same version as AMI_Converter); workflow fails if checksum does not match
+10. Artifacts pushed to GHCR with ORAS (with PCR annotations)
+11. GitHub attestation service signs artifacts
+12. Workflow summary generated with verification instructions (SSH warning appended if debug access enabled)
 
 **Artifact Publishing Flow:**
 
@@ -2273,7 +2276,7 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 4. Script waits for instance to be running and pass status checks using EC2 waiters
 5. SSH connectivity verified with retries (10 attempts, 30s delay) and keepalive enabled (30s intervals)
 6. System dependencies installed via dnf: git, gcc
-7. Rust toolchain installed via rustup: `curl https://sh.rustup.rs | sh -s -- -y`
+7. Rust toolchain installed via official standalone tarball: `rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz` and its detached GPG signature (`.asc`) downloaded from `https://static.rust-lang.org/dist/`, GPG signature verified using official Rust project signing key (85AB96E6FA1BE5FE) before extraction, tarball and signature removed after installation
 8. ORAS CLI 1.3.0 installed from GitHub releases (linux_amd64.tar.gz), verified against known SHA-256 checksum
 9. GitHub CLI installed via dnf repository configuration
 10. Coldsnap cloned from https://github.com/awslabs/coldsnap.git at a specific pinned git tag/commit and built using `cargo install --locked coldsnap`
@@ -2473,7 +2476,7 @@ The Container_Image pull is part of the GHA_Server startup sequence. The full st
 1. **Verify Configuration**: Load and validate all configuration values (Requirement 9)
 2. **Verify Docker Daemon**: Check that the Docker daemon is accessible (Requirement 9, criteria 11-12)
 3. **Cleanup Dangling Containers**: Remove any dangling Execution_Containers from previous runs (Requirement 8, criteria 10)
-4. **Pull Container_Image**: Pull the configured Container_Image from the container registry (Requirement 34). If CONTAINER_IMAGE_DIGEST is configured, verify the pulled image digest matches the expected digest; fail to start if mismatch. Support digest-pinned image references (e.g., `python:3.11-slim@sha256:...`).
+4. **Pull Container_Image**: Pull the configured Container_Image from the container registry (Requirement 34). If CONTAINER_IMAGE_DIGEST is configured, verify the pulled image digest matches the expected digest; fail to start if mismatch. Support digest-pinned image references (e.g., `python:3.11-slim@sha256:...`). The default env file and `.env.example` include a `CONTAINER_IMAGE_DIGEST=` entry (empty by default) with a comment instructing operators to set a digest in production.
 5. **Schedule Periodic Cleanup**: Schedule periodic invocation of cleanup_expired on the Execution_Manager (Requirement 8, criteria 15-16)
 6. **Start Accepting Requests**: Begin listening for HTTP requests on the configured port
 
@@ -2717,25 +2720,53 @@ sudo dnf install -y git gcc
 
 ### Rust Toolchain Installation
 
-**Tool:** Rust (rustc, cargo, rustup)
+**Tool:** Rust (rustc, cargo)
 
 **Installation Method:**
 ```bash
-curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+# Import the official Rust project GPG signing key
+gpg --recv-keys 85AB96E6FA1BE5FE
+
+# Download the official standalone Rust installer tarball and its detached GPG signature
+# The standalone installers (not rustup-init) are the ones signed with .asc GPG signatures
+# per https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers
+curl --proto "=https" --tlsv1.2 -sSf \
+  https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz \
+  -o /tmp/rust-1.94.1.tar.gz
+curl --proto "=https" --tlsv1.2 -sSf \
+  https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz.asc \
+  -o /tmp/rust-1.94.1.tar.gz.asc
+
+# Verify GPG signature; fail and do not extract if verification fails
+gpg --verify /tmp/rust-1.94.1.tar.gz.asc /tmp/rust-1.94.1.tar.gz
+
+# Extract and install only after successful verification
+tar -xzf /tmp/rust-1.94.1.tar.gz -C /tmp/
+/tmp/rust-1.94.1-x86_64-unknown-linux-gnu/install.sh --prefix=/home/ec2-user/.cargo
+
+# Clean up
+rm -rf /tmp/rust-1.94.1.tar.gz /tmp/rust-1.94.1.tar.gz.asc /tmp/rust-1.94.1-x86_64-unknown-linux-gnu
 ```
 
 **Installation Details:**
-- Source: https://sh.rustup.rs (official Rust installer)
+- Source: `https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz` (official standalone tarball)
+- Signature: `https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz.asc` (detached GPG signature)
+- Signing Key: 85AB96E6FA1BE5FE (official Rust project release signing key, fetched from keyserver)
 - Protocol: HTTPS with TLS 1.2 minimum
-- Mode: Non-interactive (-y flag)
 - Installation Path: /home/ec2-user/.cargo/bin/
-- Components: rustc, cargo, rustup
+- Components: rustc, cargo
+
+**Why standalone tarball instead of rustup-init:**
+- The official standalone Rust installer tarballs (`.tar.xz`) are GPG-signed with detached `.asc` signature files, per the Rust Forge documentation at https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers
+- The `rustup-init` binary only provides SHA-256 checksums (`.sha256`), not GPG signatures — there are no `.asc` files for `rustup-init`
+- GPG signature verification provides stronger integrity guarantees than SHA-256 alone, as it requires possession of the private signing key to forge
 
 **Purpose:**
 - Required to build coldsnap from source
 - Provides cargo package manager
 
 **Verification:**
+- GPG signature verified before extraction; build fails if verification fails
 - Installation exit code checked (must be 0)
 - Errors logged and build fails if installation fails
 

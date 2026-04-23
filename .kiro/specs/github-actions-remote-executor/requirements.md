@@ -138,7 +138,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 16. THE Request_Validator SHALL validate that the repository URL is a valid GitHub repository
 17. THE Request_Validator SHALL validate that the script path is specified
 18. IF required fields are missing, THEN THE Request_Validator SHALL return HTTP 400 Bad Request with error details
-19. THE Request_Validator SHALL sanitize all input parameters to prevent injection attacks
+19. THE Request_Validator SHALL sanitize all input parameters to prevent injection attacks; specifically, `validate_script_path` SHALL reject paths containing null bytes (`\x00`) and SHALL reject absolute paths (paths starting with `/` or `\`) in addition to path traversal sequences, because `os.path.join` silently discards the clone prefix when given an absolute path
 20. THE Request_Validator SHALL NOT require authentication for the /health endpoint
 21. THE Request_Validator SHALL NOT require authentication for the /attest endpoint
 22. WHEN the GHA_Server processes a valid /execute request, THE Request_Validator SHALL verify that the `repository` claim from the validated OIDC_Token matches the `repository_url` field in the Execution_Request
@@ -247,6 +247,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 8. THE GHA_Server SHALL write logs to a persistent storage location
 9. THE GHA_Server SHALL use a contextvars.ContextVar-based approach for storing per-request log context instead of a process-global mutable dictionary
 10. THE log context for one request or task SHALL NOT be visible to or modifiable by any other concurrent request or task
+11. THE Execution_Manager SHALL store execution durations in a bounded data structure (e.g., a deque with a fixed maximum length) so that the duration history does not grow without bound in long-running deployments
 
 ### Requirement 8: Security and Resource Management
 
@@ -272,6 +273,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 16. WHEN cleanup_expired executes, THE Execution_Manager SHALL call remove_output on the Output_Collector and remove_encryption_context on the Encryption_Manager for each expired execution record
 17. THE Script_Executor SHALL create each Execution_Container with cap_drop set to ALL to remove all Linux capabilities
 18. THE Script_Executor SHALL NOT add back any capabilities unless documented as required with justification
+19. THE GHA_Server rate limiter SHALL periodically evict source IP entries whose most recent request timestamp is outside the current rate-limit window, so that the per-IP tracking dictionary does not grow without bound under distributed or spoofed-source traffic
 
 ### Requirement 9: Configuration Management
 
@@ -324,6 +326,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 10. THE Terraform data source for the Build_Instance AMI SHALL use a specific AMI ID or name filter with a specific version instead of most_recent = true
 11. THE Dockerfile for the KIWI builder SHALL include comments documenting that DNF packages are installed without explicit version pinning
 12. THE documentation SHALL suggest using --releasever lock or documenting expected package versions for audit purposes
+13. THE KIWI image description (appliance.kiwi) SHALL pin the AL2023 package repository URL to a specific release version instead of using the floating `latest` mirrorlist path, and SHALL include a comment explaining the pinning rationale and how to update it
 
 ### Requirement 12: Separate Python Dependency Configurations
 
@@ -369,6 +372,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. THE Artifact_Publisher SHALL calculate and output the artifact digest
 7. IF PCR measurements are missing or invalid, THEN THE Artifact_Publisher SHALL fail with an error
 8. IF ORAS push fails, THEN THE Artifact_Publisher SHALL fail with registry connectivity error
+9. THE Build_Workflow SHALL verify the SHA-256 checksum of the downloaded ORAS binary against a known expected value before installation; IF the checksum does not match, THEN the workflow SHALL fail with an integrity verification error; THE ORAS version used in the Build_Workflow SHALL match the version used in the AMI_Converter
 
 ### Requirement 14: Build Provenance Attestation
 
@@ -428,7 +432,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 #### Acceptance Criteria
 
 1. THE AMI_Converter SHALL install git and gcc on the Build_Instance using dnf package manager
-2. THE AMI_Converter SHALL install Rust toolchain by downloading and executing rustup installer from sh.rustup.rs
+2. THE AMI_Converter SHALL install Rust toolchain by downloading the official standalone Rust installer tarball and its detached GPG signature, verifying the GPG signature before extracting and installing (detailed in acceptance criterion 17)
 3. THE AMI_Converter SHALL install ORAS CLI version 1.3.0 from GitHub releases for linux_amd64
 4. THE AMI_Converter SHALL extract ORAS binary to /usr/local/bin
 5. THE AMI_Converter SHALL install GitHub CLI by adding gh-cli.repo and installing gh package via dnf
@@ -442,7 +446,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 13. THE AMI_Converter SHALL verify the downloaded ORAS archive against a known SHA-256 checksum before installation
 14. IF the ORAS checksum does not match, THEN fail with an integrity verification error
 15. THE AMI_Converter SHALL clone coldsnap at a specific pinned git tag or commit hash rather than HEAD
-16. THE AMI_Converter SHALL document trust assumptions for rustup and GitHub CLI in code comments
+16. THE AMI_Converter SHALL document trust assumptions for the Rust signing key and GitHub CLI in code comments
+17. THE AMI_Converter SHALL install Rust using the official standalone installer tarball: download `rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz` from `https://static.rust-lang.org/dist/` and its detached GPG signature (`rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz.asc`) from the same base URL, import the official Rust signing key (85AB96E6FA1BE5FE), verify the GPG signature before extracting, run the included `install.sh` script, and remove the tarball and signature file after installation; IF the GPG signature verification fails, THEN fail with an integrity verification error without extracting or executing the installer
 
 ### Requirement 18: Artifact Signature Verification
 
@@ -556,6 +561,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 8. WHEN CONTAINER_IMAGE_DIGEST is configured, THE GHA_Server SHALL verify the pulled image matches the expected digest
 9. IF the digest does not match, THEN fail to start with a descriptive error
 10. THE GHA_Server SHALL support digest-pinned container image references (e.g., python:3.11-slim@sha256:...)
+11. THE default env file and .env.example SHALL include a CONTAINER_IMAGE_DIGEST entry (empty by default) with a comment instructing operators to set a digest in production to prevent tag drift or registry compromise
 
 ### Requirement 35: Git Package Provisioning in KIWI Image
 

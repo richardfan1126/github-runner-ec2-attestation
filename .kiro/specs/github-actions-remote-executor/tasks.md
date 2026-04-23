@@ -2932,6 +2932,168 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 160. Final checkpoint - Ensure all security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 161. Fix Rust installer integrity verification in build-ami.py
+  - [ ] 161.1 Download standalone Rust tarball and verify GPG signature before installation
+    - In `install_rust()` in `scripts/build-ami.py`, replace the current approach with the GPG-verified standalone tarball:
+      1. Import the official Rust project GPG signing key: `gpg --recv-keys 85AB96E6FA1BE5FE`
+      2. Download the standalone tarball: `curl --proto "=https" --tlsv1.2 -sSf https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz -o /tmp/rust-1.94.1.tar.gz`
+      3. Download the detached GPG signature: `curl --proto "=https" --tlsv1.2 -sSf https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz.asc -o /tmp/rust-1.94.1.tar.gz.asc`
+      4. Verify the GPG signature: `gpg --verify /tmp/rust-1.94.1.tar.gz.asc /tmp/rust-1.94.1.tar.gz`
+      5. If verification fails, fail with an integrity verification error and do not extract or install
+      6. If verification succeeds, extract and install: `tar -xzf /tmp/rust-1.94.1.tar.gz -C /tmp/ && /tmp/rust-1.94.1-x86_64-unknown-linux-gnu/install.sh --prefix=/home/ec2-user/.cargo`
+      7. Remove tarball, signature, and extracted directory: `rm -rf /tmp/rust-1.94.1.tar.gz /tmp/rust-1.94.1.tar.gz.asc /tmp/rust-1.94.1-x86_64-unknown-linux-gnu`
+    - Add a code comment documenting the trust assumption: the signing key 85AB96E6FA1BE5FE is the official Rust project release signing key; verify it against https://www.rust-lang.org/tools/install before use
+    - Add a code comment explaining why the standalone tarball is used: standalone Rust installer tarballs (`.tar.xz`) are GPG-signed with `.asc` files per https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers; `rustup-init` binaries only have SHA-256 checksums, not GPG signatures
+    - _Requirements: 17.17_
+
+  - [ ] 161.2 Write property test for Rust Installer GPG Verification
+    - **Property 169: Rust Installer GPG Verification**
+    - For any Rust installation, verify the GPG signature of the standalone tarball is fetched and verified against the official Rust project signing key before extraction; if verification fails, the tarball is not extracted and an error is raised
+    - Parse `scripts/build-ami.py` `install_rust()` to verify it contains: a key import step, a tarball download step (from `static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz`), a signature download step (`.asc`), a `gpg --verify` step, a failure step, and only then an extraction and install step
+    - **Validates: Requirements 17.17**
+
+  - [ ] 161.3 Write unit tests for Rust GPG verification
+    - Test that install_rust imports the GPG signing key before downloading
+    - Test that install_rust downloads the standalone tarball (not rustup-init) and the detached signature
+    - Test that install_rust verifies the GPG signature before extracting
+    - Test that install_rust raises RuntimeError when GPG verification fails
+    - Test that install_rust extracts and installs only when GPG verification succeeds
+    - Test that install_rust removes the tarball, signature, and extracted directory after installation
+    - Mock execute_remote_command for all tests
+    - _Requirements: 17.17_
+
+- [ ] 162. Add CONTAINER_IMAGE_DIGEST to default env files
+  - [ ] 162.1 Add CONTAINER_IMAGE_DIGEST placeholder to .env.example
+    - Add `CONTAINER_IMAGE_DIGEST=` (empty, with a comment) to `.env.example` after the `CONTAINER_IMAGE` line
+    - Comment should explain: "Optional SHA-256 digest for container image verification (e.g., sha256:abc123...). When set, the server verifies the pulled image matches this digest at startup."
+    - _Requirements: 34.7, 34.8_
+
+  - [ ] 162.2 Add CONTAINER_IMAGE_DIGEST placeholder to KIWI env file
+    - Add `CONTAINER_IMAGE_DIGEST=` (empty, with a comment) to `kiwi-descriptions/root/etc/github-actions-remote-executor/env` after the `CONTAINER_IMAGE` line
+    - Same comment as above
+    - _Requirements: 34.7, 34.8_
+
+  - [ ] 162.3 Add digest pinning note to README.md
+    - In the configuration section of `README.md`, add a note after the `CONTAINER_IMAGE` entry explaining that `CONTAINER_IMAGE_DIGEST` should be set in production to pin the container image to a specific digest and prevent tag drift
+    - _Requirements: 34.7_
+
+  - [ ] 162.4 Write property test for Container Image Digest Default Configuration
+    - **Property 170: Container Image Digest Default Configuration**
+    - Parse `.env.example` and `kiwi-descriptions/root/etc/github-actions-remote-executor/env` to verify both files contain a `CONTAINER_IMAGE_DIGEST` entry (even if empty), confirming operators are prompted to configure digest pinning
+    - **Validates: Requirements 34.7**
+
+- [ ] 163. Pin AL2023 mirrorlist in appliance.kiwi
+  - [ ] 163.1 Replace floating `latest` mirrorlist URL with a pinned version in appliance.kiwi
+    - In `kiwi-descriptions/appliance.kiwi`, find the AL2023 repository definition that uses the `latest` mirrorlist path (e.g., `https://al2023-repos-us-east-1-9761ab97.s3.dualstack.us-east-1.amazonaws.com/core/mirrors/latest/...` or similar)
+    - Replace `latest` with a specific AL2023 release version (e.g., `2023.6` or the current pinned version used in the Dockerfile)
+    - Add a comment explaining the pinning rationale and how to update it
+    - _Requirements: 11.9_
+
+  - [ ] 163.2 Write property test for AL2023 Mirrorlist Pinning
+    - **Property 171: AL2023 Mirrorlist Pinning**
+    - Parse `kiwi-descriptions/appliance.kiwi` XML and verify that no repository URL contains `/latest/` as a path component; all repository URLs should reference a specific version
+    - **Validates: Requirements 11.9**
+
+  - [ ] 163.3 Write unit tests for mirrorlist pinning
+    - Test that appliance.kiwi does not contain any repository URL with `/latest/` path component
+    - Test that all repository URLs in appliance.kiwi reference a specific version string
+    - _Requirements: 11.9_
+
+- [ ] 164. Fix unbounded _execution_durations list in ExecutionManager
+  - [ ] 164.1 Replace _execution_durations list with a bounded deque in src/execution_manager.py
+    - Import `collections.deque` at the top of `src/execution_manager.py`
+    - Replace `self._execution_durations: list[float] = []` with `self._execution_durations: deque[float] = deque(maxlen=10000)` in `__init__`
+    - The `deque` with `maxlen=10000` automatically discards the oldest entries when the limit is reached, preventing unbounded growth
+    - No changes needed to `update_status()` or `cleanup_expired()` — the deque handles eviction automatically
+    - Update the type annotation in `get_metrics()` if it references the list type
+    - _Requirements: 7.1_
+
+  - [ ] 164.2 Write property test for Execution Durations Bounded Memory
+    - **Property 172: Execution Durations Bounded Memory**
+    - For any number of completed executions exceeding the deque maxlen, the `_execution_durations` collection should never grow beyond `maxlen` entries
+    - **Validates: Requirements 7.1**
+
+  - [ ] 164.3 Write unit tests for bounded execution durations
+    - Test that _execution_durations does not exceed maxlen after many completions
+    - Test that the oldest entries are evicted when maxlen is reached
+    - Test that get_metrics() still returns correct average_duration_ms with bounded deque
+    - _Requirements: 7.1_
+
+- [ ] 165. Fix unbounded RateLimiter._requests dict in server.py
+  - [ ] 165.1 Add periodic cleanup method to RateLimiter in src/server.py
+    - Add a `cleanup_stale_ips(self) -> int` method to the `RateLimiter` class
+    - The method should iterate over `_requests` and remove any IP entry where all timestamps are outside the current window (i.e., the IP has no recent requests)
+    - Return the count of removed IP entries
+    - The method should acquire `_lock` for thread safety
+    - _Requirements: 8.5_
+
+  - [ ] 165.2 Wire RateLimiter.cleanup_stale_ips into the periodic cleanup task
+    - In `src/server.py` or `src/main.py`, in the existing periodic cleanup background task (the one that calls `execution_manager.cleanup_expired()`), also call `rate_limiter.cleanup_stale_ips()`
+    - Log the number of stale IPs removed at DEBUG level
+    - _Requirements: 8.5_
+
+  - [ ] 165.3 Write property test for RateLimiter Bounded Memory
+    - **Property 173: RateLimiter Bounded Memory**
+    - For any set of source IPs that each make exactly one request and then never make another, after the rate limit window expires and `cleanup_stale_ips()` is called, the `_requests` dict should contain no entries for those IPs
+    - **Validates: Requirements 8.5**
+
+  - [ ] 165.4 Write unit tests for RateLimiter stale IP cleanup
+    - Test that cleanup_stale_ips removes IPs with no recent requests
+    - Test that cleanup_stale_ips retains IPs with recent requests
+    - Test that cleanup_stale_ips returns the correct count of removed IPs
+    - Test that cleanup_stale_ips is thread-safe
+    - Test that the periodic cleanup task calls cleanup_stale_ips
+    - _Requirements: 8.5_
+
+- [ ] 166. Add ORAS checksum verification to CI workflow
+  - [ ] 166.1 Update "Install ORAS" step in build-attestable-image.yml to verify checksum and upgrade to 1.3.0
+    - In `.github/workflows/build-attestable-image.yml`, update the "Install ORAS" step:
+      1. Change `VERSION="1.1.0"` to `VERSION="1.3.0"` to match the version used in `scripts/build-ami.py`
+      2. After downloading the tar.gz, add a SHA-256 checksum verification step using `echo "<expected_sha256>  oras_1.3.0_linux_amd64.tar.gz" | sha256sum -c`
+      3. The expected SHA-256 checksum for ORAS 1.3.0 linux_amd64 should match the value already hardcoded in `scripts/build-ami.py`'s `install_oras()` function
+      4. If the checksum does not match, fail with `exit 1` and an error message
+    - _Requirements: 17.13, 17.14_
+
+  - [ ] 166.2 Write property test for CI ORAS Checksum Verification
+    - **Property 174: CI ORAS Checksum Verification**
+    - Parse `.github/workflows/build-attestable-image.yml` and verify the "Install ORAS" step contains: a checksum verification command (`sha256sum -c` or equivalent) and that the ORAS version matches the version used in `scripts/build-ami.py`
+    - **Validates: Requirements 17.13, 17.14**
+
+  - [ ] 166.3 Write unit tests for CI ORAS installation
+    - Test that the workflow ORAS version matches the version in build-ami.py
+    - Test that the workflow contains a sha256sum verification step for the ORAS download
+    - Parse the workflow YAML to verify these properties
+    - _Requirements: 17.13, 17.14_
+
+- [ ] 167. Fix validate_script_path to reject absolute paths and null bytes
+  - [ ] 167.1 Add absolute path and null byte checks to validate_script_path in src/validation.py
+    - In `validate_script_path()`, add the following checks before the existing path traversal check:
+      1. Reject paths containing null bytes (`\x00`): `if '\x00' in path: return False`
+      2. Reject absolute paths (starting with `/` or `\`): `if path.startswith('/') or path.startswith('\\'): return False`
+    - These checks prevent `os.path.join(clone_path, script_path)` from silently discarding the clone prefix when `script_path` is absolute
+    - _Requirements: 2.19_
+
+  - [ ] 167.2 Write property test for Script Path Absolute Path Rejection
+    - **Property 175: Script Path Absolute Path Rejection**
+    - For any script path starting with `/` or `\`, `validate_script_path()` should return False
+    - **Validates: Requirements 2.19**
+
+  - [ ] 167.3 Write property test for Script Path Null Byte Rejection
+    - **Property 176: Script Path Null Byte Rejection**
+    - For any script path containing a null byte (`\x00`), `validate_script_path()` should return False
+    - **Validates: Requirements 2.19**
+
+  - [ ] 167.4 Write unit tests for absolute path and null byte rejection
+    - Test that `/etc/passwd` is rejected (absolute path)
+    - Test that `\windows\system32\cmd.exe` is rejected (absolute path with backslash)
+    - Test that `scripts/build.sh\x00.txt` is rejected (null byte)
+    - Test that `scripts/build.sh` is still accepted (valid relative path)
+    - Test that `./scripts/build.sh` is still accepted (valid relative path with dot)
+    - _Requirements: 2.19_
+
+- [ ] 168. Final checkpoint - Ensure all security finding remediation tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
