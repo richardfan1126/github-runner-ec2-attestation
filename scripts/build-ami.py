@@ -439,31 +439,92 @@ def install_rust(ssh_client: paramiko.SSHClient) -> None:
     """
     Install Rust toolchain on the instance via SSH.
     
-    Downloads and executes rustup installer from sh.rustup.rs with -y flag.
+    Downloads standalone Rust tarball, verifies GPG signature, and installs.
     Installation path: /home/ec2-user/.cargo/bin/
     
-    Requirements: 16.2
+    Requirements: 16.2, 17.17
     
     Args:
         ssh_client: Connected paramiko SSHClient
         
     Raises:
-        RuntimeError: If installation fails
+        RuntimeError: If installation or GPG verification fails
     """
     logger.info("Installing Rust toolchain...")
     
-    # Trust assumption: sh.rustup.rs is served over HTTPS and is the official Rust
-    # installation method maintained by the Rust project. We enforce TLS 1.2+ via
-    # --proto "=https" --tlsv1.2 to mitigate downgrade attacks. (Requirement: 17.16)
+    # Trust assumption: The signing key 85AB96E6FA1BE5FE is the official Rust project
+    # release signing key. Verify it against https://www.rust-lang.org/tools/install
+    # before use. (Requirement: 17.17)
     
-    # Download and execute rustup installer
+    # Why standalone tarball: Standalone Rust installer tarballs (.tar.gz) are GPG-signed
+    # with .asc files per https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers
+    # rustup-init binaries only have SHA-256 checksums, not GPG signatures. (Requirement: 17.17)
+    
+    # Step 1: Import the official Rust project GPG signing key
+    logger.info("  Importing Rust project GPG signing key...")
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y',
+        'gpg --recv-keys 85AB96E6FA1BE5FE',
         stream_output=True
     )
     if exit_code != 0:
-        raise RuntimeError(f"Failed to install Rust: {stderr}")
+        raise RuntimeError(f"Failed to import Rust GPG signing key: {stderr}")
+    
+    # Step 2: Download the standalone tarball
+    logger.info("  Downloading Rust standalone tarball...")
+    exit_code, _, stderr = execute_remote_command(
+        ssh_client,
+        'curl --proto "=https" --tlsv1.2 -sSf https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz -o /tmp/rust-1.94.1.tar.gz',
+        stream_output=True
+    )
+    if exit_code != 0:
+        raise RuntimeError(f"Failed to download Rust tarball: {stderr}")
+    
+    # Step 3: Download the detached GPG signature
+    logger.info("  Downloading GPG signature...")
+    exit_code, _, stderr = execute_remote_command(
+        ssh_client,
+        'curl --proto "=https" --tlsv1.2 -sSf https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz.asc -o /tmp/rust-1.94.1.tar.gz.asc',
+        stream_output=True
+    )
+    if exit_code != 0:
+        raise RuntimeError(f"Failed to download Rust GPG signature: {stderr}")
+    
+    # Step 4: Verify the GPG signature
+    logger.info("  Verifying GPG signature...")
+    exit_code, stdout, stderr = execute_remote_command(
+        ssh_client,
+        'gpg --verify /tmp/rust-1.94.1.tar.gz.asc /tmp/rust-1.94.1.tar.gz',
+        stream_output=True
+    )
+    if exit_code != 0:
+        # Clean up on verification failure
+        execute_remote_command(
+            ssh_client,
+            'rm -f /tmp/rust-1.94.1.tar.gz /tmp/rust-1.94.1.tar.gz.asc',
+            stream_output=False
+        )
+        raise RuntimeError(f"GPG signature verification failed for Rust tarball: {stderr}")
+    
+    # Step 5: Extract and install (only after successful verification)
+    logger.info("  Extracting and installing Rust...")
+    exit_code, _, stderr = execute_remote_command(
+        ssh_client,
+        'tar -xzf /tmp/rust-1.94.1.tar.gz -C /tmp/ && /tmp/rust-1.94.1-x86_64-unknown-linux-gnu/install.sh --prefix=/home/ec2-user/.cargo',
+        stream_output=True
+    )
+    if exit_code != 0:
+        raise RuntimeError(f"Failed to extract and install Rust: {stderr}")
+    
+    # Step 6: Clean up tarball, signature, and extracted directory
+    logger.info("  Cleaning up installation files...")
+    exit_code, _, stderr = execute_remote_command(
+        ssh_client,
+        'rm -rf /tmp/rust-1.94.1.tar.gz /tmp/rust-1.94.1.tar.gz.asc /tmp/rust-1.94.1-x86_64-unknown-linux-gnu',
+        stream_output=False
+    )
+    if exit_code != 0:
+        logger.warning(f"Failed to clean up Rust installation files: {stderr}")
     
     logger.info("  ✓ Rust toolchain installed at /home/ec2-user/.cargo/bin/")
 

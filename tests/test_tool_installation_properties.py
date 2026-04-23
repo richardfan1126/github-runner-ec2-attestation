@@ -73,7 +73,10 @@ def test_tool_installation_verification(oras_version: str, gh_version: str):
     # Define successful command responses (sha256sum must be checked before oras_ since the sha256sum command contains oras_ in the path)
     command_responses = {
         "dnf install -y git gcc": (0, "Installed successfully", ""),
-        "sh.rustup.rs": (0, "Rust installed", ""),
+        "gpg --recv-keys": (0, "Key imported", ""),
+        "rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz": (0, "Downloaded", ""),
+        "gpg --verify": (0, "Good signature", ""),
+        "install.sh --prefix": (0, "Rust installed", ""),
         "sha256sum": (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", ""),
         "curl -LO": (0, "ORAS downloaded", ""),
         "tar -xzf oras_": (0, "ORAS extracted", ""),
@@ -108,7 +111,7 @@ def test_tool_installation_verification(oras_version: str, gh_version: str):
         # Test Rust installation with verification
         build_ami.install_rust(mock_ssh_client)
         calls = [call[0][1] for call in mock_execute.call_args_list]
-        assert any("sh.rustup.rs" in cmd for cmd in calls), \
+        assert any("rust-1.94.1" in cmd for cmd in calls), \
             "Rust installation command should be executed"
         
         mock_execute.reset_mock()
@@ -227,7 +230,7 @@ def test_install_all_tools_sequential_execution():
         git_gcc_idx = next((i for i, cmd in enumerate(executed_commands) 
                            if "git gcc" in cmd), -1)
         rust_idx = next((i for i, cmd in enumerate(executed_commands) 
-                        if "rustup" in cmd), -1)
+                        if "rust-1.94.1" in cmd and "gpg --recv-keys" not in cmd), -1)
         oras_idx = next((i for i, cmd in enumerate(executed_commands) 
                         if "oras_" in cmd), -1)
         gh_idx = next((i for i, cmd in enumerate(executed_commands) 
@@ -273,7 +276,7 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
             # Fail at the specified tool
             if failing_tool == "system_deps" and "git gcc" in command:
                 return (1, "", "Failed to install system deps")
-            elif failing_tool == "rust" and "rustup" in command:
+            elif failing_tool == "rust" and "gpg --recv-keys" in command:
                 return (1, "", "Failed to install Rust")
             elif failing_tool == "oras" and "oras_" in command and "sha256sum" not in command:
                 return (1, "", "Failed to install ORAS")
@@ -300,7 +303,7 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
         
         if failing_tool == "system_deps":
             # Should not proceed to Rust
-            assert not any("rustup" in cmd for cmd in executed_commands), \
+            assert not any("rust-1.94.1" in cmd for cmd in executed_commands), \
                 "Should not proceed to Rust after system deps failure"
         elif failing_tool == "rust":
             # Should not proceed to ORAS
@@ -511,3 +514,114 @@ def test_coldsnap_pinned_version(data):
         # Verify --depth 1 is used for shallow clone
         assert "--depth 1" in clone_cmd or "--depth=1" in clone_cmd, \
             "git clone should use --depth 1 for a shallow clone at the pinned version"
+
+
+# Feature: github-actions-remote-executor, Property 169: Rust Installer GPG Verification
+@settings(max_examples=20)
+@given(data=st.data())
+def test_rust_installer_gpg_verification(data):
+    """
+    Property 169: Rust Installer GPG Verification
+
+    For any Rust installation, verify the GPG signature of the standalone tarball is
+    fetched and verified against the official Rust project signing key before extraction.
+    If verification fails, the tarball is not extracted and an error is raised.
+
+    Parses install_rust() to verify it contains:
+    - a key import step (gpg --recv-keys)
+    - a tarball download step (from static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz)
+    - a signature download step (.asc)
+    - a gpg --verify step
+    - a failure path that does not extract
+    - only then an extraction and install step
+
+    **Validates: Requirements 17.17**
+    """
+    import inspect
+
+    # Parse the source of install_rust to verify structural requirements
+    source = inspect.getsource(build_ami.install_rust)
+
+    # Must import the official Rust GPG signing key
+    assert "gpg --recv-keys" in source, \
+        "install_rust must import the Rust GPG signing key via gpg --recv-keys"
+    assert "85AB96E6FA1BE5FE" in source, \
+        "install_rust must use the official Rust project signing key 85AB96E6FA1BE5FE"
+
+    # Must download the standalone tarball (not rustup-init)
+    assert "static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz" in source, \
+        "install_rust must download the standalone tarball from static.rust-lang.org"
+
+    # Must download the detached GPG signature (.asc)
+    assert ".asc" in source, \
+        "install_rust must download the detached GPG signature (.asc file)"
+
+    # Must verify the GPG signature before extraction
+    assert "gpg --verify" in source, \
+        "install_rust must verify the GPG signature with gpg --verify"
+
+    # Must have an extraction step (tar -xzf) that comes after gpg --verify
+    assert "tar -xzf" in source, \
+        "install_rust must extract the tarball with tar -xzf"
+
+    # Verify ordering: gpg --verify must appear before tar -xzf in the source
+    gpg_verify_pos = source.index("gpg --verify")
+    tar_extract_pos = source.index("tar -xzf")
+    assert gpg_verify_pos < tar_extract_pos, \
+        "gpg --verify must appear before tar -xzf (verify before extract)"
+
+    # Must use the standalone installer script
+    assert "install.sh" in source, \
+        "install_rust must use the standalone install.sh script"
+
+    # Must clean up after installation
+    assert "rm -rf" in source, \
+        "install_rust must clean up the tarball, signature, and extracted directory"
+
+    # --- Behavioural check: GPG failure prevents extraction ---
+    mock_ssh_client = Mock()
+
+    with patch.object(build_ami, 'execute_remote_command') as mock_execute:
+        executed_commands = []
+
+        def side_effect_gpg_fail(ssh_client, command, stream_output=True):
+            executed_commands.append(command)
+            if "gpg --verify" in command:
+                return (1, "", "BAD signature")
+            return (0, "Success", "")
+
+        mock_execute.side_effect = side_effect_gpg_fail
+
+        with pytest.raises(RuntimeError) as exc_info:
+            build_ami.install_rust(mock_ssh_client)
+
+        # Extraction must NOT have been attempted after GPG failure
+        assert not any("tar -xzf" in cmd for cmd in executed_commands), \
+            "tar -xzf must not be executed when GPG verification fails"
+        assert not any("install.sh" in cmd for cmd in executed_commands), \
+            "install.sh must not be executed when GPG verification fails"
+
+        error_msg = str(exc_info.value).lower()
+        assert "gpg" in error_msg or "signature" in error_msg or "verification" in error_msg, \
+            "RuntimeError should indicate GPG/signature verification failure"
+
+    # --- Behavioural check: successful GPG verification allows extraction ---
+    mock_ssh_client2 = Mock()
+
+    with patch.object(build_ami, 'execute_remote_command') as mock_execute2:
+        executed_commands2 = []
+
+        def side_effect_gpg_ok(ssh_client, command, stream_output=True):
+            executed_commands2.append(command)
+            return (0, "Good signature", "")
+
+        mock_execute2.side_effect = side_effect_gpg_ok
+
+        # Should succeed without raising
+        build_ami.install_rust(mock_ssh_client2)
+
+        # Extraction must have been attempted after successful GPG verification
+        assert any("tar -xzf" in cmd for cmd in executed_commands2), \
+            "tar -xzf must be executed when GPG verification succeeds"
+        assert any("install.sh" in cmd for cmd in executed_commands2), \
+            "install.sh must be executed when GPG verification succeeds"

@@ -2932,8 +2932,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 160. Final checkpoint - Ensure all security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 161. Fix Rust installer integrity verification in build-ami.py
-  - [ ] 161.1 Download standalone Rust tarball and verify GPG signature before installation
+- [x] 161. Fix Rust installer integrity verification in build-ami.py
+  - [x] 161.1 Download standalone Rust tarball and verify GPG signature before installation
     - In `install_rust()` in `scripts/build-ami.py`, replace the current approach with the GPG-verified standalone tarball:
       1. Import the official Rust project GPG signing key: `gpg --recv-keys 85AB96E6FA1BE5FE`
       2. Download the standalone tarball: `curl --proto "=https" --tlsv1.2 -sSf https://static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz -o /tmp/rust-1.94.1.tar.gz`
@@ -2946,13 +2946,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add a code comment explaining why the standalone tarball is used: standalone Rust installer tarballs (`.tar.xz`) are GPG-signed with `.asc` files per https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers; `rustup-init` binaries only have SHA-256 checksums, not GPG signatures
     - _Requirements: 17.17_
 
-  - [ ] 161.2 Write property test for Rust Installer GPG Verification
+  - [x] 161.2 Write property test for Rust Installer GPG Verification
     - **Property 169: Rust Installer GPG Verification**
     - For any Rust installation, verify the GPG signature of the standalone tarball is fetched and verified against the official Rust project signing key before extraction; if verification fails, the tarball is not extracted and an error is raised
     - Parse `scripts/build-ami.py` `install_rust()` to verify it contains: a key import step, a tarball download step (from `static.rust-lang.org/dist/rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz`), a signature download step (`.asc`), a `gpg --verify` step, a failure step, and only then an extraction and install step
     - **Validates: Requirements 17.17**
 
-  - [ ] 161.3 Write unit tests for Rust GPG verification
+  - [x] 161.3 Write unit tests for Rust GPG verification
     - Test that install_rust imports the GPG signing key before downloading
     - Test that install_rust downloads the standalone tarball (not rustup-init) and the detached signature
     - Test that install_rust verifies the GPG signature before extracting
