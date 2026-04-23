@@ -44,7 +44,8 @@ resource "aws_iam_policy" "build_instance_policy" {
         ]
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion" = data.aws_region.current.name
+            "aws:RequestedRegion"  = data.aws_region.current.name
+            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
           }
         }
       },
@@ -77,7 +78,8 @@ resource "aws_iam_policy" "build_instance_policy" {
         ]
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion" = data.aws_region.current.name
+            "aws:RequestedRegion"  = data.aws_region.current.name
+            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
           }
         }
       },
@@ -95,7 +97,8 @@ resource "aws_iam_policy" "build_instance_policy" {
         Resource = "arn:aws:ec2:${data.aws_region.current.name}::snapshot/*"
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion" = data.aws_region.current.name
+            "aws:RequestedRegion"  = data.aws_region.current.name
+            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
           }
         }
       }

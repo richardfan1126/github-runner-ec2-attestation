@@ -60,19 +60,22 @@ class TestExecutionDurationsBoundedDeque:
         for _ in range(DURATIONS_MAXLEN):
             _complete_execution(manager)
 
-        # Snapshot the current oldest entry (index 0)
-        oldest_before = manager._execution_durations[0]
+        # Snapshot all current entries as a list (ordered oldest-first)
+        entries_before = list(manager._execution_durations)
+        assert len(entries_before) == DURATIONS_MAXLEN
 
-        # Add one more entry — this should evict the oldest
+        # Add one more entry — this should evict the oldest (index 0)
         _complete_execution(manager)
 
         # The deque is still at maxlen
         assert len(manager._execution_durations) == DURATIONS_MAXLEN
 
-        # The original oldest entry is gone
-        assert manager._execution_durations[0] != oldest_before or (
-            # Edge case: if all durations happen to be identical, just verify length
-            len(set(manager._execution_durations)) == 1
+        # The entries after eviction should match entries_before[1:] for the
+        # first DURATIONS_MAXLEN-1 positions (oldest was dropped, rest shifted left)
+        entries_after = list(manager._execution_durations)
+        assert entries_after[:DURATIONS_MAXLEN - 1] == entries_before[1:], (
+            "After overflow, the deque should have evicted the oldest entry "
+            "and the remaining entries should be shifted left by one position"
         )
 
     def test_get_metrics_average_duration_with_bounded_deque(self):
