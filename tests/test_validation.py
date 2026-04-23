@@ -210,3 +210,43 @@ def test_validate_execution_request_multiple_errors(validator):
     result = validator.validate_execution_request(request)
     assert result.valid is False
     assert len(result.errors) == 3  # URL, commit, and path errors
+
+
+# ── Task 167.4: absolute path and null byte rejection ──────────────────────────
+
+def test_validate_script_path_rejects_unix_absolute_path(validator):
+    """Absolute UNIX paths (starting with '/') must be rejected.
+
+    os.path.join(clone_path, '/etc/passwd') silently discards clone_path,
+    so the pre-execution size check would read an arbitrary host file.
+    Requirement 2.19.
+    """
+    assert validator.validate_script_path('/etc/passwd') is False
+
+
+def test_validate_script_path_rejects_windows_absolute_path(validator):
+    r"""Absolute Windows paths (starting with '\') must be rejected.
+
+    os.path.join(clone_path, '\\windows\\system32\\cmd.exe') discards
+    clone_path on Windows-style joins.  Requirement 2.19.
+    """
+    assert validator.validate_script_path('\\windows\\system32\\cmd.exe') is False
+
+
+def test_validate_script_path_rejects_null_byte(validator):
+    r"""Paths containing a null byte (\x00) must be rejected.
+
+    Null bytes can truncate strings in C-based libraries and bypass
+    extension checks.  Requirement 2.19.
+    """
+    assert validator.validate_script_path('scripts/build.sh\x00.txt') is False
+
+
+def test_validate_script_path_accepts_valid_relative_path(validator):
+    """A plain relative path must still be accepted after the new checks."""
+    assert validator.validate_script_path('scripts/build.sh') is True
+
+
+def test_validate_script_path_accepts_dot_relative_path(validator):
+    """A relative path starting with './' must still be accepted."""
+    assert validator.validate_script_path('./scripts/build.sh') is True

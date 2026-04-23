@@ -35,11 +35,14 @@ def valid_commit_hash(draw):
 
 @st.composite
 def valid_script_path(draw):
-    """Generate valid script paths without path traversal"""
-    # Generate path components that don't contain traversal sequences
+    """Generate valid script paths without path traversal, absolute prefixes, or null bytes"""
+    # Generate path components that don't contain traversal sequences,
+    # null bytes, or characters that would make the path absolute.
     components = draw(st.lists(
         st.text(
-            alphabet=st.characters(blacklist_characters='\\/:*?"<>|'),
+            # Exclude: path separators, null bytes, and characters that
+            # would produce an absolute path when used as the first component.
+            alphabet=st.characters(blacklist_characters='\x00\\/:*?"<>|'),
             min_size=1,
             max_size=50
         ).filter(lambda x: '..' not in x and x.strip()),
@@ -356,3 +359,63 @@ def test_path_traversal_rejection(traversal_pattern):
     for path in malicious_paths:
         is_valid = validator.validate_script_path(path)
         assert not is_valid, f"Path with traversal should be rejected: {path}"
+
+
+# Property 175: Script Path Absolute Path Rejection
+# Feature: github-actions-remote-executor, Property 175: Script Path Absolute Path Rejection
+@given(
+    suffix=st.text(
+        alphabet=st.characters(blacklist_characters='\x00'),
+        min_size=0,
+        max_size=100,
+    ),
+    prefix=st.sampled_from(['/', '\\']),
+)
+def test_property_175_script_path_absolute_path_rejection(prefix, suffix):
+    """
+    Property 175: For any script path starting with '/' or '\\',
+    validate_script_path() should return False.
+
+    Absolute paths are rejected because os.path.join(clone_path, script_path)
+    silently discards the clone prefix when script_path is absolute, which
+    would allow the caller to read arbitrary host files.
+
+    Validates: Requirements 2.19
+    """
+    path = prefix + suffix
+    validator = RequestValidator()
+    assert validator.validate_script_path(path) is False, (
+        f"Absolute path should be rejected: {path!r}"
+    )
+
+
+# Property 176: Script Path Null Byte Rejection
+# Feature: github-actions-remote-executor, Property 176: Script Path Null Byte Rejection
+@given(
+    before=st.text(
+        alphabet=st.characters(blacklist_characters='\x00'),
+        min_size=0,
+        max_size=50,
+    ),
+    after=st.text(
+        alphabet=st.characters(blacklist_characters='\x00'),
+        min_size=0,
+        max_size=50,
+    ),
+)
+def test_property_176_script_path_null_byte_rejection(before, after):
+    """
+    Property 176: For any script path containing a null byte (\\x00),
+    validate_script_path() should return False.
+
+    Null bytes can be used to bypass extension checks and confuse downstream
+    string handling (e.g., C-based libraries that treat \\x00 as a string
+    terminator).
+
+    Validates: Requirements 2.19
+    """
+    path = before + '\x00' + after
+    validator = RequestValidator()
+    assert validator.validate_script_path(path) is False, (
+        f"Path with null byte should be rejected: {path!r}"
+    )

@@ -435,11 +435,24 @@ class RequestValidator:
             path: Script file path to validate
             
         Returns:
-            True if path is valid (non-empty, no path traversal), False otherwise
+            True if path is valid (non-empty, no path traversal, not absolute,
+            no null bytes), False otherwise
         """
         if not path or not path.strip():
             return False
-        
+
+        # Reject paths containing null bytes — they can be used to bypass
+        # extension checks and confuse downstream string handling.
+        if '\x00' in path:
+            return False
+
+        # Reject absolute paths (starting with '/' or '\').
+        # os.path.join(clone_path, script_path) silently discards the clone
+        # prefix when script_path is absolute, which would allow the caller
+        # to read arbitrary host files.
+        if path.startswith('/') or path.startswith('\\'):
+            return False
+
         # Check for path traversal attempts
         for pattern in self.PATH_TRAVERSAL_PATTERNS:
             if pattern in path:

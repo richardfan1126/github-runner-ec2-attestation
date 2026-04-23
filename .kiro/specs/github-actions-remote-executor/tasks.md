@@ -3065,25 +3065,25 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Parse the workflow YAML to verify these properties
     - _Requirements: 17.13, 17.14_
 
-- [ ] 167. Fix validate_script_path to reject absolute paths and null bytes
-  - [ ] 167.1 Add absolute path and null byte checks to validate_script_path in src/validation.py
+- [x] 167. Fix validate_script_path to reject absolute paths and null bytes
+  - [x] 167.1 Add absolute path and null byte checks to validate_script_path in src/validation.py
     - In `validate_script_path()`, add the following checks before the existing path traversal check:
       1. Reject paths containing null bytes (`\x00`): `if '\x00' in path: return False`
       2. Reject absolute paths (starting with `/` or `\`): `if path.startswith('/') or path.startswith('\\'): return False`
     - These checks prevent `os.path.join(clone_path, script_path)` from silently discarding the clone prefix when `script_path` is absolute
     - _Requirements: 2.19_
 
-  - [ ] 167.2 Write property test for Script Path Absolute Path Rejection
+  - [x] 167.2 Write property test for Script Path Absolute Path Rejection
     - **Property 175: Script Path Absolute Path Rejection**
     - For any script path starting with `/` or `\`, `validate_script_path()` should return False
     - **Validates: Requirements 2.19**
 
-  - [ ] 167.3 Write property test for Script Path Null Byte Rejection
+  - [x] 167.3 Write property test for Script Path Null Byte Rejection
     - **Property 176: Script Path Null Byte Rejection**
     - For any script path containing a null byte (`\x00`), `validate_script_path()` should return False
     - **Validates: Requirements 2.19**
 
-  - [ ] 167.4 Write unit tests for absolute path and null byte rejection
+  - [x] 167.4 Write unit tests for absolute path and null byte rejection
     - Test that `/etc/passwd` is rejected (absolute path)
     - Test that `\windows\system32\cmd.exe` is rejected (absolute path with backslash)
     - Test that `scripts/build.sh\x00.txt` is rejected (null byte)
