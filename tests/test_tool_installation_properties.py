@@ -77,7 +77,7 @@ def test_tool_installation_verification(oras_version: str, gh_version: str):
         "rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz": (0, "Downloaded", ""),
         "gpg --verify": (0, "Good signature", ""),
         "install.sh --prefix": (0, "Rust installed", ""),
-        "sha256sum": (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", ""),
+        "sha256sum": (0, "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  /tmp/oras_1.3.0_linux_amd64.tar.gz", ""),
         "curl -LO": (0, "ORAS downloaded", ""),
         "tar -xzf oras_": (0, "ORAS extracted", ""),
         "oras version": (0, f"Version: {oras_version}", ""),
@@ -184,7 +184,7 @@ def test_tool_verification_failure_detection(verification_exit_code: int):
             if "oras version" in command:
                 return (verification_exit_code, "", "Command not found")
             if "sha256sum" in command:
-                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+                return (0, "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             return (0, "Success", "")
         
         mock_execute.side_effect = side_effect
@@ -214,7 +214,7 @@ def test_install_all_tools_sequential_execution():
             executed_commands.append(command)
             # Return matching checksum for sha256sum command
             if "sha256sum" in command:
-                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+                return (0, "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             # Return success for all commands
             return (0, "Success", "")
         
@@ -287,7 +287,7 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
             
             # Return matching checksum for sha256sum command
             if "sha256sum" in command:
-                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+                return (0, "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             
             return (0, "Success", "")
         
@@ -337,7 +337,7 @@ def test_tool_verification_output_logging(stdout_output: str):
             if "oras version" in command:
                 return (0, stdout_output, "")
             if "sha256sum" in command:
-                return (0, "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+                return (0, "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
             return (0, "Success", "")
         
         mock_execute.side_effect = side_effect
@@ -434,7 +434,7 @@ def test_oras_checksum_verification(bad_checksum: str):
     mock_ssh_client = Mock()
 
     # The expected checksum hardcoded in install_oras
-    expected_checksum = "e09e85323b4b4b003873855f04bba929c9b2f80e5fa2e96b0e1c5393e0e13ea6"
+    expected_checksum = "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64"
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         # --- Case 1: matching checksum should succeed ---
