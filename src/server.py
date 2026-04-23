@@ -97,6 +97,40 @@ class RateLimiter:
             
             return True, remaining
 
+    def cleanup_stale_ips(self) -> int:
+        """
+        Remove IP entries that have no requests within the current window.
+
+        An IP is considered stale when all of its recorded timestamps fall
+        outside the current rate-limit window, meaning the IP has made no
+        recent requests and its entry no longer contributes to rate limiting.
+        Removing these entries prevents the ``_requests`` dict from growing
+        without bound under distributed or spoofed-source traffic.
+
+        Returns:
+            Number of IP entries removed.
+
+        Requirements: 8.5
+        """
+        now = time.time()
+        cutoff = now - self.window_seconds
+        stale_ips = []
+
+        with self._lock:
+            for ip, timestamps in list(self._requests.items()):
+                # Keep only timestamps still inside the window
+                recent = [t for t in timestamps if t > cutoff]
+                if not recent:
+                    stale_ips.append(ip)
+                else:
+                    # Update the list in-place to drop expired timestamps
+                    self._requests[ip] = recent
+
+            for ip in stale_ips:
+                del self._requests[ip]
+
+        return len(stale_ips)
+
 
 def create_app(config: ServerConfig, docker_client=None, encryption_manager=None) -> FastAPI:
     """
@@ -119,13 +153,17 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     async def lifespan(application: FastAPI):
         """Manage background tasks for the application lifecycle."""
         async def periodic_cleanup():
-            """Periodically invoke cleanup_expired on the ExecutionManager."""
+            """Periodically invoke cleanup_expired on the ExecutionManager and
+            cleanup_stale_ips on the RateLimiter."""
             while True:
                 try:
                     await asyncio.sleep(cleanup_interval_seconds)
                     removed = application.state.execution_manager.cleanup_expired()
                     if removed > 0:
                         logger.info(f"Periodic cleanup removed {removed} expired execution(s)")
+                    stale_ips = application.state.rate_limiter.cleanup_stale_ips()
+                    if stale_ips > 0:
+                        logger.debug(f"Periodic cleanup removed {stale_ips} stale IP(s) from rate limiter")
                 except asyncio.CancelledError:
                     break
                 except Exception:

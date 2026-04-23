@@ -3019,25 +3019,25 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that get_metrics() still returns correct average_duration_ms with bounded deque
     - _Requirements: 7.1_
 
-- [ ] 165. Fix unbounded RateLimiter._requests dict in server.py
-  - [ ] 165.1 Add periodic cleanup method to RateLimiter in src/server.py
+- [x] 165. Fix unbounded RateLimiter._requests dict in server.py
+  - [x] 165.1 Add periodic cleanup method to RateLimiter in src/server.py
     - Add a `cleanup_stale_ips(self) -> int` method to the `RateLimiter` class
     - The method should iterate over `_requests` and remove any IP entry where all timestamps are outside the current window (i.e., the IP has no recent requests)
     - Return the count of removed IP entries
     - The method should acquire `_lock` for thread safety
     - _Requirements: 8.5_
 
-  - [ ] 165.2 Wire RateLimiter.cleanup_stale_ips into the periodic cleanup task
+  - [x] 165.2 Wire RateLimiter.cleanup_stale_ips into the periodic cleanup task
     - In `src/server.py` or `src/main.py`, in the existing periodic cleanup background task (the one that calls `execution_manager.cleanup_expired()`), also call `rate_limiter.cleanup_stale_ips()`
     - Log the number of stale IPs removed at DEBUG level
     - _Requirements: 8.5_
 
-  - [ ] 165.3 Write property test for RateLimiter Bounded Memory
+  - [x] 165.3 Write property test for RateLimiter Bounded Memory
     - **Property 173: RateLimiter Bounded Memory**
     - For any set of source IPs that each make exactly one request and then never make another, after the rate limit window expires and `cleanup_stale_ips()` is called, the `_requests` dict should contain no entries for those IPs
     - **Validates: Requirements 8.5**
 
-  - [ ] 165.4 Write unit tests for RateLimiter stale IP cleanup
+  - [x] 165.4 Write unit tests for RateLimiter stale IP cleanup
     - Test that cleanup_stale_ips removes IPs with no recent requests
     - Test that cleanup_stale_ips retains IPs with recent requests
     - Test that cleanup_stale_ips returns the correct count of removed IPs
