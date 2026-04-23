@@ -2999,8 +2999,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that all repository URLs in appliance.kiwi reference a specific version string
     - _Requirements: 11.9_
 
-- [ ] 164. Fix unbounded _execution_durations list in ExecutionManager
-  - [ ] 164.1 Replace _execution_durations list with a bounded deque in src/execution_manager.py
+- [x] 164. Fix unbounded _execution_durations list in ExecutionManager
+  - [x] 164.1 Replace _execution_durations list with a bounded deque in src/execution_manager.py
     - Import `collections.deque` at the top of `src/execution_manager.py`
     - Replace `self._execution_durations: list[float] = []` with `self._execution_durations: deque[float] = deque(maxlen=10000)` in `__init__`
     - The `deque` with `maxlen=10000` automatically discards the oldest entries when the limit is reached, preventing unbounded growth
@@ -3008,12 +3008,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Update the type annotation in `get_metrics()` if it references the list type
     - _Requirements: 7.1_
 
-  - [ ] 164.2 Write property test for Execution Durations Bounded Memory
+  - [x] 164.2 Write property test for Execution Durations Bounded Memory
     - **Property 172: Execution Durations Bounded Memory**
     - For any number of completed executions exceeding the deque maxlen, the `_execution_durations` collection should never grow beyond `maxlen` entries
     - **Validates: Requirements 7.1**
 
-  - [ ] 164.3 Write unit tests for bounded execution durations
+  - [x] 164.3 Write unit tests for bounded execution durations
     - Test that _execution_durations does not exceed maxlen after many completions
     - Test that the oldest entries are evicted when maxlen is reached
     - Test that get_metrics() still returns correct average_duration_ms with bounded deque

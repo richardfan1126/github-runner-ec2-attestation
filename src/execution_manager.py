@@ -1,6 +1,7 @@
 """Execution management for GitHub Actions Remote Executor"""
 import uuid
 import logging
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any, Dict, Optional, Tuple
@@ -38,7 +39,7 @@ class ExecutionManager:
         self._total_executions = 0
         self._successful_executions = 0
         self._failed_executions = 0
-        self._execution_durations: list[float] = []  # Store durations in milliseconds
+        self._execution_durations: deque[float] = deque(maxlen=10000)  # Store durations in milliseconds; bounded to prevent unbounded growth
     
     def create_execution(
         self,
