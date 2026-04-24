@@ -271,3 +271,14 @@ jobs:
           echo "## AMI Build Failed ❌" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The AMI build step failed. Check the job logs for details." >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup Terraform resources
+        if: always()
+        run: |
+          cd terraform/build-ami
+          terraform init -input=false
+          terraform destroy -auto-approve \
+            -var "region=${{ vars.AWS_REGION || 'us-east-1' }}" \
+            -var "instance_type=c5.9xlarge" \
+            -var "allowed_ssh_cidr=0.0.0.0/0" \
+          || echo "::warning::Terraform destroy encountered errors. Manual cleanup may be required."

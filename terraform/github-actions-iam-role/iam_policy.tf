@@ -54,6 +54,7 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "ec2:DeleteVpc",
       "ec2:DescribeVpcs",
       "ec2:ModifyVpcAttribute",
+      "ec2:DescribeVpcAttribute",
       "ec2:CreateSubnet",
       "ec2:DeleteSubnet",
       "ec2:DescribeSubnets",
