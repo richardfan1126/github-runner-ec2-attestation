@@ -169,36 +169,57 @@ The wildcard on the subject allows any branch, tag, or environment within the re
 
 ### IAM Permissions
 
-The attached policy grants the minimum permissions needed by `scripts/build-ami.py` and the `terraform/build-ami/` stack it invokes:
+The attached policy grants the minimum permissions needed by `scripts/build-ami.py` and the `terraform/build-ami/` stack it invokes.
 
-**EC2 — instance provisioning (for `terraform/build-ami/`):**
-- `ec2:RunInstances`, `ec2:TerminateInstances`, `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`
-- `ec2:CreateKeyPair`, `ec2:DeleteKeyPair`, `ec2:DescribeKeyPairs`
-- `ec2:CreateSecurityGroup`, `ec2:DeleteSecurityGroup`, `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress`, `ec2:DescribeSecurityGroups`
+**Important boundary:** `coldsnap upload` and `ec2:RegisterImage` run **on the EC2 build instance** using the instance's own IAM role (`build-ami-instance-role`, defined in `terraform/build-ami/iam.tf`). Those EBS Direct API and AMI registration permissions belong to the instance role, not to the GitHub Actions CI role. The CI role only needs to manage the infrastructure lifecycle and the small set of boto3 calls made directly by `scripts/build-ami.py` on the runner.
+
+---
+
+**EC2 — instance lifecycle (Terraform `aws_instance` apply/destroy + boto3 waiters):**
+- `ec2:RunInstances` — create the build instance
+- `ec2:TerminateInstances` — destroy the build instance
+- `ec2:DescribeInstances` — Terraform state refresh + boto3 `instance_running` waiter
+- `ec2:DescribeInstanceStatus` — boto3 `instance_status_ok` waiter
+- `ec2:DescribeInstanceAttribute` — Terraform reads instance attributes on refresh
+
+**EC2 — key pair (Terraform `aws_key_pair`):**
+- `ec2:ImportKeyPair` — Terraform uses `ImportKeyPair` (not `CreateKeyPair`) for `aws_key_pair` resources
+- `ec2:DeleteKeyPair`
+- `ec2:DescribeKeyPairs`
+
+**EC2 — security group (Terraform `aws_security_group`):**
+- `ec2:CreateSecurityGroup`, `ec2:DeleteSecurityGroup`
+- `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress`
+- `ec2:DescribeSecurityGroups`, `ec2:DescribeSecurityGroupRules` — Terraform 5.x reads rules separately
+
+**EC2 — VPC and networking (Terraform `aws_vpc`, `aws_subnet`, `aws_internet_gateway`, `aws_route_table`):**
 - `ec2:CreateVpc`, `ec2:DeleteVpc`, `ec2:DescribeVpcs`, `ec2:ModifyVpcAttribute`
 - `ec2:CreateSubnet`, `ec2:DeleteSubnet`, `ec2:DescribeSubnets`, `ec2:ModifySubnetAttribute`
 - `ec2:CreateInternetGateway`, `ec2:DeleteInternetGateway`, `ec2:AttachInternetGateway`, `ec2:DetachInternetGateway`, `ec2:DescribeInternetGateways`
 - `ec2:CreateRouteTable`, `ec2:DeleteRouteTable`, `ec2:CreateRoute`, `ec2:DeleteRoute`, `ec2:AssociateRouteTable`, `ec2:DisassociateRouteTable`, `ec2:DescribeRouteTables`
-- `ec2:CreateTags`, `ec2:DescribeTags`
-- `ec2:DescribeAvailabilityZones`, `ec2:DescribeImages` (for AMI lookup in `data.tf`)
 
-**EBS — snapshot upload (coldsnap via EBS Direct API):**
-- `ebs:StartSnapshot`, `ebs:PutSnapshotBlock`, `ebs:CompleteSnapshot`
-- `ebs:ListSnapshotBlocks`, `ebs:ListChangedBlocks`, `ebs:GetSnapshotBlock`
-- `ec2:CreateSnapshot`, `ec2:DescribeSnapshots`, `ec2:DescribeSnapshotAttribute`
+**EC2 — tagging and data sources:**
+- `ec2:CreateTags` — applied to all resources at creation time
+- `ec2:DescribeAvailabilityZones` — `data.aws_availability_zones` in `data.tf`
+- `ec2:DescribeImages` — `data.aws_ami` lookup in `data.tf`
 
-**AMI — registration:**
-- `ec2:RegisterImage`, `ec2:DeregisterImage`, `ec2:DescribeImages`, `ec2:ModifyImageAttribute`
+**EC2 — snapshot waiter (boto3 `snapshot_completed` waiter in `wait_for_snapshot`):**
+- `ec2:DescribeSnapshots` — the snapshot is created by coldsnap on the instance; the runner only polls its completion status
 
-**IAM — pass-role (so Terraform can attach the EC2 instance profile):**
-- `iam:PassRole` scoped to the `build-ami-instance-role` ARN
-- `iam:CreateRole`, `iam:DeleteRole`, `iam:GetRole`, `iam:ListRolePolicies`, `iam:ListAttachedRolePolicies`
-- `iam:CreatePolicy`, `iam:DeletePolicy`, `iam:GetPolicy`, `iam:GetPolicyVersion`, `iam:ListPolicyVersions`
+**EC2 — AMI registration (boto3 `register_image` call in `register_ami`):**
+- `ec2:RegisterImage` — called directly by `scripts/build-ami.py` on the runner after the snapshot completes
+
+**IAM — instance role and profile lifecycle (Terraform `aws_iam_role`, `aws_iam_policy`, `aws_iam_instance_profile`):**
+- `iam:CreateRole`, `iam:DeleteRole`, `iam:GetRole`, `iam:TagRole`
+- `iam:ListRolePolicies`, `iam:ListAttachedRolePolicies`
+- `iam:CreatePolicy`, `iam:DeletePolicy`, `iam:GetPolicy`, `iam:GetPolicyVersion`, `iam:ListPolicyVersions`, `iam:TagPolicy`
 - `iam:AttachRolePolicy`, `iam:DetachRolePolicy`
-- `iam:CreateInstanceProfile`, `iam:DeleteInstanceProfile`, `iam:GetInstanceProfile`, `iam:AddRoleToInstanceProfile`, `iam:RemoveRoleFromInstanceProfile`
+- `iam:CreateInstanceProfile`, `iam:DeleteInstanceProfile`, `iam:GetInstanceProfile`, `iam:TagInstanceProfile`
+- `iam:AddRoleToInstanceProfile`, `iam:RemoveRoleFromInstanceProfile`
+- `iam:PassRole` — scoped to `arn:aws:iam::<account>:role/build-ami-instance-role`; required so Terraform can attach the instance profile to the EC2 instance
 
-**STS — identity check (used by Terraform AWS provider and boto3):**
-- `sts:GetCallerIdentity`
+**STS — identity check:**
+- `sts:GetCallerIdentity` — used by both the Terraform AWS provider and boto3 at startup (`data.aws_caller_identity` in `data.tf`)
 
 ### Output
 
