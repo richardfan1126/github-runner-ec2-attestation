@@ -6,7 +6,7 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
 
 ## Tasks
 
-- [ ] 1. Add `artifact_ref` output to the `build-and-publish` job
+- [x] 1. Add `artifact_ref` output to the `build-and-publish` job
   - Add `outputs:` block to the existing `build-and-publish` job that exposes `artifact_ref: ${{ steps.push.outputs.artifact_ref }}`
   - This output is consumed by the new `build-ami` job via `needs.build-and-publish.outputs.artifact_ref`
   - _Requirements: 5.1_

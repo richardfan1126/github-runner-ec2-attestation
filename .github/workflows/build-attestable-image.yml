@@ -21,6 +21,8 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-24.04
+    outputs:
+      artifact_ref: ${{ steps.push.outputs.artifact_ref }}
     
     steps:
       - name: Checkout repository
