@@ -1,7 +1,10 @@
 data "aws_iam_policy_document" "github_actions_permissions" {
 
   # ── EC2: instance lifecycle ──────────────────────────────────────────────────
-  # Terraform aws_instance apply/destroy + boto3 waiters used by build-ami.py
+  # Terraform aws_instance apply/destroy + boto3 waiters used by build-ami.py.
+  # The full set of Describe* calls Terraform 5.x issues when reading instance
+  # state: block devices (DescribeVolumes), credit specs (DescribeInstanceCreditSpecifications),
+  # and placement groups (DescribePlacementGroups).
   statement {
     sid    = "EC2InstanceLifecycle"
     effect = "Allow"
@@ -11,6 +14,9 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "ec2:DescribeInstances",
       "ec2:DescribeInstanceStatus",
       "ec2:DescribeInstanceAttribute",
+      "ec2:DescribeVolumes",
+      "ec2:DescribeInstanceCreditSpecifications",
+      "ec2:DescribePlacementGroups",
     ]
     resources = ["*"]
   }
@@ -29,7 +35,10 @@ data "aws_iam_policy_document" "github_actions_permissions" {
   }
 
   # ── EC2: security group ──────────────────────────────────────────────────────
-  # Terraform aws_security_group; Terraform 5.x reads rules separately
+  # Terraform aws_security_group; Terraform 5.x manages egress rules separately
+  # and revokes the default allow-all egress rule on destroy.
+  # DescribeNetworkInterfaces is required to check for attached ENIs before
+  # deleting a security group or subnet.
   statement {
     sid    = "EC2SecurityGroup"
     effect = "Allow"
@@ -38,8 +47,11 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "ec2:DeleteSecurityGroup",
       "ec2:AuthorizeSecurityGroupIngress",
       "ec2:RevokeSecurityGroupIngress",
+      "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupEgress",
       "ec2:DescribeSecurityGroups",
       "ec2:DescribeSecurityGroupRules",
+      "ec2:DescribeNetworkInterfaces",
     ]
     resources = ["*"]
   }
@@ -77,13 +89,17 @@ data "aws_iam_policy_document" "github_actions_permissions" {
 
   # ── EC2: tagging and data sources ────────────────────────────────────────────
   # ec2:CreateTags applied at resource creation; data sources used in data.tf
+  # DescribeInstanceTypes used by Terraform to validate the instance_type value
+  # DescribeTags used by Terraform to read resource tags during state refresh
   statement {
     sid    = "EC2TaggingAndDataSources"
     effect = "Allow"
     actions = [
       "ec2:CreateTags",
+      "ec2:DescribeTags",
       "ec2:DescribeAvailabilityZones",
       "ec2:DescribeImages",
+      "ec2:DescribeInstanceTypes",
     ]
     resources = ["*"]
   }
@@ -138,6 +154,7 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "iam:TagInstanceProfile",
       "iam:AddRoleToInstanceProfile",
       "iam:RemoveRoleFromInstanceProfile",
+      "iam:ListInstanceProfilesForRole",
     ]
     resources = ["*"]
   }
