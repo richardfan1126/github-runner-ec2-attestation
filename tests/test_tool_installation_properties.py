@@ -73,7 +73,7 @@ def test_tool_installation_verification(oras_version: str, gh_version: str):
     # Define successful command responses (sha256sum must be checked before oras_ since the sha256sum command contains oras_ in the path)
     command_responses = {
         "dnf install -y git gcc": (0, "Installed successfully", ""),
-        "gpg --recv-keys": (0, "Key imported", ""),
+        "gpg --batch --no-tty --import": (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported"),
         "rust-1.94.1-x86_64-unknown-linux-gnu.tar.gz": (0, "Downloaded", ""),
         "gpg --verify": (0, "Good signature", ""),
         "install.sh --prefix": (0, "Rust installed", ""),
@@ -215,6 +215,9 @@ def test_install_all_tools_sequential_execution():
             # Return matching checksum for sha256sum command
             if "sha256sum" in command:
                 return (0, "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             # Return success for all commands
             return (0, "Success", "")
         
@@ -230,7 +233,7 @@ def test_install_all_tools_sequential_execution():
         git_gcc_idx = next((i for i, cmd in enumerate(executed_commands) 
                            if "git gcc" in cmd), -1)
         rust_idx = next((i for i, cmd in enumerate(executed_commands) 
-                        if "rust-1.94.1" in cmd and "gpg --recv-keys" not in cmd), -1)
+                        if "rust-1.94.1" in cmd and "gpg --batch --no-tty --import" not in cmd), -1)
         oras_idx = next((i for i, cmd in enumerate(executed_commands) 
                         if "oras_" in cmd), -1)
         gh_idx = next((i for i, cmd in enumerate(executed_commands) 
@@ -276,7 +279,7 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
             # Fail at the specified tool
             if failing_tool == "system_deps" and "git gcc" in command:
                 return (1, "", "Failed to install system deps")
-            elif failing_tool == "rust" and "gpg --recv-keys" in command:
+            elif failing_tool == "rust" and "gpg --batch --no-tty --import" in command:
                 return (1, "", "Failed to install Rust")
             elif failing_tool == "oras" and "oras_" in command and "sha256sum" not in command:
                 return (1, "", "Failed to install ORAS")
@@ -288,6 +291,10 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
             # Return matching checksum for sha256sum command
             if "sha256sum" in command:
                 return (0, "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  /tmp/oras_1.3.0_linux_amd64.tar.gz", "")
+            
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             
             return (0, "Success", "")
         
@@ -543,8 +550,8 @@ def test_rust_installer_gpg_verification(data):
     source = inspect.getsource(build_ami.install_rust)
 
     # Must import the official Rust GPG signing key
-    assert "gpg --recv-keys" in source, \
-        "install_rust must import the Rust GPG signing key via gpg --recv-keys"
+    assert "gpg --batch --no-tty --import" in source, \
+        "install_rust must import the Rust GPG signing key via gpg --batch --no-tty --import"
     assert "85AB96E6FA1BE5FE" in source, \
         "install_rust must use the official Rust project signing key 85AB96E6FA1BE5FE"
 
@@ -586,6 +593,9 @@ def test_rust_installer_gpg_verification(data):
 
         def side_effect_gpg_fail(ssh_client, command, stream_output=True):
             executed_commands.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             if "gpg --verify" in command:
                 return (1, "", "BAD signature")
             return (0, "Success", "")
@@ -613,6 +623,8 @@ def test_rust_installer_gpg_verification(data):
 
         def side_effect_gpg_ok(ssh_client, command, stream_output=True):
             executed_commands2.append(command)
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             return (0, "Good signature", "")
 
         mock_execute2.side_effect = side_effect_gpg_ok

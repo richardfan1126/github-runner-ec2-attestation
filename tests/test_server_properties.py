@@ -18,6 +18,11 @@ from src.repository import GitHubAPIError
 from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult, CloneResult
 from src.attestation import AttestationError
 from datetime import datetime, timezone
+from tests.encryption_test_helpers import (
+    EncryptionTestContext,
+    make_encrypted_execute_request,
+    decrypt_execute_response,
+)
 
 
 VALID_OIDC_RESULT = OIDCValidationResult(
@@ -120,7 +125,10 @@ def test_concurrent_request_handling(requests_list):
     all requests without blocking or failure.
     """
     # Needs fresh app per example due to rate limiter state
-    app = create_app(get_test_config())
+    ctx = EncryptionTestContext()
+    config = get_test_config()
+    config.rate_limit_per_ip = 100000
+    app = create_app(config, encryption_manager=ctx.encryption_manager)
     client = TestClient(app)
     
     results = []
@@ -128,7 +136,7 @@ def test_concurrent_request_handling(requests_list):
     
     def make_request(req_data):
         try:
-            with patch.object(app.state.request_validator, 'validate_oidc_token', return_value=VALID_OIDC_RESULT), \
+            with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
                  patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
                 mock_validate.return_value = Mock(valid=True, errors=[])
                 
@@ -156,7 +164,15 @@ def test_concurrent_request_handling(requests_list):
                                     )
                                     
                                     with patch.object(app.state.script_executor, 'execute_async'):
-                                        response = client.post("/execute", json=req_data, headers=OIDC_BEARER_HEADER)
+                                        body = make_encrypted_execute_request(
+                                            {
+                                                **req_data,
+                                                "repository_url": "https://github.com/owner/repo",
+                                                "oidc_token": "valid.oidc.token",
+                                            },
+                                            ctx
+                                        )
+                                        response = client.post("/execute", json=body)
                                         results.append(response)
         except Exception as e:
             errors.append(str(e))
@@ -660,14 +676,6 @@ def test_missing_encryption_context_returns_400(execution_id):
     )
     data = response.json()
     assert data["detail"]["error"] == "no_encryption_context"
-
-# Import encryption test helpers for Property 149
-from tests.encryption_test_helpers import (
-    EncryptionTestContext,
-    make_encrypted_execute_request,
-    decrypt_execute_response,
-)
-
 
 # Feature: github-actions-remote-executor, Property 149: Concurrency Enforcement
 @settings(max_examples=10, deadline=None)

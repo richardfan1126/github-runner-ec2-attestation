@@ -54,13 +54,16 @@ def test_install_rust_imports_gpg_key_before_download():
     with patch.object(build_ami, 'execute_remote_command') as mock_exec:
         def side_effect(ssh_client, command, stream_output=True):
             executed.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             return (0, "Success", "")
 
         mock_exec.side_effect = side_effect
         build_ami.install_rust(mock_ssh)
 
     key_import_idx = next(
-        (i for i, cmd in enumerate(executed) if "gpg --recv-keys" in cmd and "85AB96E6FA1BE5FE" in cmd),
+        (i for i, cmd in enumerate(executed) if "gpg --batch --no-tty --import" in cmd),
         -1,
     )
     tarball_download_idx = next(
@@ -68,7 +71,7 @@ def test_install_rust_imports_gpg_key_before_download():
         -1,
     )
 
-    assert key_import_idx >= 0, "gpg --recv-keys 85AB96E6FA1BE5FE must be called"
+    assert key_import_idx >= 0, "gpg --batch --no-tty --import must be called"
     assert tarball_download_idx >= 0, "Standalone tarball download must be called"
     assert key_import_idx < tarball_download_idx, \
         "GPG key must be imported before the tarball is downloaded"
@@ -92,6 +95,9 @@ def test_install_rust_downloads_standalone_tarball_not_rustup():
     with patch.object(build_ami, 'execute_remote_command') as mock_exec:
         def side_effect(ssh_client, command, stream_output=True):
             executed.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             return (0, "Success", "")
 
         mock_exec.side_effect = side_effect
@@ -127,6 +133,9 @@ def test_install_rust_downloads_detached_signature():
     with patch.object(build_ami, 'execute_remote_command') as mock_exec:
         def side_effect(ssh_client, command, stream_output=True):
             executed.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             return (0, "Success", "")
 
         mock_exec.side_effect = side_effect
@@ -154,6 +163,9 @@ def test_install_rust_verifies_gpg_signature_before_extraction():
     with patch.object(build_ami, 'execute_remote_command') as mock_exec:
         def side_effect(ssh_client, command, stream_output=True):
             executed.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             return (0, "Good signature", "")
 
         mock_exec.side_effect = side_effect
@@ -219,6 +231,9 @@ def test_install_rust_does_not_extract_on_gpg_failure():
     with patch.object(build_ami, 'execute_remote_command') as mock_exec:
         def side_effect(ssh_client, command, stream_output=True):
             executed.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             if "gpg --verify" in command:
                 return (1, "", "BAD signature")
             return (0, "Success", "")
@@ -250,6 +265,9 @@ def test_install_rust_extracts_and_installs_on_gpg_success():
     with patch.object(build_ami, 'execute_remote_command') as mock_exec:
         def side_effect(ssh_client, command, stream_output=True):
             executed.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             return (0, "Good signature", "")
 
         mock_exec.side_effect = side_effect
@@ -278,6 +296,9 @@ def test_install_rust_removes_tarball_signature_and_extracted_dir():
     with patch.object(build_ami, 'execute_remote_command') as mock_exec:
         def side_effect(ssh_client, command, stream_output=True):
             executed.append(command)
+            # Return appropriate stderr for GPG key import
+            if "gpg --batch --no-tty --import" in command:
+                return (0, "", "gpg: key 85AB96E6FA1BE5FE: public key imported")
             return (0, "Success", "")
 
         mock_exec.side_effect = side_effect

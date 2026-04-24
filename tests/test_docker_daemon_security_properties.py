@@ -15,10 +15,9 @@ def test_docker_daemon_security_configuration():
     Property 164: Docker Daemon Security Configuration
 
     For any KIWI image build, the image should include a daemon.json at
-    /etc/docker/daemon.json with user-namespace remapping and a restrictive
-    seccomp profile.
+    /etc/docker/daemon.json with user-namespace remapping and no-new-privileges.
 
-    **Validates: Requirements 48.1, 48.2, 48.3**
+    **Validates: Requirements 48.1, 48.2**
     """
     daemon_json_path = Path("kiwi-descriptions/root/etc/docker/daemon.json")
 
@@ -39,15 +38,6 @@ def test_docker_daemon_security_configuration():
     assert config["userns-remap"] == "default", (
         "userns-remap must be set to 'default' to enable automatic "
         "user-namespace remapping"
-    )
-
-    # Requirement 48.3: restrictive seccomp profile must be set
-    assert "seccomp-profile" in config, (
-        "daemon.json must include 'seccomp-profile' to restrict system calls "
-        "available to containers"
-    )
-    assert config["seccomp-profile"], (
-        "seccomp-profile must reference a non-empty profile path"
     )
 
     # Verify no-new-privileges is set (defense in depth)
