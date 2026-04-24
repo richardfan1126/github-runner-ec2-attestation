@@ -93,37 +93,37 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
       - `aws-access-key-id` and `aws-secret-access-key` are absent from all steps
     - _Requirements: 1.1, 2.1, 2.2, 3.1, 3.2, 3.4, 4.2, 5.3, 5.4, 5.5, 6.1, 6.2, 7.2, 8.1, 8.2, 8.3, 8.4, 9.1, 9.2_
 
-- [ ] 5. Checkpoint — ensure all tests pass
+- [x] 5. Checkpoint — ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. Create the `terraform/github-actions-iam-role/` stack
-  - [ ] 6.1 Create `variables.tf`
+- [x] 6. Create the `terraform/github-actions-iam-role/` stack
+  - [x] 6.1 Create `variables.tf`
     - Define input variables: `aws_region` (string, default `"us-east-1"`), `github_org` (string, no default), `github_repo` (string, default `"github-runner-ec2-attestation"`), `create_oidc_provider` (bool, default `true`)
     - _Requirements: 10.2, 10.7, 10.8_
 
-  - [ ] 6.2 Create `main.tf`
+  - [x] 6.2 Create `main.tf`
     - Define `aws` provider block using `var.aws_region`
     - Conditionally create `aws_iam_openid_connect_provider` for `token.actions.githubusercontent.com` when `var.create_oidc_provider == true`
     - Create `aws_iam_role` with a trust policy allowing `sts:AssumeRoleWithWebIdentity` from the OIDC provider, with conditions: `aud == "sts.amazonaws.com"` and `sub` matches `repo:${var.github_org}/${var.github_repo}:*`
     - _Requirements: 10.2, 10.3, 10.4, 10.8_
 
-  - [ ] 6.3 Create `iam_policy.tf`
+  - [x] 6.3 Create `iam_policy.tf`
     - Define `aws_iam_policy_document` data source with all required permissions: EC2 instance provisioning, EBS snapshot (Direct API), AMI registration, IAM pass-role and instance profile management, and `sts:GetCallerIdentity`
     - Create `aws_iam_policy` resource from the document and attach it to the role via `aws_iam_role_policy_attachment`
     - _Requirements: 10.2, 10.5_
 
-  - [ ] 6.4 Create `outputs.tf`
+  - [x] 6.4 Create `outputs.tf`
     - Define `output "role_arn"` that outputs `aws_iam_role.github_actions.arn` with a description instructing the operator to set it as `vars.AWS_ROLE_ARN` in GitHub
     - _Requirements: 10.6_
 
-  - [ ] 6.5 Create `README.md` for the IAM role stack
+  - [x] 6.5 Create `README.md` for the IAM role stack
     - Document all input variables with types, defaults, and descriptions
     - Provide the one-time bootstrap commands: `terraform init && terraform apply -var="github_org=<your-org>"`
     - Explain how to copy the `role_arn` output into the GitHub repository variable `vars.AWS_ROLE_ARN`
     - Note the `create_oidc_provider` flag for accounts where the provider already exists
     - _Requirements: 10.9_
 
-- [ ] 7. Final checkpoint — ensure all tests pass
+- [x] 7. Final checkpoint — ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
