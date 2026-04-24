@@ -2439,7 +2439,7 @@ This block runs during the KIWI image build phase (inside the chroot environment
 
 When the KIWI image boots:
 1. systemd starts the `docker.service` unit (enabled during image creation)
-2. The Docker daemon (`dockerd`) starts with the hardened configuration from `/etc/docker/daemon.json` (user-namespace remapping, restrictive seccomp profile)
+2. The Docker daemon (`dockerd`) starts with the hardened configuration from `/etc/docker/daemon.json` (`no-new-privileges`, `live-restore: false`)
 3. The Docker daemon listens on the default Unix socket (`/var/run/docker.sock`)
 4. The Script_Executor connects to the Docker daemon via the Docker SDK for Python (`docker` package)
 5. The Script_Executor verifies Docker daemon accessibility at startup (Requirement 9, criteria 11)
@@ -2450,14 +2450,12 @@ The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/d
 
 ```json
 {
-  "userns-remap": "default",
-  "seccomp-profile": "/etc/docker/seccomp-default.json",
   "no-new-privileges": true,
   "live-restore": false
 }
 ```
 
-This configuration is baked into the read-only erofs layer during the KIWI image build, ensuring it cannot be modified at runtime. User-namespace remapping isolates container root from host root, and the restrictive seccomp profile limits available system calls.
+This configuration is baked into the read-only erofs layer during the KIWI image build, ensuring it cannot be modified at runtime. `no-new-privileges` prevents privilege escalation via setuid/setgid binaries inside containers, and `live-restore: false` ensures containers stop when the daemon restarts. `userns-remap` and `seccomp-profile` are not included because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) not present in the KIWI image; the per-container security constraints (cap_drop=ALL, no-new-privileges, read-only root filesystem, network disabled) provide the primary isolation layer.
 
 **Design Rationale:**
 
