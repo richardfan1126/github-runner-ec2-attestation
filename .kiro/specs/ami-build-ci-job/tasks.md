@@ -50,34 +50,34 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
     - Add a failure summary step with `if: failure()` that appends a failure notice to `$GITHUB_STEP_SUMMARY`
     - _Requirements: 6.1, 6.2, 6.3, 7.1, 7.2_
 
-- [ ] 3. Checkpoint — verify workflow YAML is valid
+- [x] 3. Checkpoint — verify workflow YAML is valid
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. Write property and unit tests for the `build-ami` job logic
-  - [ ] 4.1 Implement `evaluate_job_condition` helper function
+- [x] 4. Write property and unit tests for the `build-ami` job logic
+  - [x] 4.1 Implement `evaluate_job_condition` helper function
     - Create `tests/test_ami_build_ci_job_properties.py`
     - Implement a pure Python `evaluate_job_condition(event_name, ref, enable_ssh)` function that mirrors the YAML `if:` expression: `ref == "refs/heads/main" or (event_name == "workflow_dispatch" and not enable_ssh)`
     - _Requirements: 1.2, 1.3, 1.4, 1.5_
 
-  - [ ] 4.2 Write property test for job condition (Property 1)
+  - [x] 4.2 Write property test for job condition (Property 1)
     - **Property 1: Job condition correctly classifies all trigger contexts**
     - Use `@given` with `event_name` sampled from `["push", "workflow_dispatch", "pull_request"]`, `ref` drawn from `st.one_of(st.just("refs/heads/main"), st.just("refs/heads/develop"), st.text(...))`, and `enable_ssh` as `st.booleans()`
     - Assert `evaluate_job_condition(event_name, ref, enable_ssh) == ((ref == "refs/heads/main") or (event_name == "workflow_dispatch" and not enable_ssh))`
     - Use `@settings(max_examples=200)`
     - **Validates: Requirements 1.2, 1.3, 1.4, 1.5**
 
-  - [ ] 4.3 Implement `generate_summary` helper function
+  - [x] 4.3 Implement `generate_summary` helper function
     - In the same test file, implement a `generate_summary(build_result: dict) -> str` function that formats the four required fields (`ami_id`, `snapshot_id`, `region`, `build_timestamp`) into a summary string, matching the logic used in the workflow's success summary step
     - _Requirements: 7.1_
 
-  - [ ] 4.4 Write property test for summary generation (Property 2)
+  - [x] 4.4 Write property test for summary generation (Property 2)
     - **Property 2: Summary script extracts all required fields from any valid build result**
     - Use `@given` with `ami_id` from `st.from_regex(r"ami-[0-9a-f]{17}", fullmatch=True)`, `snapshot_id` from `st.from_regex(r"snap-[0-9a-f]{17}", fullmatch=True)`, `region` sampled from a list of valid regions, and `build_timestamp` from `st.datetimes(timezones=st.just(timezone.utc)).map(lambda d: d.isoformat())`
     - Assert that `ami_id`, `snapshot_id`, `region`, and `build_timestamp` all appear in the generated summary string
     - Use `@settings(max_examples=100)`
     - **Validates: Requirements 7.1**
 
-  - [ ] 4.5 Write unit tests for workflow YAML structure
+  - [x] 4.5 Write unit tests for workflow YAML structure
     - In `tests/test_ami_build_ci_job_unit.py`, parse `.github/workflows/build-attestable-image.yml` with PyYAML and assert:
       - `build-ami` job has `needs: build-and-publish`
       - `runs-on: ubuntu-24.04`
