@@ -33,6 +33,10 @@ All configuration is done through environment variables. See `.env.example` for 
 - `CONTAINER_IMAGE_DIGEST`: Optional SHA-256 digest to pin the container image (e.g., `sha256:abc123...`). **Recommended for production** — set this to prevent tag drift and ensure the server always runs the exact expected image. When set, the server verifies the pulled image matches this digest at startup and refuses to start if there is a mismatch.
 - `CONTAINER_MEMORY_LIMIT`: Memory limit for execution containers (e.g., `512m`)
 - `CONTAINER_CPU_LIMIT`: CPU limit for execution containers (e.g., `1.0`)
+- `MAX_OUTPUT_SIZE_BYTES`: Maximum buffered output size per execution in bytes (default: 10485760 = 10MB)
+- `NONCE_CACHE_TTL_SECONDS`: TTL for the anti-replay nonce cache in seconds (default: 300)
+- `ALLOWED_BRANCHES`: Optional comma-separated list of glob patterns restricting which branches may execute scripts (e.g., `main,release/*`). When unset, any branch in an allowed repository is accepted.
+- `REQUIRE_PROTECTED_REF`: When set to `true`, only OIDC tokens from protected refs are accepted (default: `false`)
 
 ## Attestable EC2 Deployment
 
@@ -71,7 +75,34 @@ The summary also includes the artifact digest and PCR measurement values (PCR4, 
 
 ### Step 2: Convert to AMI
 
-Run the build script to convert the KIWI image into an AMI:
+The AMI build can run automatically via CI or manually from your workstation.
+
+#### Option A: Automatic (CI)
+
+On every push to `main` (and on non-debug `workflow_dispatch` runs), the `build-ami` CI job runs automatically after the KIWI image is published. It calls `scripts/build-ami.py` with `--expected-workflow .github/workflows/build-attestable-image.yml` to enforce provenance, and uploads `ami_build_result.json` as a workflow artifact.
+
+**One-time IAM setup required.** The CI job assumes an AWS IAM role via OIDC. Bootstrap it once per AWS account:
+
+```bash
+cd terraform/github-actions-iam-role
+terraform init
+terraform apply -var="github_org=<your-org>"
+```
+
+Variables:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `github_org` | Yes | — | GitHub organisation or user name that owns the repository |
+| `github_repo` | No | `github-runner-ec2-attestation` | GitHub repository name |
+| `aws_region` | No | `us-east-1` | AWS region to deploy into |
+| `create_oidc_provider` | No | `true` | Set to `false` if the GitHub Actions OIDC provider already exists in your account |
+
+After `terraform apply`, copy the `role_arn` output and add it as a repository variable in GitHub (**Settings → Secrets and variables → Actions → Variables**, name: `AWS_ROLE_ARN`). Optionally set `AWS_REGION` the same way to target a non-default region.
+
+#### Option B: Manual
+
+Run the build script locally to convert the KIWI image into an AMI:
 
 ```bash
 uv run --project scripts python scripts/build-ami.py \
@@ -86,6 +117,8 @@ CLI arguments:
 | `--region` | No | `us-east-1` | AWS region for AMI creation |
 | `--instance-type` | No | `c5.9xlarge` | EC2 instance type for the temporary build instance |
 | `--output-file` | No | `ami_build_result.json` | Path for the JSON build result |
+| `--allow-debug` | No | `false` | Allow building an AMI from a debug (SSH-enabled) artifact. Without this flag, debug artifacts are rejected. |
+| `--expected-workflow` | No | — | Expected workflow file path for provenance verification (e.g., `.github/workflows/build-attestable-image.yml`). When provided, the attestation workflow identity is verified against this path. |
 
 The script performs the following steps:
 
@@ -300,14 +333,18 @@ The `attestation_document` is a base64-encoded CBOR document produced by NitroTP
 | 400 | `malformed_request` | Request body is not valid JSON or missing `encrypted_payload`/`client_public_key` |
 | 400 | `decryption_failed` | Server could not decrypt the request payload |
 | 400 | `validation_failed` | Missing or invalid fields (details include per-field errors) |
+| 400 | `duplicate_nonce` | Nonce has already been used; request rejected as a potential replay |
 | 401 | `authentication_failed` | GitHub token authentication failed |
 | 401 | `oidc_authentication_failed` | Missing, invalid, or expired OIDC token; signature verification failure; wrong issuer or audience |
 | 403 | `oidc_authentication_failed` | Valid OIDC token from a repository not in `ALLOWED_REPOSITORIES` |
+| 403 | `repository_mismatch` | OIDC token `repository` claim does not match the `repository_url` in the request |
 | 404 | `github_api_error` | Repository, commit, or file not found |
+| 413 | `script_too_large` | Script file exceeds `MAX_SCRIPT_SIZE_BYTES` |
 | 429 | `rate_limit_exceeded` | Too many requests from this IP |
 | 500 | `encryption_not_configured` | Server encryption is not configured |
 | 500 | `attestation_failed` | NitroTPM attestation generation failed |
 | 500 | `internal_server_error` | Unexpected server error |
+| 503 | `at_capacity` | Server has reached `MAX_CONCURRENT_EXECUTIONS`; retry later |
 
 ---
 
@@ -318,6 +355,8 @@ Retrieves execution status and output. Supports incremental polling via the `off
 All request and response payloads are encrypted using the shared key established during the `/execute` call (see [Encryption](#encryption)).
 
 When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure.
+
+Note: `output_attestation_document` is included on **every** poll response, not only when execution is complete. This allows callers to attest incremental output.
 
 **Request body (encrypted envelope):**
 
@@ -355,7 +394,7 @@ When the execution is complete, the response includes an `output_attestation_doc
 | `stderr_offset` | int | Next byte offset for stderr (use in subsequent polls) |
 | `complete` | bool | `true` when execution has finished |
 | `exit_code` | int \| null | Process exit code (present only when complete) |
-| `output_attestation_document` | string \| null | Base64-encoded CBOR attestation of the output (present only when complete) |
+| `output_attestation_document` | string \| null | Base64-encoded CBOR attestation of the current output snapshot (present on every response; `null` if attestation failed) |
 | `attestation_error` | string | Error message if output attestation failed (present only on failure) |
 
 **Error responses:**
@@ -366,8 +405,10 @@ When the execution is complete, the response includes an `output_attestation_doc
 | 400 | `decryption_failed` | Server could not decrypt the request payload |
 | 400 | `no_encryption_context` | No encryption context available for this execution ID |
 | 400 | `invalid_offset` | Negative offset value |
+| 400 | `duplicate_nonce` | Nonce has already been used; request rejected as a potential replay |
 | 401 | `oidc_authentication_failed` | Missing, invalid, or expired OIDC token |
 | 403 | `oidc_authentication_failed` | Valid OIDC token from an unauthorized repository |
+| 403 | `repository_mismatch` | OIDC token `repository` claim does not match the repository that created the execution |
 | 404 | `execution_not_found` | No execution with this ID exists |
 | 429 | `rate_limit_exceeded` | Too many requests from this IP |
 | 500 | `encryption_not_configured` | Server encryption is not configured |
@@ -379,63 +420,18 @@ When the execution is complete, the response includes an `output_attestation_doc
 
 Returns operational status of the server. This endpoint is exempt from rate limiting and does not require authentication.
 
-**Response (healthy):**
-```json
-{
-  "status": "healthy",
-  "attestation_available": true,
-  "docker_available": true,
-  "disk_space_mb": 10240,
-  "active_executions": 3
-}
-```
-
-**Response (degraded):**
-
-If the health check itself encounters an error, the server still returns 200 with a degraded status:
-
-```json
-{
-  "status": "degraded",
-  "attestation_available": false,
-  "docker_available": false,
-  "disk_space_mb": 0,
-  "active_executions": 0
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `status` | string | `healthy` or `degraded` |
-| `attestation_available` | bool | Whether the NitroTPM device is accessible |
-| `docker_available` | bool | Whether the Docker daemon is accessible |
-| `disk_space_mb` | int | Free disk space in MB at the temp storage path |
-| `active_executions` | int | Number of currently running executions |
-
----
-
-### GET /metrics
-
-Returns aggregate execution metrics for monitoring.
-
 **Response (200):**
 ```json
 {
-  "total_executions": 1523,
-  "successful_executions": 1450,
-  "failed_executions": 73,
-  "average_duration_ms": 3421,
-  "active_executions": 3
+  "status": "healthy"
 }
 ```
 
+If the health check itself encounters an error, the server returns 200 with `"status": "unhealthy"`.
+
 | Field | Type | Description |
 |---|---|---|
-| `total_executions` | int | Total executions since server start |
-| `successful_executions` | int | Executions that completed with exit code 0 |
-| `failed_executions` | int | Executions that failed, timed out, or exited non-zero |
-| `average_duration_ms` | int | Average execution duration in milliseconds |
-| `active_executions` | int | Currently running executions |
+| `status` | string | `healthy` or `unhealthy` |
 
 ## Development
 
