@@ -11,31 +11,31 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
   - This output is consumed by the new `build-ami` job via `needs.build-and-publish.outputs.artifact_ref`
   - _Requirements: 5.1_
 
-- [ ] 2. Add the `build-ami` job to the workflow
-  - [ ] 2.1 Add job skeleton with dependency, runner, and `if` condition
+- [x] 2. Add the `build-ami` job to the workflow
+  - [x] 2.1 Add job skeleton with dependency, runner, and `if` condition
     - Add `build-ami:` as a new top-level job entry in `.github/workflows/build-attestable-image.yml`
     - Set `needs: build-and-publish`
     - Set `runs-on: ubuntu-24.04`
     - Set `if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)`
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1_
 
-  - [ ] 2.2 Add job-level permissions block
+  - [x] 2.2 Add job-level permissions block
     - Declare `permissions:` with `id-token: write`, `contents: read`, `packages: read`
     - Do NOT include `attestations: write` or `packages: write`
     - _Requirements: 8.1, 8.2, 8.3, 8.4_
 
-  - [ ] 2.3 Add checkout and AWS credential steps
+  - [x] 2.3 Add checkout and AWS credential steps
     - Add `actions/checkout@v4` with `submodules: recursive` as the first step
     - Add `aws-actions/configure-aws-credentials` step after checkout, using `role-to-assume: ${{ vars.AWS_ROLE_ARN }}` and `aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}`
     - Do NOT include `aws-access-key-id` or `aws-secret-access-key`
     - _Requirements: 2.2, 3.1, 3.2, 3.3, 3.4_
 
-  - [ ] 2.4 Add Terraform and Python environment setup steps
+  - [x] 2.4 Add Terraform and Python environment setup steps
     - Add `hashicorp/setup-terraform` step with a pinned `terraform_version` (e.g. `1.12.2`)
     - Add a `uv sync` run step to install Python dependencies
     - _Requirements: 4.1, 9.1, 9.2_
 
-  - [ ] 2.5 Add the main script invocation step
+  - [x] 2.5 Add the main script invocation step
     - Add a run step that invokes `uv run python scripts/build-ami.py` with flags:
       - `--artifact-ref "${{ needs.build-and-publish.outputs.artifact_ref }}"`
       - `--region "${{ vars.AWS_REGION || 'us-east-1' }}"`
@@ -44,7 +44,7 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
     - Do NOT include `--allow-debug`
     - _Requirements: 4.2, 5.1, 5.2, 5.3, 5.4, 5.5_
 
-  - [ ] 2.6 Add artifact upload and summary steps
+  - [x] 2.6 Add artifact upload and summary steps
     - Add `actions/upload-artifact@v4` step with `if: success()`, artifact name `ami-build-result`, path `ami_build_result.json`, and `retention-days: 90`
     - Add a success summary step with `if: success()` that reads `ami_build_result.json` with `jq` and appends AMI ID, snapshot ID, region, and build timestamp to `$GITHUB_STEP_SUMMARY`
     - Add a failure summary step with `if: failure()` that appends a failure notice to `$GITHUB_STEP_SUMMARY`

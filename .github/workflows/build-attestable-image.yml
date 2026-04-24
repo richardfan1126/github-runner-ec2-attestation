@@ -200,3 +200,71 @@ jobs:
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "oras pull ${{ steps.push.outputs.artifact_ref }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  build-ami:
+    needs: build-and-publish
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)
+
+    permissions:
+      id-token: write
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.12.2"
+
+      - name: Install Python dependencies
+        run: uv sync
+
+      - name: Build AMI
+        run: |
+          uv run python scripts/build-ami.py \
+            --artifact-ref "${{ needs.build-and-publish.outputs.artifact_ref }}" \
+            --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
+            --output-file ami_build_result.json \
+            --expected-workflow .github/workflows/build-attestable-image.yml
+
+      - name: Upload AMI build result
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ami-build-result
+          path: ami_build_result.json
+          retention-days: 90
+
+      - name: Write success summary
+        if: success()
+        run: |
+          AMI_ID=$(jq -r '.ami_id' ami_build_result.json)
+          SNAPSHOT_ID=$(jq -r '.snapshot_id' ami_build_result.json)
+          REGION=$(jq -r '.region' ami_build_result.json)
+          BUILD_TIMESTAMP=$(jq -r '.build_timestamp' ami_build_result.json)
+          echo "## AMI Build Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### AMI Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **AMI ID**: \`${AMI_ID}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Snapshot ID**: \`${SNAPSHOT_ID}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: \`${REGION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Timestamp**: \`${BUILD_TIMESTAMP}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Write failure summary
+        if: failure()
+        run: |
+          echo "## AMI Build Failed ❌" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The AMI build step failed. Check the job logs for details." >> $GITHUB_STEP_SUMMARY
