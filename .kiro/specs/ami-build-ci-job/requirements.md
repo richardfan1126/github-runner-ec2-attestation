@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-image.yml` that runs automatically after the existing `build-and-publish` job succeeds. The new job invokes `scripts/build-ami.py` with the artifact reference and other outputs produced by `build-and-publish`, provisions an EC2 instance via Terraform, verifies the artifact's GitHub attestation, converts the raw disk image into an EBS snapshot, registers an AMI, and uploads the resulting AMI metadata as a workflow artifact. The job runs on pushes to the `main` branch and on `workflow_dispatch` (unless `enable_ssh: true`, which produces a debug build and is skipped). It does not run on pushes to `develop`. The job always cleans up EC2 infrastructure on both success and failure.
+This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-image.yml` that runs automatically after the existing `build-and-publish` job succeeds. The new job invokes `scripts/build-ami.py` with the artifact reference and other outputs produced by `build-and-publish`, provisions an EC2 instance via Terraform, verifies the artifact's GitHub attestation, converts the raw disk image into an EBS snapshot, registers an AMI, and uploads the resulting AMI metadata as a workflow artifact. The job runs on pushes to the `main` branch and on `workflow_dispatch` (including when `enable_ssh: true`, which produces a Debug_Build). When triggered as a Debug_Build, the job passes `--allow-debug` to AMI_Build_Script and prints an explicit warning to the GitHub workflow summary. It does not run on pushes to `develop`. The job always cleans up EC2 infrastructure on both success and failure.
 
 ## Glossary
 
@@ -27,7 +27,7 @@ This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-im
 
 ### Requirement 1: Job Dependency and Trigger Condition
 
-**User Story:** As a repository maintainer, I want the `build-ami` job to run only after `build-and-publish` succeeds on production builds, so that AMIs are only built from verified, non-debug artifacts.
+**User Story:** As a repository maintainer, I want the `build-ami` job to run after `build-and-publish` succeeds on all applicable builds (including debug), so that AMIs are built from both production and debug artifacts.
 
 #### Acceptance Criteria
 
@@ -35,7 +35,7 @@ This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-im
 2. WHEN the Workflow is triggered by a push to the `main` branch, THE `build-ami` job SHALL execute.
 3. WHEN the Workflow is triggered by a push to the `develop` branch, THE `build-ami` job SHALL be skipped.
 4. WHEN the Workflow is triggered via `workflow_dispatch` with `enable_ssh: false`, THE `build-ami` job SHALL execute.
-5. WHEN the Workflow is triggered via `workflow_dispatch` with `enable_ssh: true` (a Debug_Build), THE `build-ami` job SHALL be skipped.
+5. WHEN the Workflow is triggered via `workflow_dispatch` with `enable_ssh: true` (a Debug_Build), THE `build-ami` job SHALL execute.
 
 ### Requirement 2: Runner and Checkout
 
@@ -76,7 +76,8 @@ This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-im
 2. THE `build-ami` job SHALL pass `--region` set to the configured AWS region when invoking AMI_Build_Script.
 3. THE `build-ami` job SHALL pass `--output-file ami_build_result.json` when invoking AMI_Build_Script.
 4. THE `build-ami` job SHALL pass `--expected-workflow .github/workflows/build-attestable-image.yml` when invoking AMI_Build_Script.
-5. THE `build-ami` job SHALL NOT pass `--allow-debug` when invoking AMI_Build_Script on a production build.
+5. WHEN the Workflow is triggered via `workflow_dispatch` with `enable_ssh: false` or by a push, THE `build-ami` job SHALL NOT pass `--allow-debug` when invoking AMI_Build_Script.
+6. WHEN the Workflow is triggered via `workflow_dispatch` with `enable_ssh: true` (a Debug_Build), THE `build-ami` job SHALL pass `--allow-debug` when invoking AMI_Build_Script.
 
 ### Requirement 6: Output Artifact Upload
 
@@ -90,12 +91,13 @@ This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-im
 
 ### Requirement 7: Workflow Summary
 
-**User Story:** As a CI operator, I want the `build-ami` job to append a summary of the AMI build result to the GitHub Actions step summary, so that the AMI ID is visible in the workflow run UI.
+**User Story:** As a CI operator, I want the `build-ami` job to append a summary of the AMI build result to the GitHub Actions step summary, so that the AMI ID is visible in the workflow run UI and debug builds are clearly flagged.
 
 #### Acceptance Criteria
 
 1. WHEN AMI_Build_Script exits with code 0, THE `build-ami` job SHALL append the AMI ID, snapshot ID, region, and build timestamp from `ami_build_result.json` to `$GITHUB_STEP_SUMMARY`.
 2. WHEN AMI_Build_Script exits with a non-zero code, THE `build-ami` job SHALL append a failure notice to `$GITHUB_STEP_SUMMARY`.
+3. WHEN the Workflow is triggered via `workflow_dispatch` with `enable_ssh: true` (a Debug_Build) and AMI_Build_Script exits with code 0, THE `build-ami` job SHALL append an explicit warning to `$GITHUB_STEP_SUMMARY` indicating that the AMI was built from a debug artifact and is not intended for production use.
 
 ### Requirement 8: Job-Level Permissions
 

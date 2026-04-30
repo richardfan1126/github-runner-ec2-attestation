@@ -2,7 +2,7 @@
 
 ## Overview
 
-This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-image.yml`. The job runs automatically after the existing `build-and-publish` job succeeds on production builds (pushes to `main` and non-debug `workflow_dispatch` triggers). It invokes `scripts/build-ami.py` with the artifact reference produced by `build-and-publish`, which provisions an EC2 instance via Terraform, verifies the artifact's GitHub attestation, converts the raw disk image into an EBS snapshot, registers an AMI, and writes the result to a JSON file. The job uploads that JSON as a workflow artifact and appends a summary to the GitHub Actions step summary. EC2 infrastructure is always cleaned up, whether the build succeeds or fails.
+This feature adds a `build-ami` CI job to `.github/workflows/build-attestable-image.yml`. The job runs automatically after the existing `build-and-publish` job succeeds on pushes to `main` and on all `workflow_dispatch` triggers (including debug builds with `enable_ssh: true`). It invokes `scripts/build-ami.py` with the artifact reference produced by `build-and-publish`, which provisions an EC2 instance via Terraform, verifies the artifact's GitHub attestation, converts the raw disk image into an EBS snapshot, registers an AMI, and writes the result to a JSON file. When triggered as a debug build, the job passes `--allow-debug` to the script and appends an explicit warning to the GitHub Actions step summary. The job uploads the result JSON as a workflow artifact and appends a summary to the GitHub Actions step summary. EC2 infrastructure is always cleaned up, whether the build succeeds or fails.
 
 The design is intentionally narrow: this is a CI job definition, not a new application. The primary deliverable is a well-structured YAML job block added to the existing workflow file.
 
@@ -10,23 +10,28 @@ The design is intentionally narrow: this is a CI job definition, not a new appli
 
 ```mermaid
 flowchart TD
-    A[push to main\nor workflow_dispatch\nenable_ssh=false] --> B[build-and-publish job]
+    A[push to main\nor workflow_dispatch] --> B[build-and-publish job]
     B -->|outputs artifact_ref| C{build-ami\nif condition}
-    C -->|main branch or\nnon-debug dispatch| D[build-ami job]
-    C -->|develop branch or\ndebug dispatch| E[skipped]
+    C -->|main branch or\nworkflow_dispatch| D[build-ami job]
+    C -->|develop branch| E[skipped]
 
     D --> D1[Checkout repo]
     D1 --> D2[Configure AWS via OIDC]
     D2 --> D3[Setup Terraform]
     D3 --> D4[uv sync]
-    D4 --> D5[uv run python scripts/build-ami.py]
-    D5 -->|exit 0| D6[Upload ami_build_result.json\nas artifact]
-    D5 -->|exit 0| D7[Append success summary\nto GITHUB_STEP_SUMMARY]
-    D5 -->|exit != 0| D8[Append failure notice\nto GITHUB_STEP_SUMMARY]
-    D5 -->|always| D9[Terraform destroy\ncleans up EC2]
+    D4 --> D5{Debug build?}
+    D5 -->|yes| D5a[uv run python scripts/build-ami.py\n--allow-debug]
+    D5 -->|no| D5b[uv run python scripts/build-ami.py]
+    D5a --> D6_check{exit 0?}
+    D5b --> D6_check
+    D6_check -->|exit 0| D6[Upload ami_build_result.json\nas artifact]
+    D6_check -->|exit 0| D7[Append success summary\nto GITHUB_STEP_SUMMARY]
+    D6_check -->|exit 0, debug| D7a[Append debug warning\nto GITHUB_STEP_SUMMARY]
+    D6_check -->|exit != 0| D8[Append failure notice\nto GITHUB_STEP_SUMMARY]
+    D6_check -->|always| D9[Terraform destroy\ncleans up EC2]
 ```
 
-The `build-ami` job is a downstream consumer of `build-and-publish`. It does not modify the workflow's trigger conditions or the `build-and-publish` job itself. The job-level `if:` expression encodes all skip logic so that the job is simply absent from the run when not applicable, rather than running and then doing nothing.
+The `build-ami` job is a downstream consumer of `build-and-publish`. It does not modify the workflow's trigger conditions or the `build-and-publish` job itself. The job-level `if:` expression excludes only pushes to non-`main` branches. Debug builds (`workflow_dispatch` with `enable_ssh: true`) are allowed to run, with the `--allow-debug` flag conditionally passed to the script and a warning appended to the step summary.
 
 ## Components and Interfaces
 
@@ -40,7 +45,7 @@ Defined in `.github/workflows/build-attestable-image.yml` as a new top-level job
 |---|---|
 | `needs` | `build-and-publish` |
 | `runs-on` | `ubuntu-24.04` |
-| `if` condition | `github.ref == 'refs/heads/main' \|\| (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)` |
+| `if` condition | `github.ref == 'refs/heads/main' \|\| github.event_name == 'workflow_dispatch'` |
 | Permissions | `id-token: write`, `contents: read`, `packages: read` |
 
 **Inputs consumed from `build-and-publish`:**
@@ -57,14 +62,27 @@ Defined in `.github/workflows/build-attestable-image.yml` as a new top-level job
 The script is pre-existing. The CI job invokes it as:
 
 ```bash
+# Base invocation (production builds)
 uv run python scripts/build-ami.py \
   --artifact-ref "${{ needs.build-and-publish.outputs.artifact_ref }}" \
   --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
   --output-file ami_build_result.json \
   --expected-workflow .github/workflows/build-attestable-image.yml
+
+# Debug builds additionally pass --allow-debug:
+#   --allow-debug
 ```
 
-The `--allow-debug` flag is intentionally omitted on production builds. The script exits 0 on success and non-zero on any failure; the CI job relies on this contract for conditional steps.
+The `--allow-debug` flag is conditionally appended when the workflow is triggered via `workflow_dispatch` with `enable_ssh: true`. On production builds (push to `main` or `workflow_dispatch` with `enable_ssh: false`), the flag is omitted. The conditional logic uses a shell variable set from the GitHub Actions context:
+
+```bash
+ALLOW_DEBUG_FLAG=""
+if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
+  ALLOW_DEBUG_FLAG="--allow-debug"
+fi
+```
+
+The script exits 0 on success and non-zero on any failure; the CI job relies on this contract for conditional steps.
 
 ### Step Ordering
 
@@ -74,12 +92,13 @@ Steps within `build-ami` must follow this order to satisfy dependency constraint
 2. `aws-actions/configure-aws-credentials` (OIDC, before any AWS or Terraform calls)
 3. `hashicorp/setup-terraform` (pinned version, before script invocation)
 4. `uv sync` (install Python deps, before script invocation)
-5. `uv run python scripts/build-ami.py` (main build step)
+5. `uv run python scripts/build-ami.py` (main build step, with conditional `--allow-debug`)
 6. Upload artifact (`if: success()`)
 7. Write success summary (`if: success()`)
-8. Write failure summary (`if: failure()`)
+8. Write debug warning (`if: success() && github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true`)
+9. Write failure summary (`if: failure()`)
 
-Steps 6–8 are conditional; step 5's cleanup (Terraform destroy) is handled inside the script's `finally` block, so no separate cleanup step is needed in the workflow.
+Steps 6–9 are conditional; step 5's cleanup (Terraform destroy) is handled inside the script's `finally` block, so no separate cleanup step is needed in the workflow.
 
 ## Data Models
 
@@ -108,7 +127,7 @@ The `if:` expression on the `build-ami` job is a pure boolean function of the Gi
 
 ```
 github.ref == 'refs/heads/main'
-|| (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)
+|| github.event_name == 'workflow_dispatch'
 ```
 
 Truth table:
@@ -118,7 +137,9 @@ Truth table:
 | push to `main` | `refs/heads/main` | N/A | ✅ run |
 | push to `develop` | `refs/heads/develop` | N/A | ⛔ skip |
 | `workflow_dispatch` | any | `false` | ✅ run |
-| `workflow_dispatch` | any | `true` | ⛔ skip |
+| `workflow_dispatch` | any | `true` | ✅ run |
+
+Note: The `enable_ssh` input no longer affects whether the job runs. It only affects whether `--allow-debug` is passed to the script and whether a debug warning is appended to the step summary.
 
 ### AWS Region Expression
 
@@ -250,10 +271,11 @@ The `github-actions-iam-role` stack is applied once by a human operator with suf
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
-This feature is a GitHub Actions workflow configuration. Most acceptance criteria are structural (SMOKE) checks on the YAML. However, two areas involve logic that varies meaningfully with input and is worth property-based testing:
+This feature is a GitHub Actions workflow configuration. Most acceptance criteria are structural (SMOKE) checks on the YAML. However, three areas involve logic that varies meaningfully with input and is worth property-based testing:
 
 1. **The job condition expression** — a pure boolean function of trigger context that must correctly classify all trigger combinations.
 2. **The summary generation script** — a shell/Python snippet that parses `ami_build_result.json` and formats output; correctness must hold for any valid JSON content.
+3. **The debug warning logic** — a conditional that must produce a warning if and only if the build is a debug build.
 
 Property-based testing library: **Hypothesis** (Python), consistent with the existing test suite in this repository.
 
@@ -261,7 +283,7 @@ Property-based testing library: **Hypothesis** (Python), consistent with the exi
 
 ### Property 1: Job condition correctly classifies all trigger contexts
 
-*For any* GitHub Actions trigger context (event name, ref, and `enable_ssh` input), the `build-ami` job's `if:` condition expression SHALL evaluate to `true` if and only if the trigger is a push to `main` OR a `workflow_dispatch` with `enable_ssh == false`.
+*For any* GitHub Actions trigger context (event name, ref, and `enable_ssh` input), the `build-ami` job's `if:` condition expression SHALL evaluate to `true` if and only if the trigger is a push to `main` OR a `workflow_dispatch` (regardless of `enable_ssh` value).
 
 **Validates: Requirements 1.2, 1.3, 1.4, 1.5**
 
@@ -275,11 +297,20 @@ Property-based testing library: **Hypothesis** (Python), consistent with the exi
 
 ---
 
+### Property 3: Debug warning is present if and only if the build is a debug build
+
+*For any* successful build result and any trigger context, the summary generation step SHALL include a debug warning if and only if the trigger is a `workflow_dispatch` with `enable_ssh == true`.
+
+**Validates: Requirements 7.3**
+
+---
+
 ### Property Reflection
 
 - Property 1 subsumes requirements 1.2, 1.3, 1.4, and 1.5 — all four are cases of the same boolean expression evaluated over different inputs. A single property with a generator covering all trigger combinations is more comprehensive than four separate examples.
 - Property 2 is independent of Property 1 and covers a different code path (shell/Python JSON parsing vs. YAML expression logic).
-- No redundancy between the two properties.
+- Property 3 covers the debug warning logic, ensuring the warning is present when and only when the build is a debug build. This is a conditional formatting concern independent of the other two properties.
+- No redundancy between the three properties.
 
 ## Error Handling
 
@@ -297,7 +328,7 @@ The expression `${{ vars.AWS_REGION || 'us-east-1' }}` defaults to `us-east-1` w
 
 ### Debug Artifact Gate
 
-The script enforces a production gate: if the artifact has `debug=true` annotation and `--allow-debug` is not passed, the script exits non-zero before creating any AWS resources. Since the CI job never passes `--allow-debug`, debug artifacts are always rejected at the script level, providing defense-in-depth beyond the job-level `if:` condition.
+The script enforces a debug gate: if the artifact has `debug=true` annotation and `--allow-debug` is not passed, the script exits non-zero before creating any AWS resources. On debug builds (`workflow_dispatch` with `enable_ssh: true`), the CI job passes `--allow-debug`, allowing the script to proceed. On production builds, `--allow-debug` is omitted, so debug artifacts are rejected at the script level, providing defense-in-depth. When a debug build succeeds, the CI job appends an explicit warning to the step summary to ensure operators are aware the AMI was built from a debug artifact.
 
 ## Testing Strategy
 
@@ -323,11 +354,11 @@ Unit/property tests verify the logic components in isolation; integration tests 
 @settings(max_examples=200)
 def test_build_ami_job_condition(event_name, ref, enable_ssh):
     result = evaluate_job_condition(event_name, ref, enable_ssh)
-    expected = (ref == "refs/heads/main") or (event_name == "workflow_dispatch" and not enable_ssh)
+    expected = (ref == "refs/heads/main") or (event_name == "workflow_dispatch")
     assert result == expected
 ```
 
-The `evaluate_job_condition` function is a pure Python implementation of the YAML `if:` expression, extracted for testability.
+The `evaluate_job_condition` function is a pure Python implementation of the YAML `if:` expression, extracted for testability. Note that `enable_ssh` no longer affects the job condition — it only affects the `--allow-debug` flag and the debug warning.
 
 **Property 2 — Summary script field extraction:**
 
@@ -363,9 +394,10 @@ def test_summary_generation(ami_id, snapshot_id, region, build_timestamp):
 - Verify `aws-actions/configure-aws-credentials` uses `role-to-assume: ${{ vars.AWS_ROLE_ARN }}`.
 - Verify `hashicorp/setup-terraform` is present with a pinned `terraform_version`.
 - Verify the script invocation includes `--output-file ami_build_result.json` and `--expected-workflow .github/workflows/build-attestable-image.yml`.
-- Verify `--allow-debug` is absent from the script invocation.
+- Verify the script invocation conditionally includes `--allow-debug` based on the `enable_ssh` input.
 - Verify the upload step uses `if: success()`, artifact name `ami-build-result`, and `retention-days: 90`.
 - Verify the failure summary step uses `if: failure()`.
+- Verify a debug warning step exists with a condition that checks for `workflow_dispatch` and `enable_ssh == true`.
 - Verify job permissions: `id-token: write`, `contents: read`, `packages: read`; and that `attestations: write` and `packages: write` are absent.
 - Verify `aws-access-key-id` and `aws-secret-access-key` are absent from the job.
 
@@ -374,6 +406,7 @@ def test_summary_generation(ami_id, snapshot_id, region, build_timestamp):
 End-to-end validation requires a real GitHub Actions run with AWS credentials configured. These are not automated in the unit test suite:
 
 - Trigger a push to `main` and verify the `build-ami` job runs and produces the `ami-build-result` artifact.
-- Trigger a `workflow_dispatch` with `enable_ssh: true` and verify `build-ami` is skipped.
+- Trigger a `workflow_dispatch` with `enable_ssh: true` and verify `build-ami` runs, passes `--allow-debug`, and the step summary contains a debug warning.
+- Trigger a `workflow_dispatch` with `enable_ssh: false` and verify `build-ami` runs without `--allow-debug` and no debug warning appears.
 - Verify the step summary contains the AMI ID after a successful run.
 - Verify EC2 infrastructure is cleaned up after both success and failure runs.

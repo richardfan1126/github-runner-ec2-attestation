@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and create the supporting Terraform IAM role stack at `terraform/github-actions-iam-role/`. The workflow job is the primary deliverable; the Terraform stack is a one-time bootstrap artifact. Property-based tests cover the job condition logic and the summary generation function.
+Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and create the supporting Terraform IAM role stack at `terraform/github-actions-iam-role/`. The workflow job is the primary deliverable; the Terraform stack is a one-time bootstrap artifact. Property-based tests cover the job condition logic, the summary generation function, and the debug warning logic.
 
 ## Tasks
 
@@ -126,10 +126,62 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
 - [x] 7. Final checkpoint — ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 8. Add debug build support to the `build-ami` workflow job
+  - [ ] 8.1 Update job `if` condition to allow debug builds
+    - Update the `if:` condition on the `build-ami` job in `.github/workflows/build-attestable-image.yml`
+    - Change from: `if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)`
+    - Change to: `if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'`
+    - This allows debug builds (`enable_ssh: true`) to run the `build-ami` job
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+
+  - [ ] 8.2 Update script invocation step for conditional `--allow-debug`
+    - Update the run step that invokes `uv run python scripts/build-ami.py` to conditionally include `--allow-debug`:
+      - Add shell logic to set `ALLOW_DEBUG_FLAG=""` by default
+      - WHEN `github.event_name == 'workflow_dispatch'` AND `inputs.enable_ssh == 'true'`, set `ALLOW_DEBUG_FLAG="--allow-debug"`
+      - Pass `$ALLOW_DEBUG_FLAG` as part of the script invocation
+    - Retain existing flags:
+      - `--artifact-ref "${{ needs.build-and-publish.outputs.artifact_ref }}"`
+      - `--region "${{ vars.AWS_REGION || 'us-east-1' }}"`
+      - `--output-file ami_build_result.json`
+      - `--expected-workflow .github/workflows/build-attestable-image.yml`
+    - _Requirements: 5.5, 5.6_
+
+  - [ ] 8.3 Add debug warning step to workflow summary
+    - Add a new step after the success summary step with `if: success() && github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true`
+    - The step appends an explicit warning to `$GITHUB_STEP_SUMMARY` indicating the AMI was built from a debug artifact and is not intended for production use
+    - _Requirements: 7.3_
+
+- [ ] 9. Checkpoint — verify workflow YAML is valid after debug build changes
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 10. Update property and unit tests for debug build support
+  - [ ] 10.1 Update `evaluate_job_condition` helper function
+    - In `tests/test_ami_build_ci_job_properties.py`, update the `evaluate_job_condition(event_name, ref, enable_ssh)` function to mirror the new YAML `if:` expression: `ref == "refs/heads/main" or event_name == "workflow_dispatch"` (the `enable_ssh` parameter no longer affects the job condition)
+    - _Requirements: 1.2, 1.3, 1.4, 1.5_
+
+  - [ ] 10.2 Update property test for job condition (Property 1)
+    - **Property 1: Job condition correctly classifies all trigger contexts**
+    - Update the assertion to: `evaluate_job_condition(event_name, ref, enable_ssh) == ((ref == "refs/heads/main") or (event_name == "workflow_dispatch"))`
+    - The `enable_ssh` parameter is still generated but no longer affects the expected result
+    - Use `@settings(max_examples=200)`
+    - **Validates: Requirements 1.2, 1.3, 1.4, 1.5**
+
+  - [ ] 10.3 Update unit tests for workflow YAML structure
+    - In `tests/test_ami_build_ci_job_unit.py`, update assertions:
+      - Update the `if:` condition check to match the new expression: `github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'`
+      - Update the script invocation test: `--allow-debug` should now be conditionally present (check that the step contains the conditional shell logic for `ALLOW_DEBUG_FLAG`)
+      - Add a test verifying a debug warning step exists with a condition checking for `workflow_dispatch` and `enable_ssh == true`
+      - Add a test verifying the debug warning step writes to `$GITHUB_STEP_SUMMARY`
+    - _Requirements: 1.1, 1.5, 5.5, 5.6, 7.3_
+
+- [ ] 11. Final checkpoint — ensure all tests pass after debug build changes
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for a faster MVP
-- The `build-ami` job's `if:` expression is the single source of truth for skip logic; no separate step-level guards are needed
+- Tasks 1–7 are the original implementation (completed); tasks 8–11 add debug build support
+- The `build-ami` job's `if:` expression (after task 8.1) allows all `workflow_dispatch` triggers (including debug builds); the `enable_ssh` input only controls the `--allow-debug` flag and the debug warning
 - The `terraform/github-actions-iam-role/` stack is applied once by a human operator; it is not invoked by the CI job itself
 - Property tests use Hypothesis, consistent with the existing test suite
 - The `evaluate_job_condition` and `generate_summary` helpers are test-only utilities that mirror the YAML/shell logic for property verification
