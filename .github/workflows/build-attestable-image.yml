@@ -204,7 +204,7 @@ jobs:
   build-ami:
     needs: build-and-publish
     runs-on: ubuntu-24.04
-    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
 
     permissions:
       id-token: write
@@ -236,11 +236,16 @@ jobs:
 
       - name: Build AMI
         run: |
+          ALLOW_DEBUG_FLAG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
+            ALLOW_DEBUG_FLAG="--allow-debug"
+          fi
           uv run python scripts/build-ami.py \
             --artifact-ref "${{ needs.build-and-publish.outputs.artifact_ref }}" \
             --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
             --output-file ami_build_result.json \
-            --expected-workflow .github/workflows/build-attestable-image.yml
+            --expected-workflow .github/workflows/build-attestable-image.yml \
+            $ALLOW_DEBUG_FLAG
 
       - name: Upload AMI build result
         if: success()
@@ -264,6 +269,14 @@ jobs:
           echo "- **Snapshot ID**: \`${SNAPSHOT_ID}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Region**: \`${REGION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Timestamp**: \`${BUILD_TIMESTAMP}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Write debug warning
+        if: success() && github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ **WARNING: This AMI was built from a debug artifact (enable_ssh: true).**" >> $GITHUB_STEP_SUMMARY
+          echo "> This AMI is NOT intended for production use." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
       - name: Write failure summary
         if: failure()

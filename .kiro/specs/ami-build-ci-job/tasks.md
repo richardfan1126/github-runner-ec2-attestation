@@ -126,15 +126,15 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
 - [x] 7. Final checkpoint — ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 8. Add debug build support to the `build-ami` workflow job
-  - [ ] 8.1 Update job `if` condition to allow debug builds
+- [x] 8. Add debug build support to the `build-ami` workflow job
+  - [x] 8.1 Update job `if` condition to allow debug builds
     - Update the `if:` condition on the `build-ami` job in `.github/workflows/build-attestable-image.yml`
     - Change from: `if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)`
     - Change to: `if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'`
     - This allows debug builds (`enable_ssh: true`) to run the `build-ami` job
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
 
-  - [ ] 8.2 Update script invocation step for conditional `--allow-debug`
+  - [x] 8.2 Update script invocation step for conditional `--allow-debug`
     - Update the run step that invokes `uv run python scripts/build-ami.py` to conditionally include `--allow-debug`:
       - Add shell logic to set `ALLOW_DEBUG_FLAG=""` by default
       - WHEN `github.event_name == 'workflow_dispatch'` AND `inputs.enable_ssh == 'true'`, set `ALLOW_DEBUG_FLAG="--allow-debug"`
@@ -146,7 +146,7 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
       - `--expected-workflow .github/workflows/build-attestable-image.yml`
     - _Requirements: 5.5, 5.6_
 
-  - [ ] 8.3 Add debug warning step to workflow summary
+  - [x] 8.3 Add debug warning step to workflow summary
     - Add a new step after the success summary step with `if: success() && github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true`
     - The step appends an explicit warning to `$GITHUB_STEP_SUMMARY` indicating the AMI was built from a debug artifact and is not intended for production use
     - _Requirements: 7.3_
