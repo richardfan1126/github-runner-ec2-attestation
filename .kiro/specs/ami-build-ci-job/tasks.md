@@ -151,22 +151,22 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
     - The step appends an explicit warning to `$GITHUB_STEP_SUMMARY` indicating the AMI was built from a debug artifact and is not intended for production use
     - _Requirements: 7.3_
 
-- [ ] 9. Checkpoint — verify workflow YAML is valid after debug build changes
+- [x] 9. Checkpoint — verify workflow YAML is valid after debug build changes
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 10. Update property and unit tests for debug build support
-  - [ ] 10.1 Update `evaluate_job_condition` helper function
+- [x] 10. Update property and unit tests for debug build support
+  - [x] 10.1 Update `evaluate_job_condition` helper function
     - In `tests/test_ami_build_ci_job_properties.py`, update the `evaluate_job_condition(event_name, ref, enable_ssh)` function to mirror the new YAML `if:` expression: `ref == "refs/heads/main" or event_name == "workflow_dispatch"` (the `enable_ssh` parameter no longer affects the job condition)
     - _Requirements: 1.2, 1.3, 1.4, 1.5_
 
-  - [ ] 10.2 Update property test for job condition (Property 1)
+  - [x] 10.2 Update property test for job condition (Property 1)
     - **Property 1: Job condition correctly classifies all trigger contexts**
     - Update the assertion to: `evaluate_job_condition(event_name, ref, enable_ssh) == ((ref == "refs/heads/main") or (event_name == "workflow_dispatch"))`
     - The `enable_ssh` parameter is still generated but no longer affects the expected result
     - Use `@settings(max_examples=200)`
     - **Validates: Requirements 1.2, 1.3, 1.4, 1.5**
 
-  - [ ] 10.3 Update unit tests for workflow YAML structure
+  - [x] 10.3 Update unit tests for workflow YAML structure
     - In `tests/test_ami_build_ci_job_unit.py`, update assertions:
       - Update the `if:` condition check to match the new expression: `github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'`
       - Update the script invocation test: `--allow-debug` should now be conditionally present (check that the step contains the conditional shell logic for `ALLOW_DEBUG_FLAG`)
@@ -174,7 +174,7 @@ Add the `build-ami` CI job to `.github/workflows/build-attestable-image.yml` and
       - Add a test verifying the debug warning step writes to `$GITHUB_STEP_SUMMARY`
     - _Requirements: 1.1, 1.5, 5.5, 5.6, 7.3_
 
-- [ ] 11. Final checkpoint — ensure all tests pass after debug build changes
+- [x] 11. Final checkpoint — ensure all tests pass after debug build changes
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

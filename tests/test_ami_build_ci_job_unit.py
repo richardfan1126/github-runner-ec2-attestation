@@ -211,8 +211,20 @@ class TestTerraformSetupStep:
 # ===========================================================================
 
 
+class TestJobCondition:
+    """Requirement 1.1, 1.5: build-ami job if condition allows main and workflow_dispatch."""
+
+    def test_if_condition_matches_expected_expression(self, build_ami_job):
+        """The build-ami job if: condition must match the expected expression."""
+        condition = build_ami_job.get("if", "")
+        expected = "github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'"
+        assert str(condition).strip() == expected, (
+            f"build-ami if: condition must be {expected!r}, got {condition!r}"
+        )
+
+
 class TestScriptInvocationStep:
-    """Requirements 4.2, 5.3, 5.4, 5.5: correct script invocation flags."""
+    """Requirements 4.2, 5.3, 5.4, 5.5, 5.6: correct script invocation flags."""
 
     def _script_step(self, steps: list) -> dict:
         """Return the step that invokes build-ami.py."""
@@ -244,11 +256,15 @@ class TestScriptInvocationStep:
             "'--expected-workflow .github/workflows/build-attestable-image.yml'"
         )
 
-    def test_allow_debug_flag_absent(self, build_ami_steps):
-        """The script invocation must NOT include --allow-debug."""
+    def test_allow_debug_flag_conditional_logic(self, build_ami_steps):
+        """The script step must contain conditional shell logic for ALLOW_DEBUG_FLAG."""
         step = self._script_step(build_ami_steps)
-        assert "--allow-debug" not in step["run"], (
-            "Script invocation must NOT include '--allow-debug' on production builds"
+        run_script = step["run"]
+        assert "ALLOW_DEBUG_FLAG" in run_script, (
+            "Script step must contain ALLOW_DEBUG_FLAG shell variable logic"
+        )
+        assert 'if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]' in run_script, (
+            "Script step must contain the conditional check for workflow_dispatch and enable_ssh"
         )
 
 
@@ -322,6 +338,50 @@ class TestFailureSummaryStep:
         run_script = failure_step.get("run", "")
         assert "GITHUB_STEP_SUMMARY" in run_script, (
             "The failure summary step must write to $GITHUB_STEP_SUMMARY"
+        )
+
+
+# ===========================================================================
+# Requirement 7.3 — debug warning step
+# ===========================================================================
+
+
+class TestDebugWarningStep:
+    """Requirement 7.3: a debug warning step must exist for workflow_dispatch with enable_ssh."""
+
+    def _debug_warning_step(self, steps: list) -> dict | None:
+        """Return the debug warning step, or None if not found."""
+        for step in steps:
+            condition = str(step.get("if", ""))
+            if "workflow_dispatch" in condition and "enable_ssh" in condition and "success()" in condition:
+                return step
+        return None
+
+    def test_debug_warning_step_present(self, build_ami_steps):
+        """A debug warning step must exist with a condition checking for workflow_dispatch and enable_ssh."""
+        step = self._debug_warning_step(build_ami_steps)
+        assert step is not None, (
+            "A debug warning step with a condition checking for "
+            "workflow_dispatch and enable_ssh must be present"
+        )
+        condition = str(step.get("if", ""))
+        assert "success()" in condition, (
+            "Debug warning step must include success() in its condition"
+        )
+        assert "workflow_dispatch" in condition, (
+            "Debug warning step must check for workflow_dispatch"
+        )
+        assert "enable_ssh" in condition, (
+            "Debug warning step must check for enable_ssh"
+        )
+
+    def test_debug_warning_writes_to_github_step_summary(self, build_ami_steps):
+        """The debug warning step must write to $GITHUB_STEP_SUMMARY."""
+        step = self._debug_warning_step(build_ami_steps)
+        assert step is not None, "Debug warning step not found"
+        run_script = step.get("run", "")
+        assert "GITHUB_STEP_SUMMARY" in run_script, (
+            "The debug warning step must write to $GITHUB_STEP_SUMMARY"
         )
 
 

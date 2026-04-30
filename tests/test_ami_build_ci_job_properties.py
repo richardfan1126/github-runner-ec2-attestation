@@ -21,7 +21,7 @@ from hypothesis import given, settings, strategies as st
 # Pure Python mirror of the YAML `if:` expression on the `build-ami` job:
 #
 #   github.ref == 'refs/heads/main'
-#   || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)
+#   || github.event_name == 'workflow_dispatch'
 # ---------------------------------------------------------------------------
 
 
@@ -30,19 +30,20 @@ def evaluate_job_condition(event_name: str, ref: str, enable_ssh: bool) -> bool:
 
     Mirrors the workflow `if:` expression:
         github.ref == 'refs/heads/main'
-        || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)
+        || github.event_name == 'workflow_dispatch'
+
+    The ``enable_ssh`` parameter is retained for backward compatibility with
+    the property test generator but no longer affects the job condition.
 
     Args:
         event_name: The GitHub Actions event name (e.g. "push", "workflow_dispatch").
         ref:        The full Git ref string (e.g. "refs/heads/main").
-        enable_ssh: The value of the `enable_ssh` workflow_dispatch input.
+        enable_ssh: The value of the `enable_ssh` workflow_dispatch input (unused).
 
     Returns:
         True if the job should execute, False if it should be skipped.
     """
-    return ref == "refs/heads/main" or (
-        event_name == "workflow_dispatch" and not enable_ssh
-    )
+    return ref == "refs/heads/main" or event_name == "workflow_dispatch"
 
 
 # ---------------------------------------------------------------------------
@@ -115,14 +116,15 @@ def test_build_ami_job_condition(event_name: str, ref: str, enable_ssh: bool) ->
     return exactly the same boolean as the YAML expression:
 
         github.ref == 'refs/heads/main'
-        || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh == false)
+        || github.event_name == 'workflow_dispatch'
+
+    The enable_ssh parameter is still generated but no longer affects the
+    expected result.
 
     Validates: Requirements 1.2, 1.3, 1.4, 1.5
     """
     result = evaluate_job_condition(event_name, ref, enable_ssh)
-    expected = (ref == "refs/heads/main") or (
-        event_name == "workflow_dispatch" and not enable_ssh
-    )
+    expected = (ref == "refs/heads/main") or (event_name == "workflow_dispatch")
     assert result == expected, (
         f"evaluate_job_condition({event_name!r}, {ref!r}, {enable_ssh!r}) "
         f"returned {result!r}, expected {expected!r}"
