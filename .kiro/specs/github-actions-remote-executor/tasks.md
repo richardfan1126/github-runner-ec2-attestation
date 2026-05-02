@@ -1537,7 +1537,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
       - Memory limit from `container_memory_limit` config
       - CPU limit from `container_cpu_limit` config (via `nano_cpus`)
       - Read-only root filesystem (`read_only=True`) with a writable tmpfs mount for the execution directory
-      - Network disabled (`network_mode='none'`)
+      - Internet access enabled by default (no `network_mode` restriction, since scripts may need to download dependencies or upload artifacts)
       - No privilege escalation (`security_opt=['no-new-privileges']`)
       - Non-root user (`user` parameter)
     - Bind-mount the script file read-only into the container at `/scripts/script.sh` using Docker `volumes` parameter at creation time (avoids `put_archive` failures on read-only root filesystems)
@@ -1601,7 +1601,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
   - [x] 71.3 Write property test for Docker Container Security Constraints
     - **Property 111: Docker Container Security Constraints**
-    - For any Execution_Container, verify it is configured with: non-root user, network disabled, read-only root filesystem (except execution directory), privilege escalation disabled, memory limits, and CPU limits
+    - For any Execution_Container, verify it is configured with: non-root user, read-only root filesystem (except execution directory), privilege escalation disabled, memory limits, CPU limits, and internet access enabled (no network_mode restriction)
     - **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
 
   - [x] 71.4 Write property test for Container Removal Verification
@@ -1626,7 +1626,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [x] 72. Write unit tests for Docker container management
   - [x] 72.1 Write unit tests for Docker ScriptExecutor
-    - Test container creation with correct image, name, and security constraints (memory, CPU, read-only fs, no network, no privilege escalation, non-root user)
+    - Test container creation with correct image, name, and security constraints (memory, CPU, read-only fs, no privilege escalation, non-root user, internet access enabled)
     - Test container execution captures stdout, stderr, and exit code
     - Test container is removed after successful execution
     - Test container is removed after failed execution
@@ -1827,7 +1827,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Replace the single-file bind-mount with a directory mount: mount `repo_path` read-only at `/workspace` in the container
     - Set the container working directory to `/workspace` using `working_dir="/workspace"`
     - Update the command to `["sh", "/workspace/{script_path}"]`
-    - Keep all existing security constraints (memory, CPU, read-only rootfs, tmpfs, no network, no-new-privileges, non-root user)
+    - Keep all existing security constraints (memory, CPU, read-only rootfs, tmpfs, no-new-privileges, non-root user, internet access enabled)
     - _Requirements: 5.1, 5.2, 5.13, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
   - [x] 86.3 Update _cleanup_temp_files to remove cloned repo directory
@@ -3094,6 +3094,28 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 168. Final checkpoint - Ensure all security finding remediation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 169. Enable internet access in Execution_Containers
+  - [ ] 169.1 Remove network_mode="none" from container creation in src/script_executor.py
+    - In `_execute_in_container`, remove the `network_mode="none"` parameter from the `self._docker_client.containers.create()` call
+    - This allows containers to use the default Docker bridge network, giving scripts internet access to download dependencies or upload artifacts
+    - All other security constraints remain unchanged: mem_limit, nano_cpus, read_only, tmpfs, cap_drop=["ALL"], security_opt=["no-new-privileges"], user="nobody"
+    - _Requirements: 8.4_
+
+  - [ ] 169.2 Update Property 111 test for internet access enabled
+    - Update the property test for Docker Container Security Constraints (Property 111) to verify that `network_mode="none"` is NOT set on created containers
+    - Verify all other security constraints are still enforced: non-root user, read-only root filesystem (except tmpfs), privilege escalation disabled, memory limits, CPU limits, cap_drop=ALL
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18_
+
+  - [ ] 169.3 Update unit tests for container creation without network restriction
+    - Update tests in tests/test_script_executor.py and tests/test_docker_executor_unit.py that assert `network_mode="none"` in the container creation call
+    - Verify the `containers.create()` mock call does NOT include `network_mode` parameter (or does not set it to "none")
+    - Ensure all other security constraint assertions remain unchanged
+    - _Requirements: 8.4_
+
+- [ ] 170. Checkpoint - Ensure internet access change passes all tests
+  - Run the full test suite to verify the network_mode removal does not break any existing tests
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -3118,7 +3140,8 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Debug SSH feature requires coordination between build-time and deploy-time: both --enable-ssh flags must be used for SSH to work end-to-end
 - SSH key provisioning uses cloud-init and ec2-instance-connect (no baked-in keys)
 - NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM
-- Docker container execution replaces direct subprocess execution: each script runs in an ephemeral container with memory limits, CPU limits, read-only filesystem, no network, no privilege escalation, and non-root user
+- Docker container execution replaces direct subprocess execution: each script runs in an ephemeral container with memory limits, CPU limits, read-only filesystem, no privilege escalation, non-root user, and internet access enabled by default (no network_mode restriction) since scripts may need to download dependencies or upload artifacts
+- Internet access change (task 169): Removes `network_mode="none"` from container creation so scripts can download dependencies or upload artifacts to artifact stores; all other security constraints (cap_drop=ALL, read-only rootfs, no-new-privileges, non-root user, memory/CPU limits) remain unchanged
 - Docker SDK (`docker` Python package) manages container lifecycle: create, run, capture output, remove, and verify removal
 - Container naming convention uses `gare-exec-{execution_id}` prefix for identification and dangling cleanup
 - OIDC authentication (tasks 58-65) adds GitHub Actions OIDC JWT validation for request authentication

@@ -258,7 +258,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE Script_Executor SHALL enforce a maximum memory limit on each Execution_Container using Docker memory constraints
 2. THE Script_Executor SHALL enforce a maximum CPU time limit on each Execution_Container using Docker CPU constraints
 3. THE Script_Executor SHALL execute scripts inside the Execution_Container with a non-root user
-4. THE Script_Executor SHALL create each Execution_Container with network access disabled
+4. THE Script_Executor SHALL create each Execution_Container with internet access enabled by default (no `network_mode` restriction), since scripts may need to download dependencies or upload artifacts
 5. THE Script_Executor SHALL create each Execution_Container with a read-only root filesystem except for a designated execution directory
 6. THE Script_Executor SHALL prevent the Execution_Container from gaining additional privileges by disabling privilege escalation
 7. THE GHA_Server SHALL limit the number of concurrent Execution_Containers

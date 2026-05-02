@@ -225,7 +225,7 @@ The system consists of the following major components:
 **Script Executor**
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
 - Assigns a unique container name derived from the Execution_ID to each container
-- Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), network disabled, no privilege escalation, non-root user
+- Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), no privilege escalation, non-root user; internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts
 - Creates each container with cap_drop=ALL to remove all Linux capabilities; no capabilities added back unless documented as required with justification
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
@@ -1307,9 +1307,9 @@ class EncryptionContext:
 
 ### Property 111: Docker Container Security Constraints
 
-*For any* Execution_Container created by the Script_Executor, the container should be configured with: a non-root user, network access disabled, a read-only root filesystem (except for a designated execution directory), privilege escalation disabled, memory limits enforced, CPU limits enforced, and cap_drop=ALL (no capabilities added back unless documented as required).
+*For any* Execution_Container created by the Script_Executor, the container should be configured with: a non-root user, a read-only root filesystem (except for a designated execution directory), privilege escalation disabled, memory limits enforced, CPU limits enforced, and cap_drop=ALL (no capabilities added back unless documented as required). Internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts.
 
-**Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18**
+**Validates: Requirements 8.1, 8.2, 8.3, 8.5, 8.6, 8.17, 8.18**
 
 ### Property 112: Container Removal Verification
 
@@ -1785,7 +1785,7 @@ The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/d
 **Design Rationale:**
 - `no-new-privileges`: Prevents privilege escalation via setuid/setgid binaries inside containers
 - `live-restore: false`: Ensures containers stop when the daemon restarts, preventing orphaned containers from persisting across daemon restarts
-- `userns-remap` and `seccomp-profile` were removed because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) that is not present in the KIWI image; the per-container security constraints (cap_drop=ALL, no-new-privileges, read-only root filesystem, network disabled) provide the primary isolation layer
+- `userns-remap` and `seccomp-profile` were removed because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) that is not present in the KIWI image; the per-container security constraints (cap_drop=ALL, no-new-privileges, read-only root filesystem) provide the primary isolation layer
 - The configuration is baked into the KIWI image at `/etc/docker/daemon.json` so it cannot be modified at runtime (read-only root filesystem)
 - The expected Docker daemon security configuration is documented in code comments
 
@@ -2455,7 +2455,7 @@ The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/d
 }
 ```
 
-This configuration is baked into the read-only erofs layer during the KIWI image build, ensuring it cannot be modified at runtime. `no-new-privileges` prevents privilege escalation via setuid/setgid binaries inside containers, and `live-restore: false` ensures containers stop when the daemon restarts. `userns-remap` and `seccomp-profile` are not included because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) not present in the KIWI image; the per-container security constraints (cap_drop=ALL, no-new-privileges, read-only root filesystem, network disabled) provide the primary isolation layer.
+This configuration is baked into the read-only erofs layer during the KIWI image build, ensuring it cannot be modified at runtime. `no-new-privileges` prevents privilege escalation via setuid/setgid binaries inside containers, and `live-restore: false` ensures containers stop when the daemon restarts. `userns-remap` and `seccomp-profile` are not included because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) not present in the KIWI image; the per-container security constraints (cap_drop=ALL, no-new-privileges, read-only root filesystem) provide the primary isolation layer.
 
 **Design Rationale:**
 
