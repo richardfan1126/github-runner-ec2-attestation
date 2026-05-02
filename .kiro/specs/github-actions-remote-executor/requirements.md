@@ -1011,3 +1011,16 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 2. THE IAM policy SHALL use explicit resource ARN patterns for snapshots (`arn:aws:ec2:{region}::snapshot/*`), images (`arn:aws:ec2:{region}::image/*`), and volumes (`arn:aws:ec2:{region}:{account}:volume/*`) instead of a wildcard resource
 3. THE IAM policy SHALL use `aws:RequestedRegion` condition key to restrict operations to the build region
 4. THE IAM policy SHALL NOT use Resource = "*" for EC2 snapshot and image operations
+
+### Requirement 52: Script Environment Variable Forwarding
+
+**User Story:** As a GitHub Actions workflow, I want to forward environment variables from the encrypted execution payload into the Execution_Container, so that build scripts running inside the container can access GitHub Actions runtime context (e.g., `GITHUB_TOKEN`, `GITHUB_RUN_ID`, `GITHUB_REPOSITORY`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_RUNTIME_URL`) needed to upload artifacts or interact with GitHub APIs.
+
+#### Acceptance Criteria
+
+1. THE /execute endpoint's decrypted payload SHALL accept an optional `script_env` field containing a dictionary of string key-value pairs representing environment variables to inject into the Execution_Container.
+2. WHEN `script_env` is present in the decrypted payload, THE GHA_Server SHALL sanitize the dictionary by accepting only entries where both the key and value are strings.
+3. THE Script_Executor SHALL accept an optional `script_env` parameter in `execute_async` and `_execute_in_container` and pass it as the `environment` parameter to the Docker container creation call.
+4. WHEN `script_env` is not provided or is empty, THE Execution_Container SHALL be created with an empty environment (no additional environment variables beyond Docker defaults).
+5. THE `script_env` field SHALL NOT be a required field; omitting it SHALL NOT cause request validation to fail.
+6. THE Request_Validator SHALL NOT validate the contents of `script_env` beyond type checking (string keys and string values); the field is opaque to the server.

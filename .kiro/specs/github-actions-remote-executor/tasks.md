@@ -3116,6 +3116,36 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Run the full test suite to verify the network_mode removal does not break any existing tests
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 171. Implement script environment variable forwarding
+  - [ ] 171.1 Update ScriptExecutor.execute_async and _execute_in_container signatures
+    - Add `script_env: dict[str, str] | None = None` parameter to both `execute_async` and `_execute_in_container`
+    - Pass `script_env` through from `execute_async` to `_execute_in_container` via the background thread args
+    - Pass `script_env or {}` as the `environment` parameter to `self._docker_client.containers.create()`
+    - _Requirements: 52.3, 52.4_
+
+  - [ ] 171.2 Update /execute endpoint in server.py to extract and forward script_env
+    - After creating the execution record and before calling `executor.execute_async`, extract `script_env` from the decrypted body via `body.get('script_env') or {}`
+    - Sanitize the dictionary: only accept entries where both key and value are strings (`{str(k): str(v) for k, v in script_env.items() if isinstance(k, str) and isinstance(v, str)}`)
+    - Pass `script_env=script_env` to `executor.execute_async()`
+    - _Requirements: 52.1, 52.2, 52.5, 52.6_
+
+  - [ ] 171.3 Write property test for Script Environment Variable Forwarding
+    - **Property 169: Script Environment Variable Forwarding**
+    - For any /execute request with a `script_env` dictionary, verify the container is created with those environment variables
+    - For any /execute request without `script_env`, verify the container is created with an empty environment
+    - For any `script_env` with non-string keys or values, verify they are sanitized or dropped
+    - **Validates: Requirements 52.1, 52.2, 52.3, 52.4, 52.5, 52.6**
+
+  - [ ] 171.4 Write unit tests for script_env forwarding
+    - Test /execute with script_env containing valid string key-value pairs
+    - Test /execute without script_env field (should not fail, container gets empty env)
+    - Test /execute with script_env containing non-string values (should be sanitized)
+    - Test that script_env is passed through to Docker container creation
+    - _Requirements: 52.1-52.6_
+
+- [ ] 172. Checkpoint - Ensure all script_env forwarding tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP

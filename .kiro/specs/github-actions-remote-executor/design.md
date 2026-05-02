@@ -138,6 +138,7 @@ The system consists of the following major components:
 - Delegates decryption to the Encryption Manager using the Client_Public_Key (containing client's X25519 public key + ML-KEM-768 ciphertext) from the request
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
 - Extracts the optional `nonce` from the decrypted request body for inclusion in the attestation document
+- Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), and passes it to the Script Executor for injection into the Execution_Container as environment variables
 - Validates the decrypted request using the Request Validator
 - After OIDC validation, verifies the `repository` claim matches the `repository_url` in the request; rejects with HTTP 403 if mismatch
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
@@ -145,7 +146,7 @@ The system consists of the following major components:
 - Generates attestation documents (without Server_Public_Key; nonce included if provided)
 - Creates execution records (stores `repository` claim in the record)
 - Stores the Shared_Key in the Encryption_Context for the new Execution_ID
-- Initiates asynchronous script execution
+- Initiates asynchronous script execution with optional script_env
 - Encrypts the response payload using the Shared_Key before returning
 
 **Output Handler**
@@ -230,6 +231,7 @@ The system consists of the following major components:
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
 - Ensures the cloned repository directory is world-readable (`chmod -R a+rX`) before mounting, so the container's non-root user can access files regardless of the server process umask
+- Accepts an optional `script_env` dictionary of string key-value pairs and passes it as the `environment` parameter to the Docker container, allowing the caller to forward environment variables (e.g., `GITHUB_TOKEN`, `GITHUB_RUN_ID`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_RUNTIME_URL`) into the Execution_Container so that build scripts can interact with external services
 - Executes the script via `command=["bash", "/workspace/{script_path}"]` where `script_path` is the relative path within the repo
 - Streams stdout and stderr incrementally from the container during execution using a Log_Streaming_Thread that calls `container.logs(stream=True, follow=True)` and feeds chunks to the Output_Collector in real time, so that polling clients observe partial output while the script is still running
 - Monitors execution progress and enforces timeout
@@ -286,9 +288,10 @@ The system consists of the following major components:
 16. Execution Manager creates execution record with unique ID (stores `repository` claim)
 17. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
 18. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
-19. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL) and begins asynchronous execution inside it
-20. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
-21. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
+19. Request Handler extracts optional `script_env` dictionary from the decrypted body, sanitizes it (string keys and values only), and passes it to the Script Executor
+20. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL), injects `script_env` as container environment variables, and begins asynchronous execution inside it
+21. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
+22. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
 
 **Output Polling Flow:**
 
@@ -365,7 +368,13 @@ Initiates script execution. Request and response payloads are encrypted using PQ
   "script_path": "scripts/build.sh",
   "github_token": "ghp_...",
   "oidc_token": "eyJhbGciOiJSUzI1NiIs...",
-  "nonce": "optional-client-nonce"
+  "nonce": "optional-client-nonce",
+  "script_env": {
+    "GITHUB_RUN_ID": "123456",
+    "GITHUB_REPOSITORY": "owner/repo",
+    "ACTIONS_RUNTIME_TOKEN": "...",
+    "ACTIONS_RUNTIME_URL": "https://pipelines.actions.githubusercontent.com/..."
+  }
 }
 ```
 
@@ -685,12 +694,20 @@ class ScriptExecutor:
         """
         pass
 
-    def execute_async(self, execution_id: str, repo_path: str, script_path: str) -> None:
+    def execute_async(self, execution_id: str, repo_path: str, script_path: str, script_env: dict[str, str] | None = None) -> None:
         """
         Creates a new Execution_Container from Container_Image, mounts the
-        cloned repository directory read-only at /workspace, and executes the
+        cloned repository directory read-only at /workspace, injects optional
+        script_env as container environment variables, and executes the
         script asynchronously. The container is assigned a unique name derived
         from the execution_id.
+
+        Args:
+            execution_id: Unique execution identifier
+            repo_path: Path to the cloned repository directory on the host
+            script_path: Relative path to the script within the repo
+            script_env: Optional dictionary of environment variables to inject
+                        into the container (e.g., GITHUB_TOKEN, GITHUB_RUN_ID)
 
         After starting the container, launches a Log_Streaming_Thread (daemon thread)
         that calls container.logs(stream=True, follow=True) to incrementally capture
@@ -889,6 +906,7 @@ class DecryptedExecuteRequest:
     github_token: str
     oidc_token: str
     nonce: Optional[str] = None
+    script_env: Optional[dict[str, str]] = None  # Environment variables to inject into the Execution_Container
 ```
 
 ### DecryptedOutputRequest
@@ -1616,6 +1634,12 @@ class EncryptionContext:
 *For any* GitHub Actions workflow, the runner should be pinned to a specific Ubuntu version (not ubuntu-latest). The Build_Instance AMI data source should use a specific AMI ID or name filter with a specific version instead of most_recent=true. The KIWI image description (`appliance.kiwi`) should pin the AL2023 package repository URL to a specific release version instead of the floating `latest` mirrorlist path.
 
 **Validates: Requirements 11.9, 11.10, 11.13**
+
+### Property 169: Script Environment Variable Forwarding
+
+*For any* /execute request containing a `script_env` dictionary with string key-value pairs in the decrypted payload, the GHA_Server should extract and sanitize the dictionary (accepting only string keys and string values), pass it to the Script_Executor, and the resulting Execution_Container should have those key-value pairs set as environment variables. When `script_env` is absent or empty, the container should be created with no additional environment variables. Non-string keys or values in `script_env` should be silently coerced to strings or dropped.
+
+**Validates: Requirements 52.1, 52.2, 52.3, 52.4, 52.5, 52.6**
 
 ### Error Categories
 
