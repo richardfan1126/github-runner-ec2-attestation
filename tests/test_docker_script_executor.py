@@ -161,8 +161,8 @@ class TestContainerCreationAndSecurity:
             call = mock_client.containers._creation_calls[0]
             assert call["user"] == "nobody"
 
-    def test_container_network_disabled(self):
-        """Container has network access disabled (Req 8.4)."""
+    def test_container_internet_access_enabled(self):
+        """Container has internet access enabled (Req 8.4)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_client = create_mock_docker_client()
             manager = ExecutionManager(output_retention_hours=1)
@@ -173,7 +173,9 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert call["network_mode"] == "none"
+            assert call.get("network_mode") != "none", (
+                "Container should not have network_mode='none'; internet access must be enabled"
+            )
 
     def test_container_read_only_root_fs(self):
         """Container has read-only root filesystem with writable tmpfs (Req 8.5)."""
@@ -217,7 +219,9 @@ class TestContainerCreationAndSecurity:
 
             call = mock_client.containers._creation_calls[0]
             assert call["user"] == "nobody"
-            assert call["network_mode"] == "none"
+            assert call.get("network_mode") != "none", (
+                "Container should not have network_mode='none'; internet access must be enabled"
+            )
             assert call["read_only"] is True
             assert "/tmp" in call["tmpfs"]
             assert "no-new-privileges" in call["security_opt"]

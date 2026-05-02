@@ -3094,25 +3094,25 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 168. Final checkpoint - Ensure all security finding remediation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 169. Enable internet access in Execution_Containers
-  - [ ] 169.1 Remove network_mode="none" from container creation in src/script_executor.py
+- [x] 169. Enable internet access in Execution_Containers
+  - [x] 169.1 Remove network_mode="none" from container creation in src/script_executor.py
     - In `_execute_in_container`, remove the `network_mode="none"` parameter from the `self._docker_client.containers.create()` call
     - This allows containers to use the default Docker bridge network, giving scripts internet access to download dependencies or upload artifacts
     - All other security constraints remain unchanged: mem_limit, nano_cpus, read_only, tmpfs, cap_drop=["ALL"], security_opt=["no-new-privileges"], user="nobody"
     - _Requirements: 8.4_
 
-  - [ ] 169.2 Update Property 111 test for internet access enabled
+  - [x] 169.2 Update Property 111 test for internet access enabled
     - Update the property test for Docker Container Security Constraints (Property 111) to verify that `network_mode="none"` is NOT set on created containers
     - Verify all other security constraints are still enforced: non-root user, read-only root filesystem (except tmpfs), privilege escalation disabled, memory limits, CPU limits, cap_drop=ALL
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18_
 
-  - [ ] 169.3 Update unit tests for container creation without network restriction
+  - [x] 169.3 Update unit tests for container creation without network restriction
     - Update tests in tests/test_script_executor.py and tests/test_docker_executor_unit.py that assert `network_mode="none"` in the container creation call
     - Verify the `containers.create()` mock call does NOT include `network_mode` parameter (or does not set it to "none")
     - Ensure all other security constraint assertions remain unchanged
     - _Requirements: 8.4_
 
-- [ ] 170. Checkpoint - Ensure internet access change passes all tests
+- [x] 170. Checkpoint - Ensure internet access change passes all tests
   - Run the full test suite to verify the network_mode removal does not break any existing tests
   - Ensure all tests pass, ask the user if questions arise.
 

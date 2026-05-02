@@ -217,8 +217,9 @@ def test_property_110_container_unique_naming(params):
 def test_property_111_docker_container_security_constraints(params):
     """
     Property 111: For any Execution_Container, verify it is configured with:
-    non-root user, network disabled, read-only root filesystem (except execution
-    directory), privilege escalation disabled, memory limits, and CPU limits.
+    non-root user, internet access enabled (no network restriction), read-only
+    root filesystem (except execution directory), privilege escalation disabled,
+    memory limits, and CPU limits.
 
     **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
     """
@@ -250,9 +251,9 @@ def test_property_111_docker_container_security_constraints(params):
             f"Container must run as non-root user 'nobody', got '{call.get('user')}'"
         )
 
-        # Req 8.4: network disabled
-        assert call.get("network_mode") == "none", (
-            f"Container must have network disabled, got '{call.get('network_mode')}'"
+        # Req 8.4: internet access enabled (no network restriction)
+        assert call.get("network_mode") != "none", (
+            f"Container must have internet access enabled (network_mode should not be 'none'), got '{call.get('network_mode')}'"
         )
 
         # Req 8.5: read-only root filesystem with writable execution dir

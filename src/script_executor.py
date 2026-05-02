@@ -152,7 +152,6 @@ class ScriptExecutor:
                     host_repo_path: {"bind": "/workspace", "mode": "ro"},
                 },
                 working_dir="/workspace",
-                network_mode="none",
                 security_opt=["no-new-privileges"],
                 cap_drop=["ALL"],
                 user="nobody",
