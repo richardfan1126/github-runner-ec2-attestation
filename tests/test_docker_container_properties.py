@@ -217,11 +217,11 @@ def test_property_110_container_unique_naming(params):
 def test_property_111_docker_container_security_constraints(params):
     """
     Property 111: For any Execution_Container, verify it is configured with:
-    non-root user, internet access enabled (no network restriction), read-only
-    root filesystem (except execution directory), privilege escalation disabled,
-    memory limits, and CPU limits.
+    root user, read-only root filesystem (except execution directory via tmpfs),
+    privilege escalation disabled (no-new-privileges), memory limits, CPU limits,
+    internet access enabled (no network_mode restriction), and cap_drop=ALL.
 
-    **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
+    **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18**
     """
     with tempfile.TemporaryDirectory() as temp_dir:
         mock_client = create_mock_docker_client()
@@ -246,35 +246,45 @@ def test_property_111_docker_container_security_constraints(params):
         assert len(creation_calls) == 1
         call = creation_calls[0]
 
-        # Req 8.3: root user (Docker default when no user is specified)
+        # Req 8.3: root user execution (Docker default when no user is specified)
         assert "user" not in call, (
             f"Container must run as root user (no 'user' param), got user='{call.get('user')}'"
         )
 
-        # Req 8.4: internet access enabled (no network restriction)
-        assert call.get("network_mode") != "none", (
-            f"Container must have internet access enabled (network_mode should not be 'none'), got '{call.get('network_mode')}'"
-        )
-
-        # Req 8.5: read-only root filesystem with writable execution dir
+        # Req 8.5: read-only root filesystem with writable execution dir via tmpfs
         assert call.get("read_only") is True, "Container root filesystem must be read-only"
-        assert "tmpfs" in call, "Container must have a tmpfs for the execution directory"
+        assert "tmpfs" in call, "Container must have a tmpfs for the writable execution directory"
 
-        # Req 8.6: privilege escalation disabled
+        # Req 8.6: privilege escalation disabled (no-new-privileges)
         security_opt = call.get("security_opt", [])
         assert "no-new-privileges" in security_opt, (
             f"Container must disable privilege escalation, got security_opt={security_opt}"
         )
 
-        # Req 8.1: memory limits
+        # Req 8.1: memory limits configured
         assert call.get("mem_limit") == "512m", (
             f"Container must have memory limit '512m', got '{call.get('mem_limit')}'"
         )
 
-        # Req 8.2: CPU limits
+        # Req 8.2: CPU limits configured
         expected_nano_cpus = int(1.0 * 1e9)
         assert call.get("nano_cpus") == expected_nano_cpus, (
             f"Container must have CPU limit {expected_nano_cpus} nano_cpus, got {call.get('nano_cpus')}"
+        )
+
+        # Req 8.4: internet access enabled (no network_mode restriction)
+        assert call.get("network_mode") != "none", (
+            f"Container must have internet access enabled (network_mode should not be 'none'), got '{call.get('network_mode')}'"
+        )
+
+        # Req 8.17: cap_drop=ALL (all Linux capabilities dropped)
+        assert call.get("cap_drop") == ["ALL"], (
+            f"Container must have cap_drop=['ALL'], got {call.get('cap_drop')!r}"
+        )
+
+        # Req 8.18: no capabilities added back
+        assert "cap_add" not in call or call["cap_add"] is None or call["cap_add"] == [], (
+            f"Container must not add back any capabilities, got cap_add={call.get('cap_add')!r}"
         )
 
 

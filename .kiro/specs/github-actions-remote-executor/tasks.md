@@ -1599,7 +1599,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - For any script execution, verify the Execution_Container is assigned a unique name derived from the Execution_ID
     - **Validates: Requirements 5.13**
 
-  - [ ] 71.3 Write property test for Docker Container Security Constraints
+  - [x] 71.3 Write property test for Docker Container Security Constraints
     - **Property 111: Docker Container Security Constraints**
     - For any Execution_Container, verify it is configured with: root user, read-only root filesystem (except execution directory), privilege escalation disabled, memory limits, CPU limits, and internet access enabled (no network_mode restriction)
     - **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
@@ -1625,7 +1625,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Validates: Requirements 9.7**
 
 - [x] 72. Write unit tests for Docker container management
-  - [ ] 72.1 Write unit tests for Docker ScriptExecutor
+  - [x] 72.1 Write unit tests for Docker ScriptExecutor
     - Test container creation with correct image, name, and security constraints (memory, CPU, read-only fs, no privilege escalation, root user, internet access enabled)
     - Test container execution captures stdout, stderr, and exit code
     - Test container is removed after successful execution
@@ -1823,7 +1823,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - `script_path` is the relative path to the script within the repo
     - _Requirements: 5.1, 5.2_
 
-  - [ ] 86.2 Update _execute_in_container to mount repo directory
+  - [x] 86.2 Update _execute_in_container to mount repo directory
     - Replace the single-file bind-mount with a directory mount: mount `repo_path` read-only at `/workspace` in the container
     - Set the container working directory to `/workspace` using `working_dir="/workspace"`
     - Update the command to `["sh", "/workspace/{script_path}"]`
