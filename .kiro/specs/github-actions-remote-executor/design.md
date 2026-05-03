@@ -216,11 +216,11 @@ The system consists of the following major components:
 **Script Executor**
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
 - Assigns a unique container name derived from the Execution_ID to each container
-- Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), no privilege escalation, non-root user; internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts
+- Configures containers with security constraints: memory limits, CPU limits, read-only root filesystem (with a writable execution directory via tmpfs), no privilege escalation, running as root user; internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts
 - Creates each container with cap_drop=ALL to remove all Linux capabilities; no capabilities added back unless documented as required with justification
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
-- Ensures the cloned repository directory is world-readable (`chmod -R a+rX`) before mounting, so the container's non-root user can access files regardless of the server process umask
+- Ensures the cloned repository directory is readable before mounting into the container
 - Accepts an optional `script_env` dictionary of string key-value pairs and passes it as the `environment` parameter to the Docker container, allowing the caller to forward environment variables (e.g., `GITHUB_TOKEN`, `GITHUB_RUN_ID`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_RUNTIME_URL`) into the Execution_Container so that build scripts can interact with external services
 - Executes the script via `command=["bash", "/workspace/{script_path}"]` where `script_path` is the relative path within the repo
 - Streams stdout and stderr incrementally from the container during execution using a Log_Streaming_Thread that calls `container.logs(stream=True, follow=True)` and feeds chunks to the Output_Collector in real time, so that polling clients observe partial output while the script is still running
@@ -1313,7 +1313,7 @@ class EncryptionContext:
 
 ### Property 111: Docker Container Security Constraints
 
-*For any* Execution_Container created by the Script_Executor, the container should be configured with: a non-root user, a read-only root filesystem (except for a designated execution directory), privilege escalation disabled, memory limits enforced, CPU limits enforced, and cap_drop=ALL (no capabilities added back unless documented as required). Internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts.
+*For any* Execution_Container created by the Script_Executor, the container should be configured with: root user, a read-only root filesystem (except for a designated execution directory), privilege escalation disabled, memory limits enforced, CPU limits enforced, and cap_drop=ALL (no capabilities added back unless documented as required). Internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts.
 
 **Validates: Requirements 8.1, 8.2, 8.3, 8.5, 8.6, 8.17, 8.18**
 

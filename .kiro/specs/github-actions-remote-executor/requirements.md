@@ -314,7 +314,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 1. THE Script_Executor SHALL enforce a maximum memory limit on each Execution_Container using Docker memory constraints
 2. THE Script_Executor SHALL enforce a maximum CPU time limit on each Execution_Container using Docker CPU constraints
-3. THE Script_Executor SHALL execute scripts inside the Execution_Container with a non-root user
+3. THE Script_Executor SHALL execute scripts inside the Execution_Container as the root user
 4. THE Script_Executor SHALL create each Execution_Container with internet access enabled by default (no `network_mode` restriction), since scripts may need to download dependencies or upload artifacts
 5. THE Script_Executor SHALL create each Execution_Container with a read-only root filesystem except for a designated execution directory
 6. THE Script_Executor SHALL prevent the Execution_Container from gaining additional privileges by disabling privilege escalation
@@ -617,7 +617,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. THE GHA_Server SHALL support an optional CONTAINER_IMAGE_DIGEST configuration value containing a SHA-256 digest
 8. WHEN CONTAINER_IMAGE_DIGEST is configured, THE GHA_Server SHALL verify the pulled image matches the expected digest
 9. IF the digest does not match, THEN fail to start with a descriptive error
-10. THE GHA_Server SHALL support digest-pinned container image references (e.g., python:3.11-slim@sha256:...)
+10. THE GHA_Server SHALL support digest-pinned container image references (e.g., ubuntu:24.04@sha256:...)
 11. THE default env file and .env.example SHALL include a CONTAINER_IMAGE_DIGEST entry (empty by default) with a comment instructing operators to set a digest in production to prevent tag drift or registry compromise
 
 ### Requirement 35: Git Package Provisioning in KIWI Image
