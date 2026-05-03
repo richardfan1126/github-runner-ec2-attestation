@@ -147,8 +147,8 @@ class TestContainerCreationAndSecurity:
             call = mock_client.containers._creation_calls[0]
             assert call["nano_cpus"] == int(2.0 * 1e9)
 
-    def test_container_non_root_user(self):
-        """Container runs as non-root user 'nobody' (Req 8.3)."""
+    def test_container_root_user(self):
+        """Container runs as root user (Docker default) (Req 8.3)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_client = create_mock_docker_client()
             manager = ExecutionManager(output_retention_hours=1)
@@ -159,7 +159,9 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert call["user"] == "nobody"
+            assert "user" not in call, (
+                f"Container must run as root (no 'user' param), got user='{call.get('user')}'"
+            )
 
     def test_container_internet_access_enabled(self):
         """Container has internet access enabled (Req 8.4)."""
@@ -218,7 +220,9 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert call["user"] == "nobody"
+            assert "user" not in call, (
+                f"Container must run as root (no 'user' param), got user='{call.get('user')}'"
+            )
             assert call.get("network_mode") != "none", (
                 "Container should not have network_mode='none'; internet access must be enabled"
             )

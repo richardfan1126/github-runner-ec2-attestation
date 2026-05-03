@@ -135,8 +135,7 @@ class ScriptExecutor:
             nano_cpus = int(self._cpu_limit * 1e9)
             host_repo_path = os.path.abspath(repo_path)
 
-            # Ensure cloned files are world-readable so the container's
-            # "nobody" user can access them through the bind mount.
+            # Ensure cloned files are world-readable for defense-in-depth.
             subprocess.run(
                 ["chmod", "-R", "a+rX", host_repo_path],
                 timeout=30,
@@ -149,14 +148,13 @@ class ScriptExecutor:
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
                 read_only=True,
-                tmpfs={"/tmp": "size=64m,uid=65534,mode=1777"},
+                tmpfs={"/tmp": "size=64m,mode=1777"},
                 volumes={
                     host_repo_path: {"bind": "/workspace", "mode": "ro"},
                 },
                 working_dir="/workspace",
                 security_opt=["no-new-privileges"],
                 cap_drop=["ALL"],
-                user="nobody",
                 detach=True,
                 environment=script_env or {},
             )

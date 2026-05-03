@@ -246,9 +246,9 @@ def test_property_111_docker_container_security_constraints(params):
         assert len(creation_calls) == 1
         call = creation_calls[0]
 
-        # Req 8.3: non-root user
-        assert call.get("user") == "nobody", (
-            f"Container must run as non-root user 'nobody', got '{call.get('user')}'"
+        # Req 8.3: root user (Docker default when no user is specified)
+        assert "user" not in call, (
+            f"Container must run as root user (no 'user' param), got user='{call.get('user')}'"
         )
 
         # Req 8.4: internet access enabled (no network restriction)
