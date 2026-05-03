@@ -65,7 +65,7 @@ class ScriptExecutor:
         self._active_containers = {}
         self._container_lock = threading.Lock()
 
-    def execute_async(self, execution_id: str, repo_path: str, script_path: str) -> None:
+    def execute_async(self, execution_id: str, repo_path: str, script_path: str, script_env: "dict[str, str] | None" = None) -> None:
         """
         Execute script asynchronously inside an ephemeral Docker container.
 
@@ -84,18 +84,19 @@ class ScriptExecutor:
             execution_id: Unique execution identifier
             repo_path: Path to the cloned repository directory on the host
             script_path: Relative path to the script within the repo
+            script_env: Optional dictionary of environment variables to inject into the container
         """
         # Create a fresh context so the background thread does not inherit
         # (or pollute) the parent request's contextvars state.
         ctx = contextvars.copy_context()
         thread = threading.Thread(
             target=ctx.run,
-            args=(self._execute_in_container, execution_id, repo_path, script_path),
+            args=(self._execute_in_container, execution_id, repo_path, script_path, script_env),
             daemon=True,
         )
         thread.start()
 
-    def _execute_in_container(self, execution_id: str, repo_path: str, script_path: str) -> None:
+    def _execute_in_container(self, execution_id: str, repo_path: str, script_path: str, script_env: "dict[str, str] | None" = None) -> None:
         """
         Internal method to execute script inside a Docker container (runs in background thread).
 
@@ -106,6 +107,7 @@ class ScriptExecutor:
             execution_id: Unique execution identifier
             repo_path: Path to the cloned repository directory on the host
             script_path: Relative path to the script within the repo
+            script_env: Optional dictionary of environment variables to inject into the container
         """
         set_log_context(execution_id=execution_id)
 
@@ -156,6 +158,7 @@ class ScriptExecutor:
                 cap_drop=["ALL"],
                 user="nobody",
                 detach=True,
+                environment=script_env or {},
             )
 
             # Track the container

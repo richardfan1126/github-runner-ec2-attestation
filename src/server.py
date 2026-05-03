@@ -632,7 +632,12 @@ def add_routes(app: FastAPI) -> None:
             
             # Initiate async execution
             executor = request.app.state.script_executor
-            executor.execute_async(execution_record.execution_id, clone_result.clone_path, clone_result.script_path)
+            
+            # Extract and sanitize script_env from decrypted body
+            script_env = body.get('script_env') or {}
+            script_env = {str(k): str(v) for k, v in script_env.items() if isinstance(k, str) and isinstance(v, str)}
+            
+            executor.execute_async(execution_record.execution_id, clone_result.clone_path, clone_result.script_path, script_env=script_env)
             
             logger.info(f"Initiated async execution: {execution_record.execution_id}")
             
