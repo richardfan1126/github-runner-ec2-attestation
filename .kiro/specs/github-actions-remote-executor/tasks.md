@@ -1498,7 +1498,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add validation: `container_image` must be non-empty, `container_memory_limit` must be non-empty, `container_cpu_limit` must be > 0
     - _Requirements: 9.6, 9.7_
 
-  - [ ] 66.3 Update .env.example and KIWI env file with container config variables
+  - [x] 66.3 Update .env.example and KIWI env file with container config variables
     - Add `CONTAINER_IMAGE=ubuntu:24.04` to .env.example
     - Add `CONTAINER_MEMORY_LIMIT=512m` to .env.example
     - Add `CONTAINER_CPU_LIMIT=1.0` to .env.example

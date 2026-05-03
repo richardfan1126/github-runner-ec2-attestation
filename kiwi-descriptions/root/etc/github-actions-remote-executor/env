@@ -25,7 +25,7 @@ ALLOWED_REPOSITORIES=richardfan1126/github-runner-ec2-attestation-caller,richard
 EXPECTED_AUDIENCE=test-workflow
 
 # Container Execution Configuration
-CONTAINER_IMAGE=python:3.11-slim
+CONTAINER_IMAGE=ubuntu:24.04
 # Optional SHA-256 digest for container image verification (e.g., sha256:abc123...). When set, the server verifies the pulled image matches this digest at startup.
 CONTAINER_IMAGE_DIGEST=
 CONTAINER_MEMORY_LIMIT=512m
