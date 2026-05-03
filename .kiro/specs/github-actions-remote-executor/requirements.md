@@ -30,6 +30,63 @@ Note: By default, the KIWI image excludes SSH-related packages (openssh-server, 
 
 The build process does NOT use the Remote Executor itself (since you can't use something that doesn't exist yet during initial builds). Instead, it uses standard GitHub Actions runners to build the KIWI image, and a temporary EC2 instance to convert it to an AMI.
 
+## Requirement Index
+
+| # | Title | Category |
+|---|-------|----------|
+| 1 | HTTP Server Endpoint | Runtime |
+| 2 | Request Authentication and Validation | Runtime |
+| 3 | Repository Cloning | Runtime |
+| 4 | Attestation Document Generation and Execution Initiation | Runtime |
+| 5 | Asynchronous Script Execution in Ephemeral Docker Containers | Runtime |
+| 6 | Output Polling Endpoint | Runtime |
+| 7 | Error Handling and Logging | Runtime |
+| 8 | Security and Resource Management | Runtime |
+| 9 | Configuration Management | Runtime |
+| 10 | Health and Monitoring | Runtime |
+| 11 | Reproducible KIWI Image Build | Build |
+| 12 | Separate Python Dependency Configurations | Build |
+| 13 | Artifact Publishing with PCR Annotations | Build |
+| 14 | Build Provenance Attestation | Build |
+| 15 | AMI Build Instance Provisioning | Build |
+| 16 | SSH Connectivity Verification | Build |
+| 17 | Build Tool Installation | Build |
+| 18 | Artifact Signature Verification | Build |
+| 19 | Artifact Download and Validation | Build |
+| 20 | Snapshot Upload and AMI Registration | Build |
+| 21 | Build Result Output and Infrastructure Cleanup | Build |
+| 22 | Deployment Network Infrastructure | Deployment |
+| 23 | Deployment Security Group Configuration | Deployment |
+| 24 | Target EC2 Instance Provisioning | Deployment |
+| 25 | Deployment Outputs | Deployment |
+| 26 | Deployment Script AMI Loading | Deployment |
+| 27 | Deployment Script Terraform Orchestration and State Persistence | Deployment |
+| 28 | Cleanup Script Configuration and Input Loading | Cleanup |
+| 29 | Terraform Infrastructure Destruction | Cleanup |
+| 30 | AMI Deregistration and Snapshot Deletion | Cleanup |
+| 31 | Cleanup Verification and Reporting | Cleanup |
+| 32 | Debug SSH Access for KIWI Image Build | Debug |
+| 33 | Docker Daemon Provisioning in KIWI Image | Image Provisioning |
+| 34 | Pull Container Image at Server Startup | Image Provisioning |
+| 35 | Git Package Provisioning in KIWI Image | Image Provisioning |
+| 36 | Server Keypair Generation and Lifecycle | Encryption |
+| 37 | Attestation Endpoint | Encryption |
+| 38 | Nonce Support in Attestation Responses | Encryption |
+| 39 | Server Public Key in Attestation Documents | Encryption |
+| 40 | Post-Quantum Hybrid Encrypted Execute Requests | Encryption |
+| 41 | Execution-Bound Shared Key Storage | Encryption |
+| 42 | Encrypted Request and Response Payloads | Encryption |
+| 43 | Attestation Document Encryption Exemption | Encryption |
+| 44 | Streaming Output Capture During Container Execution | Streaming Output |
+| 45 | Encrypted Request Anti-Replay Protection | Security Hardening |
+| 46 | Debug Image Annotation and Production Gate | Security Hardening |
+| 47 | Artifact Provenance Workflow Verification | Security Hardening |
+| 48 | Docker Daemon Security Configuration | Security Hardening |
+| 49 | Systemd Service Hardening | Security Hardening |
+| 50 | AMI Build IAM Permission Scoping | Security Hardening |
+| 51 | Host Login Access Hardening | Security Hardening |
+| 52 | Script Environment Variable Forwarding | Runtime |
+
 ## Glossary
 
 ### Runtime Components
@@ -205,7 +262,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. THE Script_Executor SHALL execute multiple scripts concurrently in separate Execution_Containers without interference
 12. THE Output_Collector SHALL store Script_Output associated with the Execution_ID
 13. THE Script_Executor SHALL assign a unique container name derived from the Execution_ID to each Execution_Container
-14. THE Script_Executor SHALL stream output from the Execution_Container incrementally during execution rather than capturing output only after the container exits, so that clients polling the output endpoint can observe partial output while the script is still running
+14. See Requirement 44 for streaming output capture details during container execution
 15. THE Output_Collector SHALL enforce a maximum output buffer size configurable via MAX_OUTPUT_SIZE_BYTES
 16. WHEN the combined stdout and stderr output exceeds MAX_OUTPUT_SIZE_BYTES, THE Output_Collector SHALL truncate the output and mark the output record as truncated
 
@@ -215,7 +272,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 #### Acceptance Criteria
 
-1. THE GHA_Server SHALL provide an HTTP GET endpoint for retrieving execution results
+1. THE GHA_Server SHALL provide an HTTP POST endpoint for retrieving execution results (POST is required because the request body contains an encrypted payload with the OIDC token)
 2. THE GHA_Server SHALL accept the Execution_ID as a URL parameter
 3. THE GHA_Server SHALL require a valid oidc_token in the decrypted request body before returning execution results
 4. WHEN the output endpoint is polled, THE GHA_Server SHALL return HTTP 200 OK with the current execution status, Script_Output, Attestation_Document, and Output_Attestation_Document regardless of whether execution is running, completed, failed, or timed_out
@@ -825,7 +882,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 2. IF the terraform-dir directory does not exist, THEN THE Cleanup_Script SHALL log a warning and skip Terraform destruction
 3. IF no terraform.tfstate file exists in the terraform-dir, THEN THE Cleanup_Script SHALL log a warning and skip Terraform destruction
 4. IF terraform init fails with a non-zero exit code, THEN THE Cleanup_Script SHALL raise a RuntimeError
-5. THE Cleanup_Script SHALL run terraform destroy -auto-approve with dummy variable values for attestable_ami_id and allowed_http_cidr
+5. THE Cleanup_Script SHALL run terraform destroy -auto-approve with a dummy variable value for attestable_ami_id
 6. IF terraform destroy fails with a non-zero exit code, THEN THE Cleanup_Script SHALL raise a RuntimeError
 7. WHEN terraform destroy succeeds, THE Cleanup_Script SHALL verify the Terraform state file shows no remaining resources
 8. IF the Terraform state still contains resources after destroy, THEN THE Cleanup_Script SHALL log a warning indicating resources may not have been destroyed properly

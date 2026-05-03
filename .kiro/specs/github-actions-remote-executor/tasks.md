@@ -208,7 +208,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Handle all error cases with appropriate HTTP status codes
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 4.8, 4.9, 8.2, 8.3_
 
-  - [x] 11.3 Implement GET /execution/{execution_id}/output endpoint
+  - [x] 11.3 ~~Implement GET /execution/{execution_id}/output endpoint~~ (OBSOLETE — described GET endpoint; changed to POST by task 98)
     - Parse execution_id from URL path
     - Parse optional offset query parameter
     - Retrieve execution record using ExecutionManager
@@ -244,7 +244,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Include active executions count
     - _Requirements: 10.1, 10.2, 10.3, 10.4_
 
-  - [x] 12.2 Create GET /metrics endpoint
+  - [x] 12.2 ~~Create GET /metrics endpoint~~ (OBSOLETE — /metrics endpoint removed by task 143)
     - Track total executions count
     - Track successful executions count
     - Track failed executions count
@@ -252,13 +252,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Include active executions count
     - _Requirements: 10.5, 10.6_
 
-  - [x] 12.3 Write property tests for health and metrics
+  - [x] 12.3 ~~Write property tests for health and metrics~~ (OBSOLETE — Properties 59, 60 removed when /metrics was removed by task 143)
     - **Property 58: Health Check Attestation Status**
     - **Property 59: Health Check Disk Space**
     - **Property 60: Execution Metrics Tracking**
     - **Validates: Requirements 10.3, 10.4, 10.6**
 
-  - [x] 12.4 Write unit tests for health and metrics
+  - [x] 12.4 ~~Write unit tests for health and metrics~~ (OBSOLETE — /metrics tests removed by task 143; health tests rewritten)
     - Test health endpoint response structure
     - Test metrics accuracy
     - Test metrics under concurrent executions
@@ -1020,7 +1020,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [x] 46. Write property and unit tests for debug SSH feature
   - [x] 46.1 Write property test for build flag propagation
-    - **Property 95: Build Flag Propagation**
+    - **Property 170: Build Flag Propagation**
     - Test that --enable-ssh is passed to build script if and only if event is workflow_dispatch with enable_ssh=true; never passed for push, pull_request, or schedule triggers
     - **Validates: Requirements 32.1, 32.3, 32.4**
 
@@ -1076,7 +1076,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 47. Final checkpoint - Ensure all debug SSH tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [x] 48. Rename NSM references to NitroTPM in source code (src/)
+- [x] 48. ~~Rename NSM references to NitroTPM in source code (src/)~~ (OBSOLETE — NSM→tpm_device_path rename; superseded by task 53 (tpm_attest_path))
   - [x] 48.1 Update src/attestation.py
     - Change module docstring from "AWS Nitro attestation document generation" to "NitroTPM attestation document generation"
     - Change class docstring from "Generates attestation documents using AWS Nitro Security Module" to "Generates attestation documents using NitroTPM on the Attestable EC2 instance"
@@ -1113,7 +1113,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change `verify_nsm_available()` calls to `verify_tpm_available()`
     - _Requirements: 10.3_
 
-- [x] 49. Update configuration and environment files
+- [x] 49. ~~Update configuration and environment files~~ (OBSOLETE — TPM_DEVICE_PATH env vars; superseded by task 53 (TPM_ATTEST_PATH))
   - [x] 49.1 Update .env.example
     - Change comment "# AWS Nitro Configuration" to "# NitroTPM Configuration"
     - Change `NSM_DEVICE_PATH=/dev/nsm` to `TPM_DEVICE_PATH=/dev/nsm`
@@ -1124,7 +1124,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Change `NSM_DEVICE_PATH=/dev/nsm` to `TPM_DEVICE_PATH=/dev/nsm`
     - _Requirements: 9.1_
 
-- [x] 50. Update tests to match renamed APIs
+- [x] 50. ~~Update tests to match renamed APIs~~ (OBSOLETE — tests for intermediate tpm_device_path naming; superseded by task 54)
   - [x] 50.1 Update tests/test_attestation.py
     - Change fixture docstring "mocked NSM device path" to "mocked NitroTPM device path"
     - Change `nsm_device_path=` to `tpm_device_path=` in all AttestationGenerator constructor calls
@@ -1262,7 +1262,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Return the attestation document bytes on success, or `None` plus an error message on failure
     - _Requirements: 6.7, 6.9_
 
-  - [x] 56.2 Update GET /execution/{id}/output endpoint to include Output_Attestation_Document
+  - [x] 56.2 ~~Update GET /execution/{id}/output endpoint to include Output_Attestation_Document~~ (OBSOLETE — described GET endpoint; changed to POST by task 98)
     - In `get_execution_output` in `src/server.py`, when `output_data.complete` is `True`:
       1. Concatenate stdout, stderr, and exit_code into a canonical Script_Output string
       2. Call `attestation_generator.generate_output_attestation(script_output)`
@@ -1359,7 +1359,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14_
 
 - [x] 60. Add OIDC authentication middleware to protected endpoints
-  - [x] 60.1 Add OIDC authentication to POST /execute endpoint
+  - [x] 60.1 ~~Add OIDC authentication to POST /execute endpoint~~ (OBSOLETE — Authorization header approach; superseded by task 97 (OIDC from encrypted body))
     - Extract Authorization header from request
     - Call `request_validator.validate_oidc_token(authorization_header)` before processing the request body
     - If validation fails with 401, return HTTP 401 with error message
@@ -1367,7 +1367,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Log OIDC validation result (success/failure, repository claim) excluding the token itself
     - _Requirements: 2.1, 2.3, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14_
 
-  - [x] 60.2 Add OIDC authentication to GET /execution/{id}/output endpoint
+  - [x] 60.2 ~~Add OIDC authentication to GET /execution/{id}/output endpoint~~ (OBSOLETE — GET with Authorization header; superseded by tasks 97-98 (POST with encrypted body))
     - Extract Authorization header from request
     - Call `request_validator.validate_oidc_token(authorization_header)` before retrieving output
     - If validation fails with 401, return HTTP 401 with error message
@@ -1672,7 +1672,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 75. Checkpoint - Ensure Docker daemon provisioning tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [x] 76. Pre-pull Container Image in build-kiwi-image.sh
+- [x] 76. ~~Pre-pull Container Image in build-kiwi-image.sh~~ (OBSOLETE — removed by task 80; container image is now pulled at server startup per task 81)
   - [x] 76.1 Read CONTAINER_IMAGE from env file in build-kiwi-image.sh
     - Extract the `CONTAINER_IMAGE` variable from `kiwi-descriptions/root/etc/github-actions-remote-executor/env` (currently `python:3.11-slim`)
     - Use grep/sed to parse the value from the env file
@@ -1689,7 +1689,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Include descriptive echo statements for build audit trail
     - _Requirements: 34.1, 34.2, 34.3, 34.6_
 
-- [x] 77. Load Container Image in config.sh
+- [x] 77. ~~Load Container Image in config.sh~~ (OBSOLETE — removed by task 80; container image is now pulled at server startup per task 81)
   - [x] 77.1 Add container image load block to config.sh
     - Add a new section to `kiwi-descriptions/config.sh` after the Docker service enablement block and before the Python dependency installation section
     - Verify the container image tar exists at `/tmp/kiwi-build/container-image.tar`
@@ -1699,7 +1699,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Include descriptive echo statements for build audit trail
     - _Requirements: 34.4, 34.5, 34.7_
 
-- [x] 78. Write property tests for Container Image pre-pull
+- [x] 78. ~~Write property tests for Container Image pre-pull~~ (OBSOLETE — removed by task 80; property tests rewritten in task 82 for server-startup pull)
   - [x] 78.1 Write property test for Container Image Pre-Pull Round-Trip
     - **Property 118: Container Image Pre-Pull Round-Trip**
     - Verify that for any configured Container_Image name, the build process pulls the image, exports it as a tar, copies it into the KIWI build context, and loads it in config.sh — resulting in the image being available in the local Docker store
@@ -1887,7 +1887,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Parse `kiwi-descriptions/appliance.kiwi` XML and verify the `git` package is listed in the `<packages type="image">` section
     - **Validates: Requirements 35.1**
 
-- [x] 91. Implement EncryptionManager class
+- [x] 91. ~~Implement EncryptionManager class~~ (OBSOLETE — HPKE-based EncryptionManager; rewritten to PQ_Hybrid_KEM by task 114)
   - [x] 91.1 Create src/encryption.py with EncryptionManager class
     - Generate Server_Keypair (X25519) at initialization using the `cryptography` library; hold in memory only, never persist to disk
     - Implement `server_public_key` property returning serialized Server_Public_Key bytes
