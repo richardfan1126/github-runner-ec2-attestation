@@ -776,3 +776,73 @@ def test_property_28_cleanup_preserves_output(params):
         output_data = collector.get_output(execution_id)
         assert test_output in output_data.stdout, \
             "Output data should be preserved after cleanup"
+
+
+# Property 152: Capability Drop and Add-Back
+# Feature: github-actions-remote-executor, Property 152: Capability Drop and Add-Back
+EXPECTED_CAP_ADD = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
+
+
+@given(
+    params=execution_params()
+)
+@settings(max_examples=10, deadline=5000)
+def test_property_152_capability_drop_and_add_back(params):
+    """
+    Property 152: For any Execution_Container created by the Script_Executor,
+    the container should have cap_drop set to ALL and cap_add set to exactly
+    [CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID,
+    CAP_NET_BIND_SERVICE, CAP_KILL]. No capabilities beyond this set should be added.
+
+    **Validates: Requirements 8.17, 8.18, 8.19**
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=docker_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir
+        )
+
+        record = manager.create_execution(**params)
+        execution_id = record.execution_id
+
+        script_content = "echo 'test'\n"
+        script_path = create_test_script(temp_dir, script_content)
+
+        executor.execute_async(execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+
+        # Wait for execution to complete
+        max_wait = 3
+        start_time = time.time()
+        while time.time() - start_time < max_wait:
+            rec = manager.get_execution(execution_id)
+            if rec and rec.status in [
+                ExecutionStatus.COMPLETED,
+                ExecutionStatus.FAILED,
+                ExecutionStatus.TIMED_OUT
+            ]:
+                break
+            time.sleep(0.1)
+
+        # Inspect container creation calls
+        creation_calls = docker_client.containers._creation_calls
+        assert len(creation_calls) >= 1, "At least one container should have been created"
+
+        for call_record in creation_calls:
+            # Verify cap_drop=ALL
+            assert call_record.get("cap_drop") == ["ALL"], \
+                f"cap_drop should be ['ALL'], got {call_record.get('cap_drop')}"
+
+            # Verify cap_add contains exactly the 7 documented capabilities
+            actual_cap_add = call_record.get("cap_add")
+            assert actual_cap_add is not None, "cap_add should be present"
+            assert sorted(actual_cap_add) == sorted(EXPECTED_CAP_ADD), \
+                f"cap_add should be {EXPECTED_CAP_ADD}, got {actual_cap_add}"
+
+            # Verify no extra capabilities beyond the documented set
+            assert len(actual_cap_add) == len(EXPECTED_CAP_ADD), \
+                f"cap_add should have exactly {len(EXPECTED_CAP_ADD)} capabilities, got {len(actual_cap_add)}"

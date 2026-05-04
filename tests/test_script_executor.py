@@ -845,3 +845,106 @@ def test_status_transitions():
         # Final status should be COMPLETED
         final_record = manager.get_execution(record.execution_id)
         assert final_record.status == ExecutionStatus.COMPLETED
+
+
+def test_container_created_with_cap_drop_all():
+    """Test that container is created with cap_drop=["ALL"]"""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=docker_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir
+        )
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="a" * 40,
+            script_path="test.sh",
+            timeout_seconds=5
+        )
+
+        script_content = "echo 'test'\n"
+        script_path = create_test_script(temp_dir, script_content)
+
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        creation_calls = docker_client.containers._creation_calls
+        assert len(creation_calls) >= 1
+        assert creation_calls[0].get("cap_drop") == ["ALL"]
+
+
+def test_container_created_with_cap_add_build_capabilities():
+    """Test that cap_add contains exactly the 7 documented capabilities"""
+    expected_cap_add = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=docker_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir
+        )
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="b" * 40,
+            script_path="test.sh",
+            timeout_seconds=5
+        )
+
+        script_content = "echo 'test'\n"
+        script_path = create_test_script(temp_dir, script_content)
+
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        creation_calls = docker_client.containers._creation_calls
+        assert len(creation_calls) >= 1
+        actual_cap_add = creation_calls[0].get("cap_add")
+        assert actual_cap_add is not None, "cap_add should be present in container creation"
+        assert actual_cap_add == expected_cap_add
+
+
+def test_container_no_additional_capabilities():
+    """Test that no additional capabilities are present in cap_add"""
+    expected_cap_add = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=docker_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir
+        )
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="c" * 40,
+            script_path="test.sh",
+            timeout_seconds=5
+        )
+
+        script_content = "echo 'test'\n"
+        script_path = create_test_script(temp_dir, script_content)
+
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        creation_calls = docker_client.containers._creation_calls
+        assert len(creation_calls) >= 1
+        actual_cap_add = set(creation_calls[0].get("cap_add", []))
+        assert actual_cap_add == expected_cap_add, \
+            f"cap_add should contain exactly {expected_cap_add}, got {actual_cap_add}"
+        assert len(creation_calls[0].get("cap_add", [])) == 7, \
+            f"cap_add should have exactly 7 capabilities, got {len(creation_calls[0].get('cap_add', []))}"

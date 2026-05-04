@@ -153,6 +153,7 @@ class ScriptExecutor:
                 working_dir="/workspace",
                 security_opt=["no-new-privileges"],
                 cap_drop=["ALL"],
+                cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"],
                 detach=True,
                 environment=script_env or {},
             )

@@ -2647,19 +2647,19 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that expired records trigger remove_output and remove_encryption_context
     - _Requirements: 8.15, 8.16_
 
-- [ ] 141. Update capability policy for execution containers
-  - [ ] 141.1 Add cap_add for build-script capabilities to container creation in src/script_executor.py
+- [x] 141. Update capability policy for execution containers
+  - [x] 141.1 Add cap_add for build-script capabilities to container creation in src/script_executor.py
     - Keep `cap_drop=["ALL"]` in the Docker container creation call
     - Add `cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]` to the Docker container creation call
     - _Requirements: 8.17, 8.18, 8.19_
 
-  - [ ] 141.2 Update property test for Capability Drop and Add-Back
+  - [x] 141.2 Update property test for Capability Drop and Add-Back
     - **Property 152: Capability Drop and Add-Back**
     - Verify cap_drop=ALL and cap_add contains exactly the 7 documented capabilities
     - Verify no capabilities beyond the documented set are added
     - **Validates: Requirements 8.17, 8.18, 8.19**
 
-  - [ ] 141.3 Update unit tests for capability drop and add-back
+  - [x] 141.3 Update unit tests for capability drop and add-back
     - Test that container is created with cap_drop=["ALL"]
     - Test that cap_add contains exactly ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
     - Test that no additional capabilities are present in cap_add
