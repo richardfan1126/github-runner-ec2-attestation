@@ -698,7 +698,7 @@ class TestCapabilityDropping:
             assert call["cap_drop"] == ["ALL"]
 
     def test_no_cap_add_present(self):
-        """Container does not add back any capabilities (Req 8.18)."""
+        """Container adds back exactly the 7 build-script capabilities (Req 8.18)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_client = create_mock_docker_client()
             manager = ExecutionManager(output_retention_hours=1)
@@ -709,6 +709,7 @@ class TestCapabilityDropping:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert "cap_add" not in call, (
-                f"Container must not have cap_add, but found cap_add={call.get('cap_add')!r}"
+            expected_cap_add = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
+            assert call.get("cap_add") == expected_cap_add, (
+                f"Container must have cap_add={expected_cap_add!r}, got cap_add={call.get('cap_add')!r}"
             )

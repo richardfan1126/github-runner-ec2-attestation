@@ -3149,7 +3149,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 172. Checkpoint - Ensure all script_env forwarding tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 173. Checkpoint - Ensure capability drop-and-add-back tests pass
+- [x] 173. Checkpoint - Ensure capability drop-and-add-back tests pass
   - Run the full test suite after task 141 changes to verify cap_add does not break existing tests
   - Ensure all tests pass, ask the user if questions arise.
 

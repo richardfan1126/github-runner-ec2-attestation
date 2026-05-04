@@ -286,9 +286,10 @@ def test_property_111_docker_container_security_constraints(params):
             f"Container must have cap_drop=['ALL'], got {call.get('cap_drop')!r}"
         )
 
-        # Req 8.18: no capabilities added back
-        assert "cap_add" not in call or call["cap_add"] is None or call["cap_add"] == [], (
-            f"Container must not add back any capabilities, got cap_add={call.get('cap_add')!r}"
+        # Req 8.18: cap_add contains exactly the 7 build-script capabilities
+        expected_cap_add = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
+        assert call.get("cap_add") == expected_cap_add, (
+            f"Container must have cap_add={expected_cap_add!r}, got cap_add={call.get('cap_add')!r}"
         )
 
 
@@ -530,7 +531,8 @@ def test_property_152_capability_dropping(params):
             f"Container must have cap_drop=['ALL'], got {call.get('cap_drop')!r}"
         )
 
-        # Req 8.18: no capabilities added back
-        assert "cap_add" not in call or call["cap_add"] is None or call["cap_add"] == [], (
-            f"Container must not add back any capabilities, got cap_add={call.get('cap_add')!r}"
+        # Req 8.18: cap_add contains exactly the 7 build-script capabilities
+        expected_cap_add = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
+        assert call.get("cap_add") == expected_cap_add, (
+            f"Container must have cap_add={expected_cap_add!r}, got cap_add={call.get('cap_add')!r}"
         )
