@@ -2647,20 +2647,23 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that expired records trigger remove_output and remove_encryption_context
     - _Requirements: 8.15, 8.16_
 
-- [x] 141. Implement capability dropping for execution containers
-  - [x] 141.1 Add cap_drop=["ALL"] to container creation in src/script_executor.py
-    - Add `cap_drop=["ALL"]` to the Docker container creation call
-    - Do not add back any capabilities
-    - _Requirements: 8.17, 8.18_
+- [ ] 141. Update capability policy for execution containers
+  - [ ] 141.1 Add cap_add for build-script capabilities to container creation in src/script_executor.py
+    - Keep `cap_drop=["ALL"]` in the Docker container creation call
+    - Add `cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]` to the Docker container creation call
+    - _Requirements: 8.17, 8.18, 8.19_
 
-  - [x] 141.2 Write property test for Capability Dropping
-    - **Property 152: Capability Dropping**
-    - **Validates: Requirements 8.17, 8.18**
+  - [ ] 141.2 Update property test for Capability Drop and Add-Back
+    - **Property 152: Capability Drop and Add-Back**
+    - Verify cap_drop=ALL and cap_add contains exactly the 7 documented capabilities
+    - Verify no capabilities beyond the documented set are added
+    - **Validates: Requirements 8.17, 8.18, 8.19**
 
-  - [x] 141.3 Write unit tests for capability dropping
+  - [ ] 141.3 Update unit tests for capability drop and add-back
     - Test that container is created with cap_drop=["ALL"]
-    - Test that no cap_add is present
-    - _Requirements: 8.17, 8.18_
+    - Test that cap_add contains exactly ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
+    - Test that no additional capabilities are present in cap_add
+    - _Requirements: 8.17, 8.18, 8.19_
 
 - [x] 142. Checkpoint - Ensure runtime security hardening tests pass
   - Ensure all tests pass, ask the user if questions arise.
@@ -3098,13 +3101,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - [x] 169.1 Remove network_mode="none" from container creation in src/script_executor.py
     - In `_execute_in_container`, remove the `network_mode="none"` parameter from the `self._docker_client.containers.create()` call
     - This allows containers to use the default Docker bridge network, giving scripts internet access to download dependencies or upload artifacts
-    - All other security constraints remain unchanged: mem_limit, nano_cpus, cap_drop=["ALL"], security_opt=["no-new-privileges"], user="nobody"
+    - All other security constraints remain unchanged: mem_limit, nano_cpus, cap_drop=["ALL"] with cap_add for build-script capabilities, security_opt=["no-new-privileges"], user="nobody"
     - _Requirements: 8.4_
 
   - [x] 169.2 Update Property 111 test for internet access enabled
     - Update the property test for Docker Container Security Constraints (Property 111) to verify that `network_mode="none"` is NOT set on created containers
-    - Verify all other security constraints are still enforced: root user, writable root filesystem, privilege escalation disabled, memory limits, CPU limits, cap_drop=ALL
-    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18_
+    - Verify all other security constraints are still enforced: root user, writable root filesystem, privilege escalation disabled, memory limits, CPU limits, cap_drop=ALL with cap_add for build-script capabilities
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18, 8.19_
 
   - [x] 169.3 Update unit tests for container creation without network restriction
     - Update tests in tests/test_script_executor.py and tests/test_docker_executor_unit.py that assert `network_mode="none"` in the container creation call
@@ -3146,6 +3149,10 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 172. Checkpoint - Ensure all script_env forwarding tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 173. Checkpoint - Ensure capability drop-and-add-back tests pass
+  - Run the full test suite after task 141 changes to verify cap_add does not break existing tests
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -3171,7 +3178,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - SSH key provisioning uses cloud-init and ec2-instance-connect (no baked-in keys)
 - NitroTPM attestation requires running on an Attestable EC2 instance with NitroTPM
 - Docker container execution replaces direct subprocess execution: each script runs in an ephemeral container with memory limits, CPU limits, writable root filesystem, no privilege escalation, root user, and internet access enabled by default (no network_mode restriction) since scripts may need to download dependencies or upload artifacts
-- Internet access change (task 169): Removes `network_mode="none"` from container creation so scripts can download dependencies or upload artifacts to artifact stores; all other security constraints (cap_drop=ALL, writable root filesystem, no-new-privileges, root user, memory/CPU limits) remain unchanged
+- Internet access change (task 169): Removes `network_mode="none"` from container creation so scripts can download dependencies or upload artifacts to artifact stores; all other security constraints (cap_drop=ALL with cap_add for build-script capabilities, writable root filesystem, no-new-privileges, root user, memory/CPU limits) remain unchanged
 - Docker SDK (`docker` Python package) manages container lifecycle: create, run, capture output, remove, and verify removal
 - Container naming convention uses `gare-exec-{execution_id}` prefix for identification and dangling cleanup
 - OIDC authentication (tasks 58-65) adds GitHub Actions OIDC JWT validation for request authentication
@@ -3208,7 +3215,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Cleanup verification checks for EC2 instances, AMIs, and EBS snapshots using project-specific tags and resource IDs
 - HPKE encrypted communication (tasks 91-104) adds end-to-end encryption for /execute and /execution/{id}/output using Hybrid Public Key Encryption (RFC 9180)
 - PQ Hybrid KEM migration (tasks 113-124) replaces HPKE with PQ_Hybrid_KEM (X25519 + ML-KEM-768) for post-quantum resistance; the `wolfcrypt-py` package (via `wolfcrypt.ciphers` module: `MlKemType`, `MlKemPrivate`, `MlKemPublic`) provides FIPS 203 ML-KEM-768 key generation, encapsulation, and decapsulation
-- Security hardening (tasks 125-154) implements fixes from the security review: OIDC repository claim binding, extended OIDC claim restrictions, token stripping/.git removal, output buffer limits, execution output repository binding, contextvars logging, concurrency enforcement, script size enforcement, periodic cleanup, capability dropping, health endpoint hardening, /metrics removal, anti-replay nonce cache, /attest rate limiting, container image digest pinning, artifact ref validation, ORAS checksum verification, coldsnap pinning, secure SSH key deletion, debug image annotation, artifact provenance workflow verification, Docker daemon security configuration, systemd service hardening, AMI build IAM permission scoping, and build environment pinning
+- Security hardening (tasks 125-154) implements fixes from the security review: OIDC repository claim binding, extended OIDC claim restrictions, token stripping/.git removal, output buffer limits, execution output repository binding, contextvars logging, concurrency enforcement, script size enforcement, periodic cleanup, capability drop-and-add-back (cap_drop=ALL then cap_add for 7 build-script capabilities: CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, NET_BIND_SERVICE, KILL), health endpoint hardening, /metrics removal, anti-replay nonce cache, /attest rate limiting, container image digest pinning, artifact ref validation, ORAS checksum verification, coldsnap pinning, secure SSH key deletion, debug image annotation, artifact provenance workflow verification, Docker daemon security configuration, systemd service hardening, AMI build IAM permission scoping, and build environment pinning
 - The `cryptography` library (already included via PyJWT[crypto]) provides X25519 key generation support; `wolfcrypt-py` provides ML-KEM-768 support
 - Server_Keypair is a composite key (X25519 + ML-KEM-768) generated once at startup and held in memory; never persisted to disk
 - Server_Public_Key is serialized as length-prefixed concatenation (4-byte big-endian length + component bytes) of X25519 public key (32 bytes) + ML-KEM-768 encapsulation key (1184 bytes)

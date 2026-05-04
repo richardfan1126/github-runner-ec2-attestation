@@ -217,7 +217,7 @@ The system consists of the following major components:
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
 - Assigns a unique container name derived from the Execution_ID to each container
 - Configures containers with security constraints: memory limits, CPU limits, writable root filesystem, no privilege escalation, running as root user; internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts
-- Creates each container with cap_drop=ALL to remove all Linux capabilities; no capabilities added back unless documented as required with justification
+- Creates each container with cap_drop=ALL to remove all Linux capabilities, then adds back a minimal set required for build scripts: CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID, CAP_NET_BIND_SERVICE, CAP_KILL (see Requirement 8.18 for per-capability justification)
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
 - Ensures the cloned repository directory is readable before mounting into the container
@@ -278,7 +278,7 @@ The system consists of the following major components:
 17. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
 18. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
 19. Request Handler extracts optional `script_env` dictionary from the decrypted body, sanitizes it (string keys and values only), and passes it to the Script Executor
-20. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL), injects `script_env` as container environment variables, and begins asynchronous execution inside it
+20. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL and cap_add for the minimal build-script capability set), injects `script_env` as container environment variables, and begins asynchronous execution inside it
 21. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
 22. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
 
@@ -1313,9 +1313,9 @@ class EncryptionContext:
 
 ### Property 111: Docker Container Security Constraints
 
-*For any* Execution_Container created by the Script_Executor, the container should be configured with: root user, a writable root filesystem, privilege escalation disabled, memory limits enforced, CPU limits enforced, and cap_drop=ALL (no capabilities added back unless documented as required). Internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts.
+*For any* Execution_Container created by the Script_Executor, the container should be configured with: root user, a writable root filesystem, privilege escalation disabled, memory limits enforced, CPU limits enforced, cap_drop=ALL with cap_add for the minimal build-script capability set (CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID, CAP_NET_BIND_SERVICE, CAP_KILL). Internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts.
 
-**Validates: Requirements 8.1, 8.2, 8.3, 8.5, 8.6, 8.17, 8.18**
+**Validates: Requirements 8.1, 8.2, 8.3, 8.5, 8.6, 8.17, 8.18, 8.19**
 
 ### Property 112: Container Removal Verification
 
@@ -1521,11 +1521,11 @@ class EncryptionContext:
 
 **Validates: Requirements 8.15, 8.16**
 
-### Property 152: Capability Dropping
+### Property 152: Capability Drop and Add-Back
 
-*For any* Execution_Container created by the Script_Executor, the container should have cap_drop set to ALL with no capabilities added back unless documented as required.
+*For any* Execution_Container created by the Script_Executor, the container should have cap_drop set to ALL and cap_add set to exactly [CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID, CAP_NET_BIND_SERVICE, CAP_KILL]. No capabilities beyond this set should be added.
 
-**Validates: Requirements 8.17, 8.18**
+**Validates: Requirements 8.17, 8.18, 8.19**
 
 ### Property 153: Health Endpoint Rate Limiting
 
@@ -1789,7 +1789,7 @@ The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/d
 **Design Rationale:**
 - `no-new-privileges`: Prevents privilege escalation via setuid/setgid binaries inside containers
 - `live-restore: false`: Ensures containers stop when the daemon restarts, preventing orphaned containers from persisting across daemon restarts
-- `userns-remap` and `seccomp-profile` were removed because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) that is not present in the KIWI image; the per-container security constraints (cap_drop=ALL, no-new-privileges, writable root filesystem with ephemeral containers) provide the primary isolation layer
+- `userns-remap` and `seccomp-profile` were removed because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) that is not present in the KIWI image; the per-container security constraints (cap_drop=ALL with a minimal cap_add set, no-new-privileges, writable root filesystem with ephemeral containers) provide the primary isolation layer
 - The configuration is baked into the KIWI image at `/etc/docker/daemon.json` so it cannot be modified at runtime (read-only root filesystem)
 - The expected Docker daemon security configuration is documented in code comments
 

@@ -329,8 +329,16 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 15. THE GHA_Server SHALL schedule periodic invocation of cleanup_expired on the Execution_Manager
 16. WHEN cleanup_expired executes, THE Execution_Manager SHALL call remove_output on the Output_Collector and remove_encryption_context on the Encryption_Manager for each expired execution record
 17. THE Script_Executor SHALL create each Execution_Container with cap_drop set to ALL to remove all Linux capabilities
-18. THE Script_Executor SHALL NOT add back any capabilities unless documented as required with justification
-19. THE GHA_Server rate limiter SHALL periodically evict source IP entries whose most recent request timestamp is outside the current rate-limit window, so that the per-IP tracking dictionary does not grow without bound under distributed or spoofed-source traffic
+18. THE Script_Executor SHALL add back the following capabilities, which are required for typical build and deploy scripts (e.g., installing packages via apt-get/dnf/pip, changing file ownership, managing users) to function inside the container:
+    - `CAP_CHOWN`: Required for package managers to set file ownership during installation (e.g., `apt-get install`, `pip install`)
+    - `CAP_DAC_OVERRIDE`: Required for package managers and build tools to read/write files regardless of permission bits during installation and configuration
+    - `CAP_FOWNER`: Required for package managers to perform operations on files they don't own (e.g., setting permissions on installed files)
+    - `CAP_SETUID`: Required for package managers that use helper processes running as different users (e.g., `_apt` user in Debian-based images)
+    - `CAP_SETGID`: Required for package managers that switch group identity during installation
+    - `CAP_NET_BIND_SERVICE`: Required for scripts that need to bind to privileged ports (below 1024) during build or test phases
+    - `CAP_KILL`: Required for scripts that manage child processes and need to send signals (e.g., stopping background services during tests)
+19. THE Script_Executor SHALL NOT add back any capabilities beyond those listed in 8.18; any future additions require documented justification and a spec update
+20. THE GHA_Server rate limiter SHALL periodically evict source IP entries whose most recent request timestamp is outside the current rate-limit window, so that the per-IP tracking dictionary does not grow without bound under distributed or spoofed-source traffic
 
 ### Requirement 9: Configuration Management
 
