@@ -217,9 +217,9 @@ def test_property_110_container_unique_naming(params):
 def test_property_111_docker_container_security_constraints(params):
     """
     Property 111: For any Execution_Container, verify it is configured with:
-    root user, read-only root filesystem (except execution directory via tmpfs),
-    privilege escalation disabled (no-new-privileges), memory limits, CPU limits,
-    internet access enabled (no network_mode restriction), and cap_drop=ALL.
+    root user, writable root filesystem, privilege escalation disabled
+    (no-new-privileges), memory limits, CPU limits, internet access enabled
+    (no network_mode restriction), and cap_drop=ALL.
 
     **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18**
     """
@@ -251,9 +251,13 @@ def test_property_111_docker_container_security_constraints(params):
             f"Container must run as root user (no 'user' param), got user='{call.get('user')}'"
         )
 
-        # Req 8.5: read-only root filesystem with writable execution dir via tmpfs
-        assert call.get("read_only") is True, "Container root filesystem must be read-only"
-        assert "tmpfs" in call, "Container must have a tmpfs for the writable execution directory"
+        # Req 8.5: writable root filesystem
+        assert call.get("read_only") is not True, (
+            "Container root filesystem must be writable (read_only should not be True)"
+        )
+        assert "tmpfs" not in call, (
+            "Container should not have tmpfs when root filesystem is writable"
+        )
 
         # Req 8.6: privilege escalation disabled (no-new-privileges)
         security_opt = call.get("security_opt", [])

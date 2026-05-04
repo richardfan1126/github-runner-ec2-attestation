@@ -179,8 +179,8 @@ class TestContainerCreationAndSecurity:
                 "Container should not have network_mode='none'; internet access must be enabled"
             )
 
-    def test_container_read_only_root_fs(self):
-        """Container has read-only root filesystem with writable tmpfs (Req 8.5)."""
+    def test_container_writable_root_fs(self):
+        """Container has writable root filesystem (Req 8.5)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_client = create_mock_docker_client()
             manager = ExecutionManager(output_retention_hours=1)
@@ -191,8 +191,12 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert call["read_only"] is True
-            assert "/tmp" in call["tmpfs"]
+            assert call.get("read_only") is not True, (
+                "Container root filesystem must be writable (read_only should not be True)"
+            )
+            assert "tmpfs" not in call, (
+                "Container should not have tmpfs when root filesystem is writable"
+            )
 
     def test_container_no_privilege_escalation(self):
         """Container disables privilege escalation (Req 8.6)."""
@@ -226,8 +230,12 @@ class TestContainerCreationAndSecurity:
             assert call.get("network_mode") != "none", (
                 "Container should not have network_mode='none'; internet access must be enabled"
             )
-            assert call["read_only"] is True
-            assert "/tmp" in call["tmpfs"]
+            assert call.get("read_only") is not True, (
+                "Container root filesystem must be writable (read_only should not be True)"
+            )
+            assert "tmpfs" not in call, (
+                "Container should not have tmpfs when root filesystem is writable"
+            )
             assert "no-new-privileges" in call["security_opt"]
             assert call["mem_limit"] == "512m"
             assert call["nano_cpus"] == int(1.0 * 1e9)

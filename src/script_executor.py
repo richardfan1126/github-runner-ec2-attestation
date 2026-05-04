@@ -147,8 +147,6 @@ class ScriptExecutor:
                 command=["bash", f"/workspace/{script_path}"],
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
-                read_only=True,
-                tmpfs={"/tmp": "size=64m,mode=1777"},
                 volumes={
                     host_repo_path: {"bind": "/workspace", "mode": "ro"},
                 },

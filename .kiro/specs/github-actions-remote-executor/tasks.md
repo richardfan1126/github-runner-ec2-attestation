@@ -1530,7 +1530,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Keep existing `execution_manager`, `output_collector`, `temp_storage_path` parameters
     - _Requirements: 5.1, 5.2, 8.1, 8.2, 9.6, 9.7_
 
-  - [ ] 68.2 Implement Docker container lifecycle in execute_async
+  - [x] 68.2 Implement Docker container lifecycle in execute_async
     - Create a new Execution_Container from the configured Container_Image for each execution
     - Assign a unique container name derived from the Execution_ID (e.g., `gare-exec-{execution_id}`)
     - Configure container with security constraints:
@@ -1599,7 +1599,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - For any script execution, verify the Execution_Container is assigned a unique name derived from the Execution_ID
     - **Validates: Requirements 5.13**
 
-  - [ ] 71.3 Write property test for Docker Container Security Constraints
+  - [x] 71.3 Write property test for Docker Container Security Constraints
     - **Property 111: Docker Container Security Constraints**
     - For any Execution_Container, verify it is configured with: root user, writable root filesystem, privilege escalation disabled, memory limits, CPU limits, and internet access enabled (no network_mode restriction)
     - **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6**
@@ -1625,7 +1625,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Validates: Requirements 9.7**
 
 - [x] 72. Write unit tests for Docker container management
-  - [ ] 72.1 Write unit tests for Docker ScriptExecutor
+  - [x] 72.1 Write unit tests for Docker ScriptExecutor
     - Test container creation with correct image, name, and security constraints (memory, CPU, writable root filesystem, no privilege escalation, root user, internet access enabled)
     - Test container execution captures stdout, stderr, and exit code
     - Test container is removed after successful execution
@@ -1823,7 +1823,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - `script_path` is the relative path to the script within the repo
     - _Requirements: 5.1, 5.2_
 
-  - [ ] 86.2 Update _execute_in_container to mount repo directory
+  - [x] 86.2 Update _execute_in_container to mount repo directory
     - Replace the single-file bind-mount with a directory mount: mount `repo_path` read-only at `/workspace` in the container
     - Set the container working directory to `/workspace` using `working_dir="/workspace"`
     - Update the command to `["sh", "/workspace/{script_path}"]`
@@ -3095,13 +3095,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 169. Enable internet access in Execution_Containers
-  - [ ] 169.1 Remove network_mode="none" from container creation in src/script_executor.py
+  - [x] 169.1 Remove network_mode="none" from container creation in src/script_executor.py
     - In `_execute_in_container`, remove the `network_mode="none"` parameter from the `self._docker_client.containers.create()` call
     - This allows containers to use the default Docker bridge network, giving scripts internet access to download dependencies or upload artifacts
     - All other security constraints remain unchanged: mem_limit, nano_cpus, cap_drop=["ALL"], security_opt=["no-new-privileges"], user="nobody"
     - _Requirements: 8.4_
 
-  - [ ] 169.2 Update Property 111 test for internet access enabled
+  - [x] 169.2 Update Property 111 test for internet access enabled
     - Update the property test for Docker Container Security Constraints (Property 111) to verify that `network_mode="none"` is NOT set on created containers
     - Verify all other security constraints are still enforced: root user, writable root filesystem, privilege escalation disabled, memory limits, CPU limits, cap_drop=ALL
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18_
