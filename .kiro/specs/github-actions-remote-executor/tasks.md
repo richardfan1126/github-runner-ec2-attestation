@@ -1490,7 +1490,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
   - [x] 66.2 Add container configuration fields to ServerConfig
     - Add `container_image: str` field to ServerConfig dataclass (Docker image name for Execution_Containers)
-    - Add `container_memory_limit: str` field to ServerConfig dataclass (e.g., '512m')
+    - Add `container_memory_limit: str` field to ServerConfig dataclass (e.g., '4g')
     - Add `container_cpu_limit: float` field to ServerConfig dataclass (e.g., 1.0)
     - Load `CONTAINER_IMAGE` from environment variable
     - Load `CONTAINER_MEMORY_LIMIT` from environment variable
@@ -1498,9 +1498,9 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add validation: `container_image` must be non-empty, `container_memory_limit` must be non-empty, `container_cpu_limit` must be > 0
     - _Requirements: 9.6, 9.7_
 
-  - [x] 66.3 Update .env.example and KIWI env file with container config variables
+  - [ ] 66.3 Update .env.example and KIWI env file with container config variables
     - Add `CONTAINER_IMAGE=ubuntu:24.04` to .env.example
-    - Add `CONTAINER_MEMORY_LIMIT=512m` to .env.example
+    - Add `CONTAINER_MEMORY_LIMIT=4g` to .env.example
     - Add `CONTAINER_CPU_LIMIT=1.0` to .env.example
     - Add same variables to kiwi-descriptions/root/etc/github-actions-remote-executor/env
     - _Requirements: 9.6, 9.7_
@@ -2032,13 +2032,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - _Requirements: 2.1, 2.2, 40.9_
 
 - [x] 98. Change /execution/{id}/output from GET to POST with encrypted request/response
-  - [x] 98.1 Change route from GET to POST in src/server.py
+  - [ ] 98.1 Change route from GET to POST in src/server.py
     - Change `@app.get("/execution/{execution_id}/output")` to `@app.post("/execution/{execution_id}/output")`
     - Accept encrypted request body instead of query parameters
     - Look up Encryption_Context for execution_id; return HTTP 400 if not found
-    - Decrypt request body using Shared_Key from Encryption_Context
-    - Extract `oidc_token`, optional `nonce`, and optional `offset` from decrypted body
-    - Validate OIDC token from decrypted body
+    - Decrypt request body using Shared_Key from Encryption_Context; successful decryption proves caller identity (no separate OIDC validation needed)
+    - Extract optional `nonce` and optional `offset` from decrypted body (no `oidc_token` field)
     - _Requirements: 42.2, 42.3, 42.6, 42.7_
 
   - [x] 98.2 Encrypt /execution/{id}/output response payload
@@ -2557,22 +2556,24 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - [x] 136.1 Store repository claim in execution record
     - When creating an execution record in src/execution_manager.py, accept and store the `repository` claim from the validated OIDC_Token
     - Add `repository` field to the execution record data structure
-    - _Requirements: 6.14_
+    - _Requirements: 6.13_
 
-  - [x] 136.2 Verify repository claim on /output retrieval in src/server.py
-    - On /execution/{id}/output, after OIDC validation, compare the `repository` claim from the token against the repository stored in the execution record
-    - Reject with HTTP 403 if mismatch
-    - _Requirements: 6.15, 6.16_
+  - [ ] 136.2 Remove OIDC validation and repository binding from /output endpoint in src/server.py
+    - Remove OIDC token extraction and validation from the /execution/{id}/output handler
+    - Remove repository claim comparison against execution record on /output
+    - Authentication on /output is now solely via Shared_Key possession (successful decryption proves identity)
+    - _Requirements: 2.2, 6.3_
 
-  - [x] 136.3 Write property test for Execution Output Repository Binding
-    - **Property 147: Execution Output Repository Binding**
-    - **Validates: Requirements 6.14, 6.15, 6.16**
+  - [ ] 136.3 Write property test for Execution Output Shared Key Authentication
+    - **Property 147: Execution Output Shared Key Authentication**
+    - Verify that /execution/{id}/output authenticates solely via Shared_Key possession; no OIDC token is required or validated
+    - **Validates: Requirements 2.2, 6.3**
 
-  - [x] 136.4 Write unit tests for output repository binding
-    - Test matching repository (allowed)
-    - Test mismatched repository (403)
-    - Test repository stored at creation and checked at retrieval
-    - _Requirements: 6.14, 6.15, 6.16_
+  - [ ] 136.4 Write unit tests for output Shared_Key authentication
+    - Test /output with valid Shared_Key (success, no OIDC token needed)
+    - Test /output with invalid Shared_Key (400 decryption failure)
+    - Test /output with no Encryption_Context (400)
+    - _Requirements: 2.2, 6.3, 42.6, 42.7_
 
 - [x] 137. Implement contextvars-based logging
   - [x] 137.1 Replace global mutable log context with contextvars.ContextVar in src/logging_config.py
@@ -2915,12 +2916,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 159. Write integration tests for security hardening changes
-  - [x] 159.1 Write integration tests for OIDC repository binding end-to-end
+  - [ ] 159.1 Write integration tests for OIDC repository binding and output authentication end-to-end
     - Test /execute with matching repository claim and URL (success)
     - Test /execute with mismatched repository claim and URL (403)
-    - Test /output with matching repository claim and execution record (success)
-    - Test /output with mismatched repository claim and execution record (403)
-    - _Requirements: 2.22, 2.23, 2.24, 6.14, 6.15, 6.16_
+    - Test /output with valid Shared_Key (success, no OIDC token needed)
+    - Test /output with invalid Shared_Key (400 decryption failure)
+    - _Requirements: 2.2, 2.22, 2.23, 2.24, 6.3_
 
   - [x] 159.2 Write integration tests for anti-replay nonce validation
     - Test /execute with unique nonce (success)
@@ -3184,7 +3185,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - OIDC authentication (tasks 58-65) adds GitHub Actions OIDC JWT validation for request authentication
 - PyJWT[crypto] is used for JWT decoding and JWKS-based signature verification
 - OIDC tokens are validated for signature (JWKS), issuer, audience, repository, and expiration claims
-- Protected endpoints (/execute, /execution/{id}/output) require Bearer OIDC tokens; /health remains unauthenticated
+- Protected endpoint /execute requires OIDC token in encrypted body; /execution/{id}/output authenticates via Shared_Key possession (no OIDC token needed); /health remains unauthenticated
 - Docker daemon provisioning (tasks 74-75) adds the docker package to the KIWI image and enables the docker service so the Script_Executor can manage Execution_Containers at runtime
 - Git package provisioning (task 90) adds the git package to the KIWI image so the Repository_Client can clone repositories at runtime using git commands
 - Container image pre-pull (tasks 76-79) originally baked the configured Container_Image into the KIWI image during build; tasks 80-84 reverse this by removing the build-time pre-pull code and implementing server-startup pull instead — the GHA_Server now pulls the Container_Image from the registry at startup before accepting requests
@@ -3222,7 +3223,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - SHA-256 fingerprint of the composite Server_Public_Key is used in attestation documents because the composite key exceeds the 1024-byte public_key field limit
 - /attest is the only endpoint that includes Server_Public_Key in attestation documents; /execute and /output attestations exclude it
 - /attest attestation documents do NOT include user_data — only public_key and optional nonce are included
-- OIDC tokens move from Authorization header to encrypted request body `oidc_token` field on /execute and /execution/{id}/output
+- OIDC token is included in encrypted request body `oidc_token` field on /execute only; /execution/{id}/output does not require or validate OIDC tokens (Shared_Key possession serves as authentication)
 - /execution/{id}/output changes from GET to POST to support encrypted request bodies
 - Encryption_Context (Shared_Key per execution_id) is stored in memory and cleaned up with execution records
 - /attest, /health, and /metrics remain unencrypted plain JSON endpoints

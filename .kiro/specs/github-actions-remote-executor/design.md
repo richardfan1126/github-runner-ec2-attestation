@@ -23,7 +23,7 @@ This design document covers five major aspects of the system:
 3. **Ephemeral Docker Container Isolation**: Each script execution runs inside a newly created Docker container from a configured Container_Image; containers are never reused and are destroyed after completion, failure, or timeout
 4. **Attestable Environment**: NitroTPM-based attestation on the Attestable EC2 instance provides cryptographic proof of the execution environment
 5. **Stateless Request Handling**: Each request is independent, with execution state stored separately
-6. **PQ Hybrid Encrypted Communication**: All request and response payloads on /execute and /execution/{id}/output are encrypted using PQ_Hybrid_KEM (X25519 + ML-KEM-768). The server generates a composite keypair at startup (held in memory only), attests the public key via /attest (SHA-256 fingerprint in the attestation document's public_key field, full composite key in the JSON response body), and derives per-execution shared keys via HKDF-SHA256 combining both X25519 ECDH and ML-KEM-768 shared secrets for symmetric encryption of all subsequent communication. OIDC tokens are transmitted inside the encrypted payload rather than in HTTP headers.
+6. **PQ Hybrid Encrypted Communication**: All request and response payloads on /execute and /execution/{id}/output are encrypted using PQ_Hybrid_KEM (X25519 + ML-KEM-768). The server generates a composite keypair at startup (held in memory only), attests the public key via /attest (SHA-256 fingerprint in the attestation document's public_key field, full composite key in the JSON response body), and derives per-execution shared keys via HKDF-SHA256 combining both X25519 ECDH and ML-KEM-768 shared secrets for symmetric encryption of all subsequent communication. The OIDC token is transmitted inside the encrypted /execute payload rather than in HTTP headers. The /execution/{id}/output endpoint does not require an OIDC token; possession of the execution-bound Shared_Key itself serves as authentication for output retrieval.
 
 ### Architecture Goals
 
@@ -149,10 +149,9 @@ The system consists of the following major components:
 
 **Output Handler**
 - Receives encrypted /execution/{id}/output request payloads; decrypts via the Encryption Manager using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists)
-- Extracts the OIDC_Token from the decrypted request body `oidc_token` field for authentication
+- Authentication is provided by possession of the execution-bound Shared_Key itself — only the original caller who performed the PQ_Hybrid_KEM exchange during /execute possesses this key, so no separate OIDC token validation is required
 - Extracts the optional `nonce` from the decrypted request body
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
-- Validates OIDC token and enforces repository binding per Requirements 2 and 6.13-6.15
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
 - Returns completion status and exit codes
@@ -284,13 +283,11 @@ The system consists of the following major components:
 
 **Output Polling Flow:**
 
-1. Client sends POST request to `/execution/{id}/output` with encrypted payload containing `oidc_token` and optional `nonce`
-2. Encryption Manager decrypts the request payload using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists)
-3. Output Handler extracts OIDC_Token from decrypted body `oidc_token` field
-5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
-6. Output Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
-7. Output Handler compares `repository` claim from OIDC_Token against repository stored in execution record; rejects with HTTP 403 if mismatch
-8. Output Handler retrieves execution record by ID
+1. Client sends POST request to `/execution/{id}/output` with encrypted payload containing optional `nonce` and `offset`
+2. Encryption Manager decrypts the request payload using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists); successful decryption proves the caller possesses the Shared_Key, which serves as authentication
+3. Output Handler extracts the optional `nonce` from the decrypted request body
+5. Output Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
+6. Output Handler retrieves execution record by ID
 7. Output Collector returns current status, output from offset, and completion flag
 8. Output Handler computes SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) and generates an Output_Attestation_Document with the digest in user_data and optional nonce (no Server_Public_Key)
 9. Response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code (if available) on every poll response regardless of execution status
@@ -389,13 +386,12 @@ The attestation document in the /execute response does NOT include the Server_Pu
 
 #### POST /execution/{execution_id}/output
 
-Retrieves execution status and output. Request and response payloads are encrypted with the execution-bound Shared_Key.
+Retrieves execution status and output. Request and response payloads are encrypted with the execution-bound Shared_Key. Authentication is provided by possession of the Shared_Key itself — only the original caller who performed the PQ_Hybrid_KEM exchange during /execute possesses this key.
 
 **Request Body (encrypted with Shared_Key):**
 After decryption:
 ```json
 {
-  "oidc_token": "eyJhbGciOiJSUzI1NiIs...",
   "nonce": "optional-client-nonce",
   "offset": 0
 }
@@ -452,8 +448,6 @@ When Output_Attestation_Document generation fails (after decryption, any status)
 
 **Error Responses:**
 - 400 Bad Request: No Encryption_Context for execution_id, decryption failure, duplicate nonce
-- 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
-- 403 Forbidden: Valid OIDC token from an unauthorized repository, or repository claim does not match execution record's repository
 - 404 Not Found: Execution ID does not exist
 
 #### GET /health
@@ -676,7 +670,7 @@ class ScriptExecutor:
         Args:
             docker_client: Docker SDK client instance
             container_image: Name of the Container_Image to use for Execution_Containers
-            memory_limit: Docker memory constraint (e.g., '512m')
+            memory_limit: Docker memory constraint (e.g., '4g')
             cpu_limit: Docker CPU constraint (e.g., 1.0 for one CPU)
             timeout_seconds: Maximum execution timeout
         """
@@ -832,7 +826,7 @@ class ServerConfig:
     expected_audience: str
     container_image: str  # Docker image name for Execution_Containers
     container_image_digest: str | None  # Optional SHA-256 digest for image verification
-    container_memory_limit: str  # Docker memory constraint (e.g., '512m')
+    container_memory_limit: str  # Docker memory constraint (e.g., '4g')
     container_cpu_limit: float  # Docker CPU constraint (e.g., 1.0)
     nonce_cache_ttl_seconds: int  # TTL for nonce cache entries, matching OIDC token lifetime
     allowed_branches: list[str] | None  # Optional branch patterns for OIDC ref claim validation
@@ -902,7 +896,6 @@ class DecryptedExecuteRequest:
 ```python
 @dataclass
 class DecryptedOutputRequest:
-    oidc_token: str
     nonce: Optional[str] = None
     offset: int = 0
 ```
@@ -963,9 +956,9 @@ class EncryptionContext:
 
 **Validates: Requirements 2.5**
 
-### Property 8: OIDC Token Required on Protected Endpoints
+### Property 8: OIDC Token Required on Execute Endpoint
 
-*For any* request to `/execute` or `/execution/{id}/output` without a valid `oidc_token` field in the decrypted request body, the server should reject the request with HTTP 401 Unauthorized.
+*For any* request to `/execute` without a valid `oidc_token` field in the decrypted request body, the server should reject the request with HTTP 401 Unauthorized. The `/execution/{id}/output` endpoint does not require an OIDC token; possession of the execution-bound Shared_Key serves as authentication.
 
 **Validates: Requirements 2.1, 2.2, 2.3**
 
@@ -1391,7 +1384,7 @@ class EncryptionContext:
 
 ### Property 130: OIDC Token Extracted from Decrypted Body
 
-*For any* encrypted /execute or /execution/{id}/output request, the server should extract and validate the OIDC_Token from the `oidc_token` field of the decrypted request body, not from the Authorization header.
+*For any* encrypted /execute request, the server should extract and validate the OIDC_Token from the `oidc_token` field of the decrypted request body, not from the Authorization header. The /execution/{id}/output endpoint does not require or validate an OIDC token; the Shared_Key possession serves as authentication.
 
 **Validates: Requirements 40.6, 40.9, 2.1, 2.2**
 
@@ -1491,11 +1484,11 @@ class EncryptionContext:
 
 **Validates: Requirements 5.15, 5.16**
 
-### Property 147: Execution Output Repository Binding
+### Property 147: Execution Output Shared Key Authentication
 
-*For any* /execution/{id}/output request where the `repository` claim from the validated OIDC_Token does not match the repository stored in the execution record, the server should reject the request with HTTP 403 Forbidden.
+*For any* /execution/{id}/output request, the server should authenticate the caller solely by verifying successful decryption of the request payload using the execution-bound Shared_Key. No separate OIDC token validation or repository binding check is required on this endpoint, because only the original caller who initiated the /execute request possesses the Shared_Key.
 
-**Validates: Requirements 6.13, 6.14, 6.15**
+**Validates: Requirements 6.3**
 
 ### Property 148: Contextvars Log Isolation
 
@@ -1535,7 +1528,7 @@ class EncryptionContext:
 
 ### Property 154: Anti-Replay Nonce Validation
 
-*For any* encrypted /execute or /execution/{id}/output request whose nonce has been previously seen in the Nonce_Cache, the server should reject the request with HTTP 400 Bad Request. Nonce cache entries should expire after a configurable TTL matching the OIDC_Token lifetime.
+*For any* encrypted /execute or /execution/{id}/output request whose nonce has been previously seen in the Nonce_Cache, the server should reject the request with HTTP 400 Bad Request. Nonce cache entries should expire after a configurable TTL.
 
 **Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5**
 
