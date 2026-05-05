@@ -2558,13 +2558,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add `repository` field to the execution record data structure
     - _Requirements: 6.13_
 
-  - [ ] 136.2 Remove OIDC validation and repository binding from /output endpoint in src/server.py
+  - [x] 136.2 Remove OIDC validation and repository binding from /output endpoint in src/server.py
     - Remove OIDC token extraction and validation from the /execution/{id}/output handler
     - Remove repository claim comparison against execution record on /output
     - Authentication on /output is now solely via Shared_Key possession (successful decryption proves identity)
     - _Requirements: 2.2, 6.3_
 
-  - [ ] 136.3 Write property test for Execution Output Shared Key Authentication
+  - [x] 136.3 Write property test for Execution Output Shared Key Authentication
     - **Property 147: Execution Output Shared Key Authentication**
     - Verify that /execution/{id}/output authenticates solely via Shared_Key possession; no OIDC token is required or validated
     - **Validates: Requirements 2.2, 6.3**
