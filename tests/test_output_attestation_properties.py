@@ -253,23 +253,20 @@ def test_property_45_output_attestation_base64_encoding(
     )
 
     with patch.object(
-        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
+        app.state.execution_manager, "get_execution", return_value=record
     ):
         with patch.object(
-            app.state.execution_manager, "get_execution", return_value=record
+            app.state.output_collector, "get_output", return_value=output_data
         ):
             with patch.object(
-                app.state.output_collector, "get_output", return_value=output_data
+                app.state.attestation_generator,
+                "generate_output_attestation",
+                return_value=(attestation_bytes, None),
             ):
-                with patch.object(
-                    app.state.attestation_generator,
-                    "generate_output_attestation",
-                    return_value=(attestation_bytes, None),
-                ):
-                    req_body = make_encrypted_output_request(
-                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                    )
-                    response = client.post(f"/execution/{execution_id}/output", json=req_body)
+                req_body = make_encrypted_output_request(
+                    {"offset": 0}, ctx.shared_key
+                )
+                response = client.post(f"/execution/{execution_id}/output", json=req_body)
 
     assert response.status_code == 200
     data = decrypt_output_response(response.json(), ctx.shared_key)
@@ -315,23 +312,20 @@ def test_property_46_output_attestation_failure_graceful_degradation(
     )
 
     with patch.object(
-        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
+        app.state.execution_manager, "get_execution", return_value=record
     ):
         with patch.object(
-            app.state.execution_manager, "get_execution", return_value=record
+            app.state.output_collector, "get_output", return_value=output_data
         ):
             with patch.object(
-                app.state.output_collector, "get_output", return_value=output_data
+                app.state.attestation_generator,
+                "generate_output_attestation",
+                return_value=(None, error_msg),
             ):
-                with patch.object(
-                    app.state.attestation_generator,
-                    "generate_output_attestation",
-                    return_value=(None, error_msg),
-                ):
-                    req_body = make_encrypted_output_request(
-                        {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                    )
-                    response = client.post(f"/execution/{execution_id}/output", json=req_body)
+                req_body = make_encrypted_output_request(
+                    {"offset": 0}, ctx.shared_key
+                )
+                response = client.post(f"/execution/{execution_id}/output", json=req_body)
 
     assert response.status_code == 200
     data = decrypt_output_response(response.json(), ctx.shared_key)

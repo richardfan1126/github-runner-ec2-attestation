@@ -135,8 +135,12 @@ def _post_execute(client, encryption_ctx, request_data):
     return client.post("/execute", json=body)
 
 
-def _post_output(client, execution_id, shared_key, offset=0, oidc_token="valid.oidc.token", nonce=None):
-    payload = {"oidc_token": oidc_token, "offset": offset}
+def _post_output(client, execution_id, shared_key, offset=0, nonce=None):
+    """Helper to post an encrypted output request.
+    
+    Authentication is via Shared_Key possession — no OIDC token needed.
+    """
+    payload = {"offset": offset}
     if nonce is not None:
         payload["nonce"] = nonce
     body = make_encrypted_output_request(payload, shared_key)
@@ -192,8 +196,9 @@ class TestOIDCRepositoryBindingIntegration:
 
     def test_output_matching_repo_claim(self, client, encryption_ctx, app):
         """
-        /output succeeds when OIDC repository claim matches the execution record.
-        Validates: Requirements 6.14, 6.15
+        /output succeeds when caller possesses the correct Shared_Key.
+        No OIDC validation is performed on the output endpoint.
+        Validates: Requirements 42.2, 42.3
         """
         # Create execution with matching repo
         response = _post_execute(client, encryption_ctx, _base_request_data())
@@ -203,16 +208,17 @@ class TestOIDCRepositoryBindingIntegration:
 
         time.sleep(0.3)
 
-        # Poll output – OIDC mock still returns "owner/repo" matching the record
+        # Poll output — Shared_Key possession is the sole auth mechanism
         output_response = _post_output(client, execution_id, encryption_ctx.shared_key)
         assert output_response.status_code == 200
 
-    def test_output_mismatched_repo_claim(self, client, encryption_ctx, app):
+    def test_output_without_encryption_context_returns_400(self, client, encryption_ctx, app):
         """
-        /output returns 403 when OIDC repository claim does not match execution record.
-        Validates: Requirements 6.14, 6.15, 6.16
+        /output returns 400 when no encryption context exists for the execution_id.
+        Validates: Requirements 42.6, 42.7
         """
-        # Create execution with matching repo ("owner/repo")
+        # Try to poll output for an execution_id that has no stored encryption context
+        # but does have an execution record
         response = _post_execute(client, encryption_ctx, _base_request_data())
         assert response.status_code == 200
         data = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
@@ -220,15 +226,13 @@ class TestOIDCRepositoryBindingIntegration:
 
         time.sleep(0.3)
 
-        # Now change the OIDC mock to return a different repository
-        app.state.request_validator.validate_oidc_token_from_body = Mock(
-            return_value=_make_oidc_result("other-owner/other-repo")
-        )
+        # Remove the encryption context to simulate expired/cleaned-up state
+        encryption_ctx.encryption_manager.remove_encryption_context(execution_id)
 
         output_response = _post_output(client, execution_id, encryption_ctx.shared_key)
-        assert output_response.status_code == 403
+        assert output_response.status_code == 400
         detail = output_response.json()["detail"]
-        assert detail["error"] == "repository_mismatch"
+        assert detail["error"] == "no_encryption_context"
 
 
 

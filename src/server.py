@@ -683,6 +683,11 @@ def add_routes(app: FastAPI) -> None:
         """
         Get execution status and output (encrypted request/response).
 
+        Authentication is provided by possession of the execution-bound
+        Shared_Key itself — only the original caller who performed the
+        PQ_Hybrid_KEM exchange during /execute possesses this key, so no
+        separate OIDC token validation is required.
+
         Request body (encrypted with Shared_Key):
         {
             "encrypted_payload": "base64-encoded-ciphertext"
@@ -690,7 +695,6 @@ def add_routes(app: FastAPI) -> None:
 
         Decrypted request payload:
         {
-            "oidc_token": "eyJhbGciOiJSUzI1NiIs...",
             "nonce": "optional-client-nonce",
             "offset": 0
         }
@@ -759,7 +763,8 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
-            # Decrypt the request payload using Shared_Key
+            # Decrypt the request payload using Shared_Key;
+            # successful decryption proves caller identity (no separate OIDC validation needed)
             try:
                 encrypted_payload = base64.b64decode(encrypted_payload_b64)
                 body = encryption_manager.decrypt_with_shared_key(encrypted_payload, shared_key)
@@ -773,26 +778,7 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
-            # OIDC authentication from decrypted body
-            validator = request.app.state.request_validator
-            oidc_token = body.get("oidc_token")
-            oidc_result = validator.validate_oidc_token_from_body(oidc_token)
-
-            if not oidc_result.valid:
-                repo_claim = (oidc_result.claims or {}).get("repository", "unknown")
-                logger.warning(
-                    f"OIDC validation failed on output endpoint: status={oidc_result.status_code}, "
-                    f"repository={repo_claim}, error={oidc_result.error_message}"
-                )
-                raise HTTPException(
-                    status_code=oidc_result.status_code,
-                    detail=create_error_response(
-                        "oidc_authentication_failed",
-                        oidc_result.error_message or "Authentication failed"
-                    )
-                )
-
-            # Extract optional offset and nonce from decrypted body
+            # Extract optional offset and nonce from decrypted body (no oidc_token field required)
             offset = body.get("offset", 0)
             nonce = body.get("nonce")
 
@@ -818,21 +804,6 @@ def add_routes(app: FastAPI) -> None:
                     detail=create_error_response(
                         "execution_not_found",
                         f"Execution ID not found: {execution_id}"
-                    )
-                )
-
-            # Repository binding: verify OIDC repository claim matches execution record
-            oidc_repo_claim = oidc_result.claims.get("repository", "")
-            if oidc_repo_claim != execution_record.repository:
-                logger.warning(
-                    f"Output repository mismatch: OIDC claim={oidc_repo_claim}, "
-                    f"execution record={execution_record.repository}"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=create_error_response(
-                        "repository_mismatch",
-                        "OIDC token repository claim does not match execution record"
                     )
                 )
 

@@ -300,11 +300,13 @@ def test_property_008_oidc_token_required_on_protected_endpoints(execution_id):
     )
 
     # POST /execution/{id}/output without oidc_token in encrypted body
+    # Since OIDC is NOT required on the output endpoint (Shared_Key possession is auth),
+    # this should succeed (200) or return 404 if execution doesn't exist.
     _server_ctx.encryption_manager.store_encryption_context(execution_id, _server_ctx.shared_key)
     output_body = make_encrypted_output_request({"offset": 0}, _server_ctx.shared_key)
     resp_output = _server_client.post(f"/execution/{execution_id}/output", json=output_body)
-    assert resp_output.status_code in [401, 404], (
-        f"/execution/{{id}}/output without oidc_token should return 401 or 404, got {resp_output.status_code}"
+    assert resp_output.status_code in [200, 404], (
+        f"/execution/{{id}}/output without oidc_token should return 200 or 404 (Shared_Key is auth), got {resp_output.status_code}"
     )
 
 

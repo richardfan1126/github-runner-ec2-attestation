@@ -144,9 +144,12 @@ def _post_execute(client, encryption_ctx, request_data):
     return response
 
 
-def _post_output(client, execution_id, shared_key, offset=0, oidc_token="valid.oidc.token"):
-    """Helper to post an encrypted output request."""
-    payload = {"oidc_token": oidc_token, "offset": offset}
+def _post_output(client, execution_id, shared_key, offset=0):
+    """Helper to post an encrypted output request.
+    
+    Authentication is via Shared_Key possession — no OIDC token needed.
+    """
+    payload = {"offset": offset}
     body = make_encrypted_output_request(payload, shared_key)
     return client.post(f"/execution/{execution_id}/output", json=body)
 

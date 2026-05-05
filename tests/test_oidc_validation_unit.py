@@ -404,20 +404,51 @@ class TestOIDCProtectedEndpoints:
 
     # ---- POST /execution/{id}/output ----
 
-    def test_output_without_auth_header_returns_401(self):
-        """POST /execution/{id}/output with no oidc_token → 401"""
-        from tests.encryption_test_helpers import make_encrypted_output_request
+    def test_output_without_oidc_token_succeeds_with_shared_key(self):
+        """POST /execution/{id}/output without oidc_token succeeds — Shared_Key is the auth"""
+        from tests.encryption_test_helpers import make_encrypted_output_request, decrypt_output_response
         client, app, ctx = self._create_client()
         execution_id = "some-id"
         ctx.encryption_manager.store_encryption_context(execution_id, ctx.shared_key)
 
-        # Send encrypted request WITHOUT oidc_token
-        req_body = make_encrypted_output_request({"offset": 0}, ctx.shared_key)
-        response = client.post(f"/execution/{execution_id}/output", json=req_body)
-        assert response.status_code == 401
+        exec_record = ExecutionRecord(
+            execution_id=execution_id,
+            repository_url="https://github.com/owner/repo",
+            commit_hash="a" * 40,
+            script_path="test.sh",
+            status=ExecutionStatus.RUNNING,
+            created_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc),
+            completed_at=None,
+            exit_code=None,
+            timeout_seconds=300,
+            repository="owner/repo",
+        )
+        output_data = OutputData(
+            stdout="hello",
+            stderr="",
+            stdout_offset=5,
+            stderr_offset=0,
+            complete=False,
+            exit_code=None,
+        )
+
+        with patch.object(
+            app.state.execution_manager, "get_execution", return_value=exec_record
+        ), patch.object(
+            app.state.output_collector, "get_output", return_value=output_data
+        ):
+            # Send encrypted request WITHOUT oidc_token — should succeed
+            req_body = make_encrypted_output_request({"offset": 0}, ctx.shared_key)
+            response = client.post(f"/execution/{execution_id}/output", json=req_body)
+
+        assert response.status_code == 200
+        data = decrypt_output_response(response.json(), ctx.shared_key)
+        assert data["execution_id"] == execution_id
+        assert data["stdout"] == "hello"
 
     def test_output_with_valid_token_returns_output(self):
-        """POST /execution/{id}/output with valid token returns execution output"""
+        """POST /execution/{id}/output with valid shared key returns execution output"""
         from tests.encryption_test_helpers import make_encrypted_output_request, decrypt_output_response
         client, app, ctx = self._create_client()
         execution_id = "test-exec-id"
@@ -446,14 +477,12 @@ class TestOIDCProtectedEndpoints:
         )
 
         with patch.object(
-            app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
-        ), patch.object(
             app.state.execution_manager, "get_execution", return_value=exec_record
         ), patch.object(
             app.state.output_collector, "get_output", return_value=output_data
         ):
             req_body = make_encrypted_output_request(
-                {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
+                {"offset": 0}, ctx.shared_key
             )
             response = client.post(f"/execution/{execution_id}/output", json=req_body)
 

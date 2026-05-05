@@ -174,18 +174,17 @@ class TestOutputEndpointWithAttestation:
         )
         attestation_bytes = b"output_attestation_cbor_data"
 
-        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
-            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
-                with patch.object(app.state.output_collector, "get_output", return_value=output):
-                    with patch.object(
-                        app.state.attestation_generator,
-                        "generate_output_attestation",
-                        return_value=(attestation_bytes, None),
-                    ):
-                        req_body = make_encrypted_output_request(
-                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                        )
-                        response = client.post(f"/execution/{eid}/output", json=req_body)
+        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+            with patch.object(app.state.output_collector, "get_output", return_value=output):
+                with patch.object(
+                    app.state.attestation_generator,
+                    "generate_output_attestation",
+                    return_value=(attestation_bytes, None),
+                ):
+                    req_body = make_encrypted_output_request(
+                        {"offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
         data = decrypt_output_response(response.json(), ctx.shared_key)
@@ -205,18 +204,17 @@ class TestOutputEndpointWithAttestation:
             stderr_offset=0, complete=True, exit_code=0,
         )
 
-        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
-            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
-                with patch.object(app.state.output_collector, "get_output", return_value=output):
-                    with patch.object(
-                        app.state.attestation_generator,
-                        "generate_output_attestation",
-                        return_value=(None, "TPM device unavailable"),
-                    ):
-                        req_body = make_encrypted_output_request(
-                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                        )
-                        response = client.post(f"/execution/{eid}/output", json=req_body)
+        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+            with patch.object(app.state.output_collector, "get_output", return_value=output):
+                with patch.object(
+                    app.state.attestation_generator,
+                    "generate_output_attestation",
+                    return_value=(None, "TPM device unavailable"),
+                ):
+                    req_body = make_encrypted_output_request(
+                        {"offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
         data = decrypt_output_response(response.json(), ctx.shared_key)
@@ -239,18 +237,17 @@ class TestOutputEndpointWithAttestation:
         )
         attestation_bytes = b"running_output_attestation_cbor"
 
-        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
-            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
-                with patch.object(app.state.output_collector, "get_output", return_value=output):
-                    with patch.object(
-                        app.state.attestation_generator,
-                        "generate_output_attestation",
-                        return_value=(attestation_bytes, None),
-                    ) as mock_gen:
-                        req_body = make_encrypted_output_request(
-                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                        )
-                        response = client.post(f"/execution/{eid}/output", json=req_body)
+        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+            with patch.object(app.state.output_collector, "get_output", return_value=output):
+                with patch.object(
+                    app.state.attestation_generator,
+                    "generate_output_attestation",
+                    return_value=(attestation_bytes, None),
+                ) as mock_gen:
+                    req_body = make_encrypted_output_request(
+                        {"offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
         data = decrypt_output_response(response.json(), ctx.shared_key)
@@ -270,21 +267,20 @@ class TestOutputEndpointWithAttestation:
         record = self._make_record(eid, ExecutionStatus.QUEUED)
         attestation_bytes = b"queued_output_attestation_cbor"
 
-        with patch.object(app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT):
-            with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+        with patch.object(app.state.execution_manager, "get_execution", return_value=record):
+            with patch.object(
+                app.state.output_collector, "get_output",
+                side_effect=ValueError("No output buffer"),
+            ):
                 with patch.object(
-                    app.state.output_collector, "get_output",
-                    side_effect=ValueError("No output buffer"),
-                ):
-                    with patch.object(
-                        app.state.attestation_generator,
-                        "generate_output_attestation",
-                        return_value=(attestation_bytes, None),
-                    ) as mock_gen:
-                        req_body = make_encrypted_output_request(
-                            {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
-                        )
-                        response = client.post(f"/execution/{eid}/output", json=req_body)
+                    app.state.attestation_generator,
+                    "generate_output_attestation",
+                    return_value=(attestation_bytes, None),
+                ) as mock_gen:
+                    req_body = make_encrypted_output_request(
+                        {"offset": 0}, ctx.shared_key
+                    )
+                    response = client.post(f"/execution/{eid}/output", json=req_body)
 
         assert response.status_code == 200
         data = decrypt_output_response(response.json(), ctx.shared_key)
