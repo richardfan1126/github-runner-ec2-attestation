@@ -2916,7 +2916,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 159. Write integration tests for security hardening changes
-  - [ ] 159.1 Write integration tests for OIDC repository binding and output authentication end-to-end
+  - [x] 159.1 Write integration tests for OIDC repository binding and output authentication end-to-end
     - Test /execute with matching repository claim and URL (success)
     - Test /execute with mismatched repository claim and URL (403)
     - Test /output with valid Shared_Key (success, no OIDC token needed)
