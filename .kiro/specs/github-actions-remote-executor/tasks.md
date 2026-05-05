@@ -2569,7 +2569,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify that /execution/{id}/output authenticates solely via Shared_Key possession; no OIDC token is required or validated
     - **Validates: Requirements 2.2, 6.3**
 
-  - [ ] 136.4 Write unit tests for output Shared_Key authentication
+  - [x] 136.4 Write unit tests for output Shared_Key authentication
     - Test /output with valid Shared_Key (success, no OIDC token needed)
     - Test /output with invalid Shared_Key (400 decryption failure)
     - Test /output with no Encryption_Context (400)
