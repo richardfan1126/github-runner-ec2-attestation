@@ -3243,20 +3243,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 177. Checkpoint - Ensure mandatory digest pinning tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 178. Add script_env_hash to attestation user_data
-  - [ ] 178.1 Update src/attestation.py to compute and include script_env_hash
+- [x] 178. Add script_env_hash to attestation user_data
+  - [x] 178.1 Update src/attestation.py to compute and include script_env_hash
     - Modify the attestation generation function to accept a `script_env` parameter (dict[str, str] or None)
     - Compute SHA-256 hex digest of canonicalized script_env: sort keys lexicographically, serialize as JSON with `separators=(',', ':')` (compact, no whitespace)
     - When script_env is empty or None, compute SHA-256 of `{}` (empty JSON object)
     - Include `script_env_hash` field in the attestation user_data alongside existing fields (repository_url, commit_hash, script_path, timestamp)
     - _Requirements: 4.9, 4.10_
 
-  - [ ] 178.2 Update src/server.py /execute endpoint to pass script_env to attestation
+  - [x] 178.2 Update src/server.py /execute endpoint to pass script_env to attestation
     - In the /execute endpoint handler, pass the sanitized `script_env` dictionary to the Attestation_Generator when generating the execution attestation document
     - Ensure script_env is passed after sanitization but before execution begins
     - _Requirements: 4.9, 4.10_
 
-  - [ ] 178.3 Create attestation user_data schema documentation
+  - [x] 178.3 Create attestation user_data schema documentation
     - Create documentation (as a docstring in `src/attestation.py` or a `docs/attestation-schema.md` file) specifying:
       - All fields in the user_data structure: `repository_url`, `commit_hash`, `script_path`, `timestamp`, `script_env_hash`
       - Field types and purposes
@@ -3265,19 +3265,19 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
       - The canonical serialization format for script_env_hash computation (sorted keys, compact JSON, SHA-256 hex digest)
     - _Requirements: 4.8, 4.11, 4.12, 4.13_
 
-  - [ ] 178.4 Write regression tests for script_path and script_env_hash in attestation user_data
+  - [x] 178.4 Write regression tests for script_path and script_env_hash in attestation user_data
     - Assert that `script_path` is present in attestation user_data for all successful attestation generation paths
     - Assert that `script_env_hash` is present in attestation user_data for all successful attestation generation paths
     - Assert that removing either field causes test failure
     - _Requirements: 4.14, 4.15_
 
-  - [ ] 178.5 Update existing attestation property tests for script_env_hash
+  - [x] 178.5 Update existing attestation property tests for script_env_hash
     - Update **Property 15: Attestation Document Generation** and **Property 16: Attestation Document Completeness** to verify `script_env_hash` is included in user_data
     - Add test cases for empty script_env (should produce SHA-256 of `{}`)
     - Add test cases for non-empty script_env (should produce deterministic hash regardless of insertion order)
     - **Validates: Requirements 4.9, 4.10, 4.14, 4.15**
 
-- [ ] 179. Final checkpoint - Ensure all new requirement tasks pass
+- [x] 179. Final checkpoint - Ensure all new requirement tasks pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

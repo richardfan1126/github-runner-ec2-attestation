@@ -48,6 +48,26 @@ class AttestationGenerator:
             self.tpm_attest_path, os.X_OK
         )
     
+    def _compute_script_env_hash(self, script_env: Optional[Dict[str, str]]) -> str:
+        """
+        Compute SHA-256 hex digest of canonicalized script_env.
+        
+        Canonicalization: sort keys lexicographically, serialize as JSON with
+        compact separators (',', ':') (no whitespace).
+        When script_env is empty or None, computes SHA-256 of '{}' (empty JSON object).
+        
+        Args:
+            script_env: Dictionary of environment variables, or None
+            
+        Returns:
+            SHA-256 hex digest string
+        """
+        if not script_env:
+            canonical = "{}"
+        else:
+            canonical = json.dumps(script_env, sort_keys=True, separators=(',', ':'))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def generate_attestation(
         self,
         repository_url: Optional[str] = None,
@@ -55,6 +75,7 @@ class AttestationGenerator:
         script_path: Optional[str] = None,
         nonce: Optional[str] = None,
         public_key: Optional[bytes] = None,
+        script_env: Optional[Dict[str, str]] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
         """
         Generate an attestation document using NitroTPM attestation.
@@ -77,6 +98,8 @@ class AttestationGenerator:
             nonce: Optional nonce for inclusion in attestation
             public_key: Optional public key bytes to include in attestation document.
                         Only provided when generating for the /attest endpoint.
+            script_env: Optional dictionary of environment variables passed to the script.
+                        Used to compute script_env_hash for inclusion in user_data.
         
         Returns:
             Tuple of (AttestationDocument, None) on success or (None, AttestationError) on failure
@@ -109,6 +132,7 @@ class AttestationGenerator:
                     "repository_url": repository_url,
                     "commit_hash": commit_hash,
                     "script_path": script_path,
+                    "script_env_hash": self._compute_script_env_hash(script_env),
                     "timestamp": timestamp.isoformat(),
                 }
                 user_data_json = json.dumps(user_data)

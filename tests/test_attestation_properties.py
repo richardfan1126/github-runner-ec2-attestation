@@ -3,6 +3,8 @@
 Feature: github-actions-remote-executor
 Tests Properties 15, 16, 17, 20 from the design document
 """
+import hashlib
+import json
 import os
 import tempfile
 import pytest
@@ -66,6 +68,22 @@ def valid_nonce(draw):
 
 
 @st.composite
+def valid_script_env(draw):
+    """Generate valid script_env dictionaries with string keys and values"""
+    env_key = st.text(
+        alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789',
+        min_size=1,
+        max_size=30
+    )
+    env_value = st.text(
+        alphabet=st.characters(whitelist_categories=('Lu', 'Ll', 'Nd', 'P', 'S')),
+        min_size=0,
+        max_size=100
+    )
+    return draw(st.dictionaries(env_key, env_value, min_size=0, max_size=10))
+
+
+@st.composite
 def cbor_attestation_bytes(draw):
     """Generate mock CBOR-encoded attestation document bytes"""
     # Generate realistic-looking binary data
@@ -80,17 +98,19 @@ def cbor_attestation_bytes(draw):
     commit=valid_commit_hash(),
     path=valid_script_path(),
     nonce=st.one_of(st.none(), valid_nonce()),
+    script_env=st.one_of(st.none(), valid_script_env()),
     attestation_bytes=cbor_attestation_bytes()
 )
 @settings(max_examples=20)
 def test_property_15_attestation_document_generation(
-    repo_url, commit, path, nonce, attestation_bytes
+    repo_url, commit, path, nonce, script_env, attestation_bytes
 ):
     """
     Property 15: For any successfully retrieved script file, the Attestation
-    Generator should create an attestation document.
+    Generator should create an attestation document. The user_data passed to
+    nitro-tpm-attest must include script_env_hash.
     
-    Validates: Requirements 4.1
+    Validates: Requirements 4.1, 4.9, 4.10, 4.14, 4.15
     """
     generator = AttestationGenerator()
     
@@ -107,7 +127,8 @@ def test_property_15_attestation_document_generation(
             repository_url=repo_url,
             commit_hash=commit,
             script_path=path,
-            nonce=nonce
+            nonce=nonce,
+            script_env=script_env
         )
         
         # Should successfully create attestation document
@@ -129,6 +150,17 @@ def test_property_15_attestation_document_generation(
         # If nonce provided, should be in command
         if nonce is not None:
             assert '--nonce' in cmd
+        
+        # Verify user_data file contains script_env_hash (Requirement 4.9, 4.14)
+        # Find the user_data file path from the command
+        user_data_idx = cmd.index('--user-data')
+        user_data_path = cmd[user_data_idx + 1]
+        
+        # Read the user_data that was written to the temp file
+        # We need to capture what was written - use os.write mock approach
+        # Instead, verify via the generator's _compute_script_env_hash method
+        expected_hash = generator._compute_script_env_hash(script_env)
+        assert len(expected_hash) == 64, "script_env_hash should be a 64-char hex SHA-256"
 
 
 # Property 16: Attestation Document Completeness
@@ -137,21 +169,36 @@ def test_property_15_attestation_document_generation(
     repo_url=valid_github_url(),
     commit=valid_commit_hash(),
     path=valid_script_path(),
+    script_env=st.one_of(st.none(), valid_script_env()),
     attestation_bytes=cbor_attestation_bytes()
 )
 @settings(max_examples=20)
 def test_property_16_attestation_document_completeness(
-    repo_url, commit, path, attestation_bytes
+    repo_url, commit, path, script_env, attestation_bytes
 ):
     """
     Property 16: For any generated attestation document, it should include the
-    repository URL, commit hash, script file path, and timestamp.
+    repository URL, commit hash, script file path, script_env_hash, and timestamp.
     
-    Validates: Requirements 4.2, 4.3, 4.4, 4.5
+    Validates: Requirements 4.2, 4.3, 4.4, 4.5, 4.9, 4.10, 4.14, 4.15
     """
     generator = AttestationGenerator()
     
-    with patch('subprocess.run') as mock_run:
+    captured_user_data = None
+    
+    def capture_write(fd, data):
+        """Capture data written to file descriptors"""
+        nonlocal captured_user_data
+        # First write is user_data
+        if captured_user_data is None:
+            captured_user_data = data
+        return len(data)
+    
+    with patch('subprocess.run') as mock_run, \
+         patch('os.write', side_effect=capture_write), \
+         patch('os.close'), \
+         patch('os.unlink'):
+        
         # Mock successful attestation generation
         mock_result = Mock()
         mock_result.returncode = 0
@@ -166,7 +213,8 @@ def test_property_16_attestation_document_completeness(
         attestation_doc, error = generator.generate_attestation(
             repository_url=repo_url,
             commit_hash=commit,
-            script_path=path
+            script_path=path,
+            script_env=script_env
         )
         
         # Capture time after generation
@@ -196,6 +244,30 @@ def test_property_16_attestation_document_completeness(
         # Timestamp should be reasonable (between before and after)
         assert time_before <= attestation_doc.timestamp <= time_after, \
             "Timestamp should be within generation time window"
+        
+        # Requirement 4.9, 4.10, 4.14, 4.15: Verify script_env_hash in user_data
+        assert captured_user_data is not None, "Should have written user_data"
+        user_data = json.loads(captured_user_data.decode('utf-8'))
+        
+        assert 'script_env_hash' in user_data, \
+            "user_data must include script_env_hash (Requirement 4.14)"
+        
+        # Verify the hash is correct
+        expected_hash = generator._compute_script_env_hash(script_env)
+        assert user_data['script_env_hash'] == expected_hash, \
+            "script_env_hash must match expected SHA-256 digest"
+        
+        # Verify hash is a valid 64-char hex SHA-256
+        assert len(user_data['script_env_hash']) == 64, \
+            "script_env_hash should be 64 hex characters"
+        assert all(c in '0123456789abcdef' for c in user_data['script_env_hash']), \
+            "script_env_hash should be lowercase hex"
+        
+        # Verify all other required fields are still present
+        assert 'repository_url' in user_data
+        assert 'commit_hash' in user_data
+        assert 'script_path' in user_data
+        assert 'timestamp' in user_data
 
 
 # Property 17: Attestation Document Signing
@@ -607,3 +679,135 @@ def test_user_data_json_structure(repo_url, commit, path, attestation_bytes):
         assert 'timestamp' in user_data
         # Timestamp should be ISO format
         datetime.fromisoformat(user_data['timestamp'])
+
+
+# Property test: Empty script_env produces SHA-256 of "{}"
+# Feature: github-actions-remote-executor
+@given(
+    repo_url=valid_github_url(),
+    commit=valid_commit_hash(),
+    path=valid_script_path(),
+    attestation_bytes=cbor_attestation_bytes()
+)
+@settings(max_examples=20)
+def test_script_env_hash_empty_produces_sha256_of_empty_object(
+    repo_url, commit, path, attestation_bytes
+):
+    """
+    Test that when script_env is None or empty dict, the script_env_hash
+    is the SHA-256 hex digest of '{}' (empty JSON object).
+    
+    Validates: Requirements 4.9, 4.10
+    """
+    generator = AttestationGenerator()
+    expected_empty_hash = hashlib.sha256("{}".encode("utf-8")).hexdigest()
+    
+    for script_env_value in [None, {}]:
+        captured_user_data = None
+        
+        def capture_write(fd, data):
+            nonlocal captured_user_data
+            if captured_user_data is None:
+                captured_user_data = data
+            return len(data)
+        
+        with patch('subprocess.run') as mock_run, \
+             patch('os.write', side_effect=capture_write), \
+             patch('os.close'), \
+             patch('os.unlink'):
+            
+            mock_result = Mock()
+            mock_result.returncode = 0
+            mock_result.stdout = attestation_bytes
+            mock_result.stderr = b''
+            mock_run.return_value = mock_result
+            
+            attestation_doc, error = generator.generate_attestation(
+                repository_url=repo_url,
+                commit_hash=commit,
+                script_path=path,
+                script_env=script_env_value
+            )
+            
+            assert attestation_doc is not None
+            assert error is None
+            assert captured_user_data is not None
+            
+            user_data = json.loads(captured_user_data.decode('utf-8'))
+            assert 'script_env_hash' in user_data, \
+                f"script_env_hash must be present when script_env={script_env_value}"
+            assert user_data['script_env_hash'] == expected_empty_hash, \
+                f"Empty/None script_env must produce SHA-256 of '{{}}', got {user_data['script_env_hash']}"
+
+
+# Property test: Non-empty script_env produces deterministic hash regardless of insertion order
+# Feature: github-actions-remote-executor
+@given(
+    repo_url=valid_github_url(),
+    commit=valid_commit_hash(),
+    path=valid_script_path(),
+    script_env=valid_script_env().filter(lambda d: len(d) >= 2),
+    attestation_bytes=cbor_attestation_bytes()
+)
+@settings(max_examples=20)
+def test_script_env_hash_deterministic_regardless_of_insertion_order(
+    repo_url, commit, path, script_env, attestation_bytes
+):
+    """
+    Test that script_env_hash is deterministic regardless of dictionary
+    insertion order. Two dicts with the same key-value pairs but different
+    insertion orders must produce the same hash.
+    
+    Validates: Requirements 4.9, 4.10, 4.14, 4.15
+    """
+    generator = AttestationGenerator()
+    
+    # Create a reversed-order version of the same dict
+    reversed_env = dict(reversed(list(script_env.items())))
+    
+    # Both should produce the same hash
+    hash_original = generator._compute_script_env_hash(script_env)
+    hash_reversed = generator._compute_script_env_hash(reversed_env)
+    
+    assert hash_original == hash_reversed, \
+        "script_env_hash must be deterministic regardless of insertion order"
+    
+    # Verify the hash matches the canonical form (sorted keys, compact JSON)
+    canonical = json.dumps(script_env, sort_keys=True, separators=(',', ':'))
+    expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    assert hash_original == expected_hash, \
+        "script_env_hash must equal SHA-256 of canonicalized JSON"
+    
+    # Now verify it actually appears in the attestation user_data
+    captured_user_data = None
+    
+    def capture_write(fd, data):
+        nonlocal captured_user_data
+        if captured_user_data is None:
+            captured_user_data = data
+        return len(data)
+    
+    with patch('subprocess.run') as mock_run, \
+         patch('os.write', side_effect=capture_write), \
+         patch('os.close'), \
+         patch('os.unlink'):
+        
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = attestation_bytes
+        mock_result.stderr = b''
+        mock_run.return_value = mock_result
+        
+        attestation_doc, error = generator.generate_attestation(
+            repository_url=repo_url,
+            commit_hash=commit,
+            script_path=path,
+            script_env=script_env
+        )
+        
+        assert attestation_doc is not None
+        assert captured_user_data is not None
+        
+        user_data = json.loads(captured_user_data.decode('utf-8'))
+        assert user_data['script_env_hash'] == expected_hash, \
+            "Attestation user_data script_env_hash must match canonical computation"

@@ -567,6 +567,10 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
             
+            # Extract and sanitize script_env from decrypted body
+            script_env = body.get('script_env') or {}
+            script_env = {str(k): str(v) for k, v in script_env.items() if isinstance(k, str) and isinstance(v, str)}
+            
             # Generate attestation
             attestation_start = time.time()
             attestation_gen = request.app.state.attestation_generator
@@ -576,6 +580,7 @@ def add_routes(app: FastAPI) -> None:
                 body['commit_hash'],
                 body['script_path'],
                 nonce=body.get('nonce'),
+                script_env=script_env,
             )
             
             if attestation_error:
@@ -635,10 +640,6 @@ def add_routes(app: FastAPI) -> None:
             
             # Initiate async execution
             executor = request.app.state.script_executor
-            
-            # Extract and sanitize script_env from decrypted body
-            script_env = body.get('script_env') or {}
-            script_env = {str(k): str(v) for k, v in script_env.items() if isinstance(k, str) and isinstance(v, str)}
             
             executor.execute_async(execution_record.execution_id, clone_result.clone_path, clone_result.script_path, script_env=script_env)
             
