@@ -1,6 +1,6 @@
 # Security Review
 
-Date: 2026-04-21
+Date: 2026-05-09
 
 ## Findings
 
@@ -11,12 +11,14 @@ Date: 2026-04-21
 - The rate-limiting middleware applies to `/attest`, but the default `RATE_LIMIT_PER_IP=100` requests per 60 seconds is generous enough that a distributed attacker can still trigger significant TPM load before being blocked.
 - Impact: an internet client can repeatedly trigger expensive attestation work and degrade service availability even before reaching the authenticated execution flow.
 
-### 2. High: Container isolation relies on ambient Docker daemon defaults rather than a pinned hardened host configuration
+### 2. High: Docker daemon runs rootful; rootless mode should be required for untrusted build containers
 
 - `kiwi-descriptions/config.sh` enables the Docker daemon in the AMI.
-- There is no Docker `daemon.json`, user-namespace remap, custom seccomp profile, or SELinux/AppArmor policy under `kiwi-descriptions/root/etc`.
-- `src/script_executor.py` applies per-container flags (`read_only`, `network_mode="none"`, `no-new-privileges`, `cap_drop=["ALL"]`, `user="nobody"`), but host-level isolation behavior is otherwise whatever the distro Docker defaults are on the built AMI.
-- Impact: the safety of running untrusted code depends heavily on ambient daemon/kernel defaults that are not explicitly hardened or locked by this project.
+- `kiwi-descriptions/root/etc/docker/daemon.json` enables `userns-remap`, which reduces the impact of container root on the host, but the Docker daemon itself still runs as root and remains a high-value host-control boundary.
+- `kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service` grants the executor service access to `/var/run/docker.sock`; if the executor process is compromised, Docker API access is effectively host-level control.
+- `src/script_executor.py` does not mount the Docker socket into execution containers, does not use privileged mode, and mounts the cloned repository read-only, so there is no obvious direct container-to-Docker-socket escape path from the current container options.
+- Required hardening: run the Docker daemon in rootless mode, or document and attest why rootless Docker is not supported by the target AMI. Keep `userns-remap` or an equivalent rootless isolation boundary enabled.
+- Impact: the current setup relies on a rootful container engine to run untrusted build code. A Docker daemon compromise, container runtime vulnerability, or executor-process compromise has a larger host impact than it would under a rootless daemon.
 
 ### 3. Medium: Default deployment is a public HTTP service with a shared, non-instance-specific audience
 
@@ -47,65 +49,74 @@ Date: 2026-04-21
 
 ### 7. Medium: Execution container image is not digest-pinned by default
 
-- `kiwi-descriptions/root/etc/github-actions-remote-executor/env` sets `CONTAINER_IMAGE=python:3.11-slim` with no digest.
+- `kiwi-descriptions/root/etc/github-actions-remote-executor/env` sets `CONTAINER_IMAGE=ubuntu:24.04` with an empty `CONTAINER_IMAGE_DIGEST`.
 - `src/config.py` supports an optional `CONTAINER_IMAGE_DIGEST` environment variable, and `src/script_executor.py` verifies the digest when configured.
-- `CONTAINER_IMAGE_DIGEST` is not set in the default env file.
+- `CONTAINER_IMAGE_DIGEST` is not set in the default env file, and startup does not fail when the configured container image is tag-only.
+- Required hardening: enforce digest pinning for production by requiring either `CONTAINER_IMAGE` to use an `@sha256:` reference or `CONTAINER_IMAGE_DIGEST` to be non-empty.
 - Impact: upstream tag drift or registry compromise can silently change the code, packages, and isolation surface of the runtime container environment.
 
-### 8. Medium: The trusted build path depends on a mutable GitHub-hosted runner image and a floating AL2023 mirrorlist
+### 8. Medium: Script path must remain explicitly verifiable from the attestation document
+
+- `src/attestation.py` currently writes `script_path` into the NitroTPM attestation `user_data` alongside `repository_url`, `commit_hash`, and `timestamp`.
+- This binding is security-critical: consumers must be able to verify that the attested execution used the expected script path, not just the expected repository and commit.
+- Required hardening: document the attestation `user_data` schema, add regression tests that fail if `script_path` is removed or renamed, and require consumers to compare the attested `script_path` against the requested/expected script path.
+- Recommended extension: include a canonical digest of other execution-affecting inputs, especially `script_env`, because shell variables can alter what `bash /workspace/<script_path>` executes before the script body runs.
+- Impact: if script-path binding regresses or consumers do not validate it, a valid attestation for the same repo and commit may not prove that the intended build script was executed.
+
+### 9. Medium: The trusted build path depends on a mutable GitHub-hosted runner image and a floating AL2023 mirrorlist
 
 - `.github/workflows/build-attestable-image.yml` runs on `ubuntu-latest`, which is a moving GitHub-hosted runner image.
 - `kiwi-descriptions/appliance.kiwi` uses the AL2023 `latest` mirrorlist path.
 - `terraform/build-ami/data.tf` pins the build instance AMI to a specific name filter, which is an improvement, but the runner and mirrorlist remain floating.
 - Impact: reproducibility and provenance are weakened because materially different upstream build environments can be selected over time without any repo change.
 
-### 9. Low: The AMI build instance SSH private key is exported through Terraform outputs
+### 10. Low: The AMI build instance SSH private key is exported through Terraform outputs
 
 - `terraform/build-ami/ssh_key.tf` generates a new private key in Terraform.
 - `terraform/build-ami/outputs.tf` exposes that private key as the `ssh_private_key` output (marked sensitive but still present in state).
 - `scripts/build-ami.py` reads the private key from Terraform output, writes it to a temp file, and securely overwrites it before deletion after use.
 - Impact: the ephemeral build-instance credential is materialized in local Terraform state, increasing the blast radius of workstation or CI compromise during the AMI build flow.
 
-### 10. Low: `ExecutionManager._execution_durations` list grows unboundedly
+### 11. Low: `ExecutionManager._execution_durations` list grows unboundedly
 
 - `src/execution_manager.py` appends a float to `_execution_durations` for every completed execution.
 - `cleanup_expired()` removes execution records and their associated encryption contexts and output buffers, but does not trim `_execution_durations`.
 - Impact: in a long-running process with high execution volume, this list accumulates indefinitely, causing slow memory growth.
 
-### 11. Medium: JWKS cache has no TTL — stale or revoked signing keys remain trusted for the process lifetime
+### 12. Medium: JWKS cache has no TTL — stale or revoked signing keys remain trusted for the process lifetime
 
 - `src/validation.py` caches the GitHub OIDC JWKS response in `_jwks_cache` on first use.
 - The cache is only refreshed when a `kid` lookup misses; there is no time-based expiry.
 - If GitHub rotates or revokes a signing key, the server continues accepting tokens signed with the old key until the process restarts or a new `kid` triggers a refresh.
 - Impact: key rotation events are not reflected promptly. A revoked key remains trusted indefinitely in a long-running deployment.
 
-### 12. Medium: `RateLimiter._requests` dict grows unboundedly under distributed traffic
+### 13. Medium: `RateLimiter._requests` dict grows unboundedly under distributed traffic
 
 - `src/server.py` `RateLimiter` maps each source IP to a list of request timestamps.
 - Old timestamps are pruned per-IP only when that IP makes a subsequent request; IPs that never make a second request are never evicted from the dict.
 - A distributed attacker sending one request from each of many source IPs causes the dict to grow without bound.
 - Impact: slow memory exhaustion in a long-running service under distributed or spoofed-source traffic, exploitable by an external attacker without authentication.
 
-### 13. Medium: ORAS installed without checksum verification in the CI build workflow
+### 14. Medium: ORAS installed without checksum verification in the CI build workflow
 
 - `.github/workflows/build-attestable-image.yml` installs ORAS 1.1.0 with a bare `curl | tar` pipeline and no SHA-256 checksum verification.
 - This is inconsistent with `scripts/build-ami.py`, which verifies a hardcoded checksum before extracting ORAS 1.3.0.
 - The two paths also use different ORAS versions (1.1.0 vs 1.3.0).
 - Impact: a compromise of the GitHub releases CDN or a MITM during the CI run can substitute a malicious ORAS binary that tampers with or exfiltrates the artifact pushed to GHCR, undermining the entire provenance chain before any attestation step.
 
-### 14. Medium: `validate_script_path` does not reject absolute paths or null bytes
+### 15. Medium: `validate_script_path` does not reject absolute paths or null bytes
 
 - `src/validation.py` `validate_script_path()` checks for `../` and `..\\` traversal sequences but does not reject absolute paths (e.g., `/etc/passwd`) or null bytes (`\x00`).
 - `os.path.join(clone_path, script_path)` silently discards the clone prefix when `script_path` is absolute, so the size check in `server.py` reads the host file at the absolute path rather than a file inside the clone.
 - Impact: a caller supplying an absolute `script_path` bypasses the intent of the path validation. The script executor passes the path to Docker as `bash /workspace/<script_path>`, which is sandboxed, but the pre-execution `os.path.getsize` check runs on the host and will read arbitrary host files.
 
-### 15. Low: `terraform.tfstate` files are committed to the repository
+### 16. Low: `terraform.tfstate` files are committed to the repository
 
 - `terraform/deploy/terraform.tfstate`, `terraform/deploy/terraform.tfstate.backup`, `terraform/build-ami/terraform.tfstate`, and `terraform/build-ami/terraform.tfstate.backup` are present in the repository.
 - Terraform state files store resource metadata in plaintext, including the SSH private key from `terraform/build-ami/outputs.tf` (marked `sensitive` but stored unencrypted in state), AMI IDs, instance IDs, VPC/subnet IDs, and security group IDs.
 - Impact: anyone with read access to the repository or its git history can extract infrastructure topology and the ephemeral build-instance SSH credential. This is a concrete materialization of the blast-radius concern noted in Finding 9.
 
-### 16. Low: SSH host key not verified during AMI build — MITM risk on build connection
+### 17. Low: SSH host key not verified during AMI build — MITM risk on build connection
 
 - `scripts/build-ami.py` `verify_ssh_connectivity()` uses `paramiko.AutoAddPolicy()`, which silently accepts any host key on first connection.
 - An attacker who can intercept traffic between the build workstation and the EC2 instance can observe or modify commands executed on the build instance, including the artifact pull and AMI creation steps.
@@ -144,7 +155,9 @@ The following issues identified in the prior review have been remediated and ver
 - There are no tests asserting that branch/ref OIDC restrictions are enforced when `ALLOWED_BRANCHES` or `REQUIRE_PROTECTED_REF` are set.
 - There are no tests or deployment safeguards requiring TLS or an instance-specific OIDC audience.
 - There are no provenance checks that pin AMI conversion to a specific trusted workflow definition by default.
-- There are no tests constraining the container image to a digest-pinned reference.
+- There are no tests requiring the Docker daemon to run in rootless mode.
+- There are no tests constraining the container image to a digest-pinned reference or failing startup when digest pinning is absent.
+- There are no tests asserting that `script_path` remains present and consumer-verifiable in attestation `user_data`.
 - There are no tests for `RateLimiter` memory growth under high-cardinality source IPs.
 - There are no tests asserting that absolute `script_path` values are rejected by `validate_script_path`.
 - I did not inspect a live built AMI, so I could not verify the effective Docker seccomp profile, user-namespace behavior, or SELinux/AppArmor enforcement at runtime.
