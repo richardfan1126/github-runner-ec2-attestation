@@ -11,6 +11,6 @@
   },
   "then": {
     "type": "askAgent",
-    "prompt": "After writing this code, search official documentation (using web search or AWS docs tools) to verify the code that was just written follows correct syntax, design patterns, respects known limitations, and adheres to best practices. If any issues are found, suggest corrections."
+    "prompt": "Only proceed with this check if the file that was written has one of these extensions: .py, .ts, .tsx, .js, .jsx, .go, .rs, .java, .kt, .cs, .rb, .php, .swift, .tf, .hcl, .yaml, .yml (CloudFormation/K8s), .bicep, .pp, .sh, .bash, .zsh, .ps1, .dockerfile, Dockerfile. If the file is a markdown (.md), plain text (.txt), JSON (.json), TOML (.toml), .lock, .csv, .svg, .html, .css, or other non-logic config file, skip this check entirely. Otherwise, search official documentation (using web search or AWS docs tools) to verify the code that was just written follows correct syntax, design patterns, respects known limitations, and adheres to best practices. If any issues are found, suggest corrections."
   }
 }
