@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Check Docs Before Writing",
+  "description": "Before writing code, consults official documentation to verify syntax, design patterns, limitations, and best practices are correct.",
+  "version": "1",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": [
+      "write"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before writing this code, search official documentation (using web search or AWS docs tools) to verify the syntax, design patterns, limitations, and best practices relevant to the code being written. Confirm the approach is correct before proceeding."
+  }
+}

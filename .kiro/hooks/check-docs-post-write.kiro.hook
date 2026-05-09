@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Verify Docs After Writing",
+  "description": "After writing code, consults official documentation to verify the written code follows correct syntax, design patterns, limitations, and best practices.",
+  "version": "1",
+  "when": {
+    "type": "postToolUse",
+    "toolTypes": [
+      "write"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "After writing this code, search official documentation (using web search or AWS docs tools) to verify the code that was just written follows correct syntax, design patterns, respects known limitations, and adheres to best practices. If any issues are found, suggest corrections."
+  }
+}
