@@ -70,6 +70,14 @@ def test_systemd_service_hardening():
         "NoNewPrivileges must be set to true to prevent privilege escalation"
     )
 
+    # Requirement 48.6: Service must run as dedicated gha-executor user
+    assert service.get("User") == "gha-executor", (
+        "User must be set to gha-executor for rootless Docker"
+    )
+    assert service.get("Group") == "gha-executor", (
+        "Group must be set to gha-executor for rootless Docker"
+    )
+
     # Requirement 49.2: PrivateTmp must NOT be set to true
     private_tmp = service.get("PrivateTmp", "false").lower()
     assert private_tmp != "true", (
@@ -82,9 +90,12 @@ def test_systemd_service_hardening():
         "ProtectSystem must be set to strict"
     )
 
-    # Requirement 49.4: ProtectHome must be true
-    assert service.get("ProtectHome") == "true", (
-        "ProtectHome must be set to true"
+    # Requirement 49.4 / 48.6: ProtectHome must be read-only
+    # (changed from true to read-only because the service runs as gha-executor
+    # and needs to read ~gha-executor/.config/docker/daemon.json for rootless Docker)
+    assert service.get("ProtectHome") == "read-only", (
+        "ProtectHome must be set to read-only (service needs read access to "
+        "gha-executor home for rootless Docker config)"
     )
 
     # Requirement 49.5: RestrictAddressFamilies
@@ -95,12 +106,15 @@ def test_systemd_service_hardening():
         )
 
     # Requirement 49.6: ReadWritePaths includes only required directories
+    # Requirement 48.7: /var/run/docker.sock must NOT be in ReadWritePaths
+    # (rootless Docker uses /run/user/{uid}/docker.sock instead)
     rw_paths = service.get("ReadWritePaths", "")
     assert "/var/lib/gha-executor" in rw_paths, (
         "ReadWritePaths must include the TEMP_STORAGE_PATH (/var/lib/gha-executor)"
     )
-    assert "/var/run/docker.sock" in rw_paths, (
-        "ReadWritePaths must include the Docker socket path (/var/run/docker.sock)"
+    assert "/var/run/docker.sock" not in rw_paths, (
+        "ReadWritePaths must NOT include /var/run/docker.sock — rootless Docker "
+        "uses /run/user/{uid}/docker.sock instead"
     )
 
     # Requirement 49.7 & 49.8: env file TEMP_STORAGE_PATH

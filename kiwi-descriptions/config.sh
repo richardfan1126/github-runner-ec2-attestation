@@ -12,10 +12,87 @@ systemctl preset set-hostname-imds
 # Enable the GitHub Actions Remote Executor service
 systemctl enable github-actions-remote-executor.service
 
-# Enable the Docker daemon so containers can be managed at runtime
-echo "Enabling Docker service..."
-systemctl enable docker
-echo "✓ Docker service enabled"
+################################
+# Rootless Docker User Setup   #
+################################
+# Create a dedicated non-root service user for rootless Docker.
+# The gha-executor user runs the Remote Executor service and owns the
+# rootless Docker daemon. Its home directory is at /home/gha-executor
+# (writable via the tmpfs overlay on the read-only erofs root filesystem).
+echo "Creating gha-executor service user..."
+useradd -m -s /bin/bash gha-executor
+echo "✓ gha-executor user created"
+
+# Configure subordinate UID/GID ranges for rootless Docker user namespace mapping.
+# 65536 subordinate IDs are required for proper container user namespace isolation.
+# These mappings allow rootless Docker to create user namespaces for containers.
+echo "Configuring subordinate UID/GID mappings..."
+echo "gha-executor:100000:65536" >> /etc/subuid
+echo "gha-executor:100000:65536" >> /etc/subgid
+echo "✓ /etc/subuid and /etc/subgid configured with 65536 subordinate IDs"
+
+# Enable lingering for gha-executor so that the user's systemd instance
+# (and therefore the rootless Docker daemon) starts at boot and persists
+# without requiring an active login session.
+# During image build, systemd/logind is not running, so we create the linger
+# file directly (equivalent to `loginctl enable-linger gha-executor`).
+echo "Enabling loginctl linger for gha-executor..."
+mkdir -p /var/lib/systemd/linger
+touch /var/lib/systemd/linger/gha-executor
+echo "✓ loginctl linger enabled for gha-executor"
+
+# Set up rootless Docker for the gha-executor user.
+# During KIWI image build, systemd is not running, so we cannot use
+# `dockerd-rootless-setuptool.sh install` directly. Instead, we manually
+# install the rootless Docker systemd user service unit and enable it.
+# This is equivalent to what dockerd-rootless-setuptool.sh would create.
+echo "Installing rootless Docker systemd user service for gha-executor..."
+
+# Create the systemd user service directory for gha-executor
+GHA_USER_HOME="/home/gha-executor"
+mkdir -p "${GHA_USER_HOME}/.config/systemd/user"
+
+# Create the rootless Docker systemd user service unit.
+# This service runs dockerd-rootless.sh which wraps dockerd with rootlesskit
+# for user namespace isolation, networking (slirp4netns), and storage (fuse-overlayfs).
+cat > "${GHA_USER_HOME}/.config/systemd/user/docker.service" << 'DOCKER_SERVICE'
+[Unit]
+Description=Docker Application Container Engine (Rootless)
+Documentation=https://docs.docker.com/go/rootless/
+
+[Service]
+Environment=PATH=/usr/bin:/sbin:/usr/sbin:/usr/local/bin
+ExecStart=/usr/bin/dockerd-rootless.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutSec=0
+RestartSec=2
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+Type=notify
+NotifyAccess=all
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
+DOCKER_SERVICE
+
+# Enable the rootless Docker user service by creating the symlink.
+# This ensures the service starts automatically when the user's systemd
+# instance starts (which happens at boot due to lingering).
+mkdir -p "${GHA_USER_HOME}/.config/systemd/user/default.target.wants"
+ln -sf "${GHA_USER_HOME}/.config/systemd/user/docker.service" \
+    "${GHA_USER_HOME}/.config/systemd/user/default.target.wants/docker.service"
+
+# Ensure correct ownership of all files created for gha-executor
+chown -R gha-executor:gha-executor "${GHA_USER_HOME}/.config"
+
+echo "✓ Rootless Docker systemd user service installed and enabled"
 
 ################################
 # Conditional sshd Enablement  #

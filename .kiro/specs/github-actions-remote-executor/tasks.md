@@ -3154,13 +3154,13 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Run the full test suite after task 141 changes to verify cap_add does not break existing tests
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 174. Migrate to rootless Docker
-  - [ ] 174.1 Add rootless Docker packages to appliance.kiwi
+- [x] 174. Migrate to rootless Docker
+  - [x] 174.1 Add rootless Docker packages to appliance.kiwi
     - Add `uidmap`, `rootlesskit`, `slirp4netns`, `fuse-overlayfs` packages to the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
     - These packages are required for rootless Docker operation (user namespace mapping, networking, and overlay filesystem)
     - _Requirements: 33.1, 33.4, 48.1_
 
-  - [ ] 174.2 Update config.sh for rootless Docker user setup
+  - [x] 174.2 Update config.sh for rootless Docker user setup
     - Create `gha-executor` user in `kiwi-descriptions/config.sh`
     - Configure `/etc/subuid` and `/etc/subgid` with 65536 subordinate UIDs/GIDs for `gha-executor`
     - Set up rootless Docker for `gha-executor` user (install rootless Docker scripts)
@@ -3168,39 +3168,39 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Replace `systemctl enable docker` with rootless Docker user-scoped systemd enablement
     - _Requirements: 33.2, 33.3, 48.1, 48.2_
 
-  - [ ] 174.3 Move daemon.json to rootless Docker location
+  - [x] 174.3 Move daemon.json to rootless Docker location
     - Move `kiwi-descriptions/root/etc/docker/daemon.json` to `kiwi-descriptions/root/home/gha-executor/.config/docker/daemon.json`
     - Remove the `userns-remap` setting from daemon.json (rootless Docker already runs in a user namespace)
     - Retain `no-new-privileges: true` and `live-restore: false` settings
     - Ensure correct file ownership (gha-executor:gha-executor) is set in config.sh
     - _Requirements: 48.1, 48.2, 48.3, 48.4_
 
-  - [ ] 174.4 Update systemd service unit for rootless Docker
+  - [x] 174.4 Update systemd service unit for rootless Docker
     - In `kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service`:
       - Add `User=gha-executor` and `Group=gha-executor`
       - Change `ProtectHome=true` to `ProtectHome=read-only` (service needs to read gha-executor's home for Docker socket)
       - Remove `/var/run/docker.sock` from `ReadWritePaths` (rootless Docker uses `/run/user/{uid}/docker.sock`)
     - _Requirements: 48.1, 49.1, 49.2_
 
-  - [ ] 174.5 Update src/script_executor.py for rootless Docker socket
+  - [x] 174.5 Update src/script_executor.py for rootless Docker socket
     - Change Docker client connection from `/var/run/docker.sock` to `/run/user/{uid}/docker.sock` where `{uid}` is the UID of the `gha-executor` user
     - Use `os.getuid()` to determine the current user's UID for socket path construction
     - Update `base_url` parameter in `docker.DockerClient` initialization
     - _Requirements: 33.2, 48.1_
 
-  - [ ] 174.6 Update src/main.py Docker client initialization for rootless socket
+  - [x] 174.6 Update src/main.py Docker client initialization for rootless socket
     - Update any Docker client initialization in `src/main.py` to use the rootless Docker socket path (`/run/user/{uid}/docker.sock`)
     - Ensure the Docker health check in startup also uses the rootless socket
     - _Requirements: 33.2, 48.1_
 
-  - [ ] 174.7 Update property tests for rootless Docker
+  - [x] 174.7 Update property tests for rootless Docker
     - Update **Property 116: Docker Package Inclusion in KIWI Image** to also verify `uidmap`, `rootlesskit`, `slirp4netns`, `fuse-overlayfs` packages are present
     - Update **Property 117: Docker Service Enablement** to verify rootless Docker user-scoped enablement instead of `systemctl enable docker`
     - Update **Property 164: Docker Daemon Security Configuration** to verify daemon.json at `~gha-executor/.config/docker/daemon.json` and absence of `userns-remap`
     - Update **Property 165: Systemd Service Hardening** to verify `User=gha-executor`, `Group=gha-executor`, `ProtectHome=read-only`, and absence of `/var/run/docker.sock` in ReadWritePaths
     - **Validates: Requirements 33.1, 33.2, 33.3, 48.1, 48.2, 48.3, 48.4, 49.1, 49.2**
 
-  - [ ] 174.8 Update unit tests for rootless Docker socket connection
+  - [x] 174.8 Update unit tests for rootless Docker socket connection
     - Update tests in `tests/test_script_executor.py` and `tests/test_docker_executor_unit.py` to expect rootless Docker socket path
     - Update any mocks that reference `/var/run/docker.sock` to use `/run/user/{uid}/docker.sock`
     - Test that Docker client is initialized with the correct rootless socket base_url

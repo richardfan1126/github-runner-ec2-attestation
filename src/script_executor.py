@@ -24,12 +24,15 @@ logger = logging.getLogger(__name__)
 CONTAINER_NAME_PREFIX = "gare-exec-"
 
 
+_UNSET = object()  # Sentinel to distinguish "not provided" from explicit None
+
+
 class ScriptExecutor:
     """Executes scripts asynchronously inside ephemeral Docker containers"""
 
     def __init__(
         self,
-        docker_client: "docker.DockerClient | None" = None,
+        docker_client: "docker.DockerClient | None" = _UNSET,
         container_image: str = "",
         memory_limit: str = "512m",
         cpu_limit: float = 1.0,
@@ -43,7 +46,9 @@ class ScriptExecutor:
         Initialize script executor with Docker SDK.
 
         Args:
-            docker_client: Docker SDK client instance (None if Docker unavailable)
+            docker_client: Docker SDK client instance. If not provided, creates a client
+                connecting to the rootless Docker socket at /run/user/{uid}/docker.sock.
+                Pass None explicitly to indicate Docker is unavailable.
             container_image: Docker image name for Execution_Containers
             memory_limit: Docker memory constraint (e.g. '512m')
             cpu_limit: Docker CPU constraint (e.g. 1.0 for one CPU)
@@ -53,6 +58,11 @@ class ScriptExecutor:
             temp_storage_path: Base path for temporary file storage
             container_image_digest: Optional SHA-256 digest to verify pulled image against
         """
+        if docker_client is _UNSET:
+            uid = os.getuid()
+            docker_client = docker.DockerClient(
+                base_url=f"unix:///run/user/{uid}/docker.sock"
+            )
         self._docker_client = docker_client
         self._container_image = container_image
         self._memory_limit = memory_limit

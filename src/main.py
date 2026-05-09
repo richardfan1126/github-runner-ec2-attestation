@@ -73,25 +73,30 @@ def main() -> int:
         else:
             logger.info("NitroTPM device verified and available")
         
-        # Initialize Docker client and verify daemon accessibility
+        # Initialize Docker client using rootless Docker socket
         logger.info("Initializing Docker client...")
+        uid = os.getuid()
+        rootless_socket = f"unix:///run/user/{uid}/docker.sock"
+        logger.info(f"Using rootless Docker socket: {rootless_socket}")
         try:
-            docker_client = docker.from_env()
+            docker_client = docker.DockerClient(base_url=rootless_socket)
         except docker.errors.DockerException as e:
             logger.error(f"Failed to create Docker client: {e}")
             raise ConfigurationError(
-                "Docker daemon is not accessible. Ensure Docker is installed and running."
+                f"Docker daemon is not accessible at {rootless_socket}. "
+                "Ensure rootless Docker is installed and running for the service user."
             )
         
-        # Verify Docker daemon is accessible
+        # Verify Docker daemon is accessible via rootless socket
         logger.info("Verifying Docker daemon accessibility...")
         try:
             docker_client.ping()
             logger.info("Docker daemon verified and accessible")
         except docker.errors.APIError as e:
-            logger.error(f"Docker daemon is not responding: {e}")
+            logger.error(f"Docker daemon is not responding at {rootless_socket}: {e}")
             raise ConfigurationError(
-                "Docker daemon is not responding. Ensure Docker is running and accessible."
+                f"Docker daemon is not responding at {rootless_socket}. "
+                "Ensure rootless Docker is running for the service user."
             )
         
         # Clean up any dangling execution containers from previous runs

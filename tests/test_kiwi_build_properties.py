@@ -348,11 +348,13 @@ def test_docker_package_inclusion_in_kiwi_image():
     """
     Property 116: Docker Package Inclusion in KIWI Image
 
-    The docker package must be listed in the <packages type="image"> section
-    of kiwi-descriptions/appliance.kiwi so the Docker daemon is available
-    at runtime for managing Execution_Containers.
+    The docker package and all rootless Docker dependencies (uidmap,
+    rootlesskit, slirp4netns, fuse-overlayfs) must be listed in the
+    <packages type="image"> section of kiwi-descriptions/appliance.kiwi
+    so the rootless Docker daemon is available at runtime for managing
+    Execution_Containers.
 
-    **Validates: Requirements 33.1**
+    **Validates: Requirements 33.1, 33.2**
     """
     import xml.etree.ElementTree as ET
 
@@ -376,27 +378,58 @@ def test_docker_package_inclusion_in_kiwi_image():
         pkg.get("name") for pkg in image_packages.findall("package")
     ]
 
+    # Requirement 33.1: docker package must be present
     assert "docker" in package_names, (
         "docker package must be listed in <packages type='image'> section"
     )
+
+    # Requirement 33.2: rootless Docker dependencies must be present
+    rootless_deps = ["uidmap", "rootlesskit", "slirp4netns", "fuse-overlayfs"]
+    for dep in rootless_deps:
+        assert dep in package_names, (
+            f"{dep} package must be listed in <packages type='image'> section "
+            f"for rootless Docker support"
+        )
 
 
 def test_docker_service_enablement():
     """
     Property 117: Docker Service Enablement
 
-    The config.sh script must contain 'systemctl enable docker' so the
-    Docker daemon starts automatically at boot.
+    The config.sh script must configure rootless Docker for the gha-executor
+    user via a systemd user service, rather than enabling the system-wide
+    Docker daemon via 'systemctl enable docker'.
 
-    **Validates: Requirements 33.2**
+    **Validates: Requirements 33.2, 33.3**
     """
     config_path = Path("kiwi-descriptions/config.sh")
     assert config_path.exists(), "config.sh must exist"
 
     content = config_path.read_text()
 
-    assert "systemctl enable docker" in content, (
-        "config.sh must enable the docker service via systemctl"
+    # Requirement 33.3: Must NOT enable the system-wide Docker daemon
+    assert "systemctl enable docker" not in content, (
+        "config.sh must NOT enable the system-wide docker service — "
+        "rootless Docker uses a user-scoped systemd service instead"
+    )
+
+    # Requirement 33.2: Must set up rootless Docker user service
+    # Verify the user service unit is created
+    assert ".config/systemd/user/docker.service" in content, (
+        "config.sh must create a rootless Docker systemd user service unit "
+        "at ~/.config/systemd/user/docker.service"
+    )
+
+    # Verify the service is enabled via symlink to default.target.wants
+    assert "default.target.wants/docker.service" in content, (
+        "config.sh must enable the rootless Docker user service by symlinking "
+        "to default.target.wants"
+    )
+
+    # Verify loginctl linger is configured for the service user
+    assert "linger/gha-executor" in content, (
+        "config.sh must enable loginctl linger for gha-executor so the "
+        "rootless Docker daemon persists without an active login session"
     )
 
 

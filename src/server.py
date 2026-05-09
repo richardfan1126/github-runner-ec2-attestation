@@ -138,7 +138,7 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     
     Args:
         config: Server configuration
-        docker_client: Optional pre-initialized Docker client. If None, creates one via docker.from_env().
+        docker_client: Optional pre-initialized Docker client. If None, creates one using the rootless Docker socket.
         encryption_manager: Optional pre-initialized EncryptionManager instance.
     
     Returns:
@@ -187,7 +187,10 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     # Initialize Docker client if not provided
     if docker_client is None:
         try:
-            docker_client = docker_lib.from_env()
+            uid = os.getuid()
+            docker_client = docker_lib.DockerClient(
+                base_url=f"unix:///run/user/{uid}/docker.sock"
+            )
         except docker_lib.errors.DockerException:
             logger.warning("Docker daemon not available; ScriptExecutor will not function")
             docker_client = None

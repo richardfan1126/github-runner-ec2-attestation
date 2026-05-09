@@ -253,7 +253,7 @@ def test_startup_raises_configuration_error_on_pull_failure(
 
     # Docker client mock
     mock_docker_client = MagicMock()
-    mock_docker_mod.from_env.return_value = mock_docker_client
+    mock_docker_mod.DockerClient.return_value = mock_docker_client
 
     # Attestation generator mock
     mock_attest_gen_cls.return_value.verify_tpm_available.return_value = True

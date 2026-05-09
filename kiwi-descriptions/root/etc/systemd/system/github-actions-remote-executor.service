@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=gha-executor
+Group=gha-executor
 EnvironmentFile=/etc/github-actions-remote-executor/env
 ExecStart=/usr/local/bin/github-actions-remote-executor
 Restart=always
@@ -16,11 +18,11 @@ SyslogIdentifier=github-actions-remote-executor
 # Security settings
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 StateDirectory=gha-executor
 LogsDirectory=github-actions-executor
-ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/docker.sock /tmp
+ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /tmp
 
 [Install]
 WantedBy=multi-user.target
