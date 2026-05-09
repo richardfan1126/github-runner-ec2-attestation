@@ -3209,31 +3209,31 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 175. Checkpoint - Ensure rootless Docker migration tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 176. Enforce mandatory container image digest pinning
-  - [ ] 176.1 Update src/config.py to make container_image_digest required
+- [x] 176. Enforce mandatory container image digest pinning
+  - [x] 176.1 Update src/config.py to make container_image_digest required
     - Change `container_image_digest` from optional (default None) to required validation
     - At startup, if `CONTAINER_IMAGE_DIGEST` is empty AND `CONTAINER_IMAGE` does not contain `@sha256:`, raise a configuration error and fail startup
     - If `CONTAINER_IMAGE` contains `@sha256:`, extract the digest from the image reference as the effective digest
     - _Requirements: 34.7, 34.8_
 
-  - [ ] 176.2 Update src/script_executor.py pull_container_image for mandatory digest
+  - [x] 176.2 Update src/script_executor.py pull_container_image for mandatory digest
     - Remove the "skip if no digest" code path — digest verification is now always performed
     - Always verify the pulled image digest matches the configured/extracted digest
     - Fail startup with a clear error if digest mismatch occurs
     - _Requirements: 34.8, 34.9, 34.10_
 
-  - [ ] 176.3 Update .env.example and KIWI env file comments for mandatory digest
+  - [x] 176.3 Update .env.example and KIWI env file comments for mandatory digest
     - Update the `CONTAINER_IMAGE_DIGEST` comment in `.env.example` to indicate it is REQUIRED (not optional)
     - Update comment to: "REQUIRED: SHA-256 digest for container image verification (e.g., sha256:abc123...). Server will fail to start if this is empty and CONTAINER_IMAGE does not contain @sha256:."
     - Apply same comment update to `kiwi-descriptions/root/etc/github-actions-remote-executor/env`
     - _Requirements: 34.7, 34.8_
 
-  - [ ] 176.4 Update property test for mandatory digest
+  - [x] 176.4 Update property test for mandatory digest
     - Update **Property 156: Container Image Digest Verification** to verify that startup FAILS when digest is empty and container_image lacks `@sha256:`
     - Remove any test assertions that treat empty digest as a valid/skip scenario
     - **Validates: Requirements 34.7, 34.8, 34.9, 34.10**
 
-  - [ ] 176.5 Write unit tests for startup failure when digest missing
+  - [x] 176.5 Write unit tests for startup failure when digest missing
     - Test that server startup raises an error when CONTAINER_IMAGE_DIGEST is empty and CONTAINER_IMAGE is a tag-only reference
     - Test that server startup succeeds when CONTAINER_IMAGE contains `@sha256:` even if CONTAINER_IMAGE_DIGEST is empty
     - Test that server startup succeeds when CONTAINER_IMAGE_DIGEST is explicitly set

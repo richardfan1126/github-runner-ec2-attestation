@@ -240,6 +240,20 @@ class ServerConfig:
                 f"Invalid nonce_cache_ttl_seconds: {self.nonce_cache_ttl_seconds} (must be >= 1)"
             )
         
+        # Container image digest validation (Requirements 34.7, 34.8)
+        # If digest is not explicitly set, try to extract from image reference
+        if self.container_image_digest is None and self.container_image and "@sha256:" in self.container_image:
+            # Extract digest from image reference (e.g., "ubuntu:24.04@sha256:abc123..." -> "sha256:abc123...")
+            digest_part = self.container_image.split("@sha256:", 1)[1]
+            self.container_image_digest = f"sha256:{digest_part}"
+        
+        # After potential extraction, digest must be set
+        if self.container_image_digest is None:
+            errors.append(
+                "container_image_digest is required: set CONTAINER_IMAGE_DIGEST or use a "
+                "digest-pinned image reference (e.g., image@sha256:...)"
+            )
+        
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")
 

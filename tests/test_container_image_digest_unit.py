@@ -102,11 +102,11 @@ def test_mismatched_digest_raises_error():
 
 
 # ---------------------------------------------------------------------------
-# No digest configured → skip verification, pull succeeds
+# No digest configured → startup fails (Requirements 34.7, 34.8)
 # ---------------------------------------------------------------------------
 
-def test_no_digest_configured_skips_verification():
-    """When no digest is configured, pull succeeds regardless of image digest."""
+def test_no_digest_configured_raises_error():
+    """When no digest is configured and image has no @sha256:, pull raises RuntimeError."""
     mock_client = MagicMock()
     mock_image = _mock_image(HEX_A, "myorg/myimage")
 
@@ -117,7 +117,9 @@ def test_no_digest_configured_skips_verification():
     mock_client.images.pull.return_value = mock_image
 
     executor = _make_executor(mock_client, digest=None)
-    executor.pull_container_image()  # Should not raise
+    
+    with pytest.raises(RuntimeError, match="no digest configured"):
+        executor.pull_container_image()
 
 
 # ---------------------------------------------------------------------------
@@ -198,3 +200,59 @@ def test_fallback_to_image_id_when_no_repo_digests():
 
     executor = _make_executor(mock_client, digest=DIGEST_A)
     executor.pull_container_image()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for mandatory digest pinning (Task 176.5)
+# ---------------------------------------------------------------------------
+
+def test_startup_succeeds_with_digest_pinned_image_reference():
+    """Server startup succeeds when CONTAINER_IMAGE contains @sha256: even if CONTAINER_IMAGE_DIGEST is empty."""
+    pinned_ref = f"myorg/myimage@sha256:{HEX_A}"
+    mock_client = MagicMock()
+    mock_image = _mock_image(HEX_A, "myorg/myimage")
+
+    mock_client.images.get.side_effect = [
+        docker.errors.ImageNotFound("not found"),
+        mock_image,
+    ]
+    mock_client.images.pull.return_value = mock_image
+
+    # No explicit digest config, but image reference has @sha256:
+    executor = _make_executor(mock_client, image=pinned_ref, digest=None)
+    executor.pull_container_image()  # Should not raise
+
+
+def test_startup_succeeds_with_explicit_digest():
+    """Server startup succeeds when CONTAINER_IMAGE_DIGEST is explicitly set."""
+    mock_client = MagicMock()
+    mock_image = _mock_image(HEX_A, "myorg/myimage")
+
+    mock_client.images.get.side_effect = [
+        docker.errors.ImageNotFound("not found"),
+        mock_image,
+    ]
+    mock_client.images.pull.return_value = mock_image
+
+    executor = _make_executor(mock_client, image="myorg/myimage:latest", digest=DIGEST_A)
+    executor.pull_container_image()  # Should not raise
+
+
+def test_pull_always_verifies_digest_no_skip_path():
+    """Verify that pull_container_image always verifies digest (no skip path exists)."""
+    mock_client = MagicMock()
+    mock_image = _mock_image(HEX_A, "myorg/myimage")
+
+    mock_client.images.get.side_effect = [
+        docker.errors.ImageNotFound("not found"),
+        mock_image,
+    ]
+    mock_client.images.pull.return_value = mock_image
+
+    # Even with digest=None and no @sha256: in image, verification is attempted
+    executor = _make_executor(mock_client, image="myorg/myimage:latest", digest=None)
+    
+    with pytest.raises(RuntimeError, match="no digest configured"):
+        executor.pull_container_image()
+    
+    # This confirms there's no code path that skips verification

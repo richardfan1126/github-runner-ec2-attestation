@@ -113,16 +113,17 @@ def test_digest_mismatch_raises_error(
 
 @given(digest_hex=sha256_hex_st, image_name=image_name_st)
 @settings(max_examples=50)
-def test_no_digest_configured_skips_verification(
+def test_no_digest_configured_raises_error(
     digest_hex: str, image_name: str
 ):
     """
     Property 156: Container Image Digest Verification — no digest configured
 
-    When no CONTAINER_IMAGE_DIGEST is configured (None), pull_container_image
-    should succeed regardless of the image's actual digest.
+    When no CONTAINER_IMAGE_DIGEST is configured (None) and the image reference
+    does not contain @sha256:, pull_container_image should raise RuntimeError
+    because digest verification is now mandatory.
 
-    **Validates: Requirements 34.7**
+    **Validates: Requirements 34.7, 34.8**
     """
     mock_image = _make_mock_image(digest_hex, image_name)
 
@@ -139,8 +140,9 @@ def test_no_digest_configured_skips_verification(
         container_image_digest=None,
     )
 
-    # Should not raise
-    executor.pull_container_image()
+    # Should raise because digest is mandatory
+    with pytest.raises(RuntimeError, match="no digest configured"):
+        executor.pull_container_image()
 
 
 @given(digest_hex=sha256_hex_st, image_name=image_name_st)

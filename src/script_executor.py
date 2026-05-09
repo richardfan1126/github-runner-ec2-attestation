@@ -520,13 +520,17 @@ class ScriptExecutor:
 
         Determines the expected digest from either the CONTAINER_IMAGE_DIGEST
         config or from a digest-pinned image reference (image@sha256:...).
+        
+        Digest verification is now mandatory - the server will not start if
+        no digest is configured (Requirements 34.7, 34.8).
 
         Args:
             image: Docker image object
             image_name: The image reference string
 
         Raises:
-            RuntimeError: If the digest does not match the expected value.
+            RuntimeError: If the digest does not match the expected value or
+                if no digest information is available.
         """
         # Determine expected digest: from config or from digest-pinned reference
         expected_digest = self._container_image_digest
@@ -535,8 +539,12 @@ class ScriptExecutor:
             if expected_digest:
                 expected_digest = f"sha256:{expected_digest}"
 
+        # Digest must be set by this point (enforced by config validation)
         if expected_digest is None:
-            return
+            raise RuntimeError(
+                f"Cannot verify digest for container image '{image_name}': "
+                f"no digest configured (this should have been caught during config validation)"
+            )
 
         # Extract actual digest from image RepoDigests
         actual_digest = None
