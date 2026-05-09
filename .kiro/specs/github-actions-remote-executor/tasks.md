@@ -3155,7 +3155,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 174. Migrate to rootless Docker
-  - [x] 174.1 Add rootless Docker packages to appliance.kiwi
+  - [x] 174.1 ~~Add rootless Docker packages to appliance.kiwi~~ (OBSOLETE — `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` are not available in AL2023 core repos and cannot be installed as DNF packages; they must be compiled from source per task 180. Only `uidmap` remains as a DNF package.)
     - Add `uidmap`, `rootlesskit`, `slirp4netns`, `fuse-overlayfs` packages to the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
     - These packages are required for rootless Docker operation (user namespace mapping, networking, and overlay filesystem)
     - _Requirements: 33.1, 33.4, 48.1_
@@ -3193,7 +3193,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Ensure the Docker health check in startup also uses the rootless socket
     - _Requirements: 33.2, 48.1_
 
-  - [x] 174.7 Update property tests for rootless Docker
+  - [x] 174.7 ~~Update property tests for rootless Docker~~ (OBSOLETE — Property 116 now verifies that `rootlesskit`, `slirp4netns`, `fuse-overlayfs` are NOT listed as DNF packages and are instead compiled from source; see task 180.5 for the corrected property test)
     - Update **Property 116: Docker Package Inclusion in KIWI Image** to also verify `uidmap`, `rootlesskit`, `slirp4netns`, `fuse-overlayfs` packages are present
     - Update **Property 117: Docker Service Enablement** to verify rootless Docker user-scoped enablement instead of `systemctl enable docker`
     - Update **Property 164: Docker Daemon Security Configuration** to verify daemon.json at `~gha-executor/.config/docker/daemon.json` and absence of `userns-remap`
@@ -3278,6 +3278,53 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Validates: Requirements 4.9, 4.10, 4.14, 4.15**
 
 - [x] 179. Final checkpoint - Ensure all new requirement tasks pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 180. Build rootless Docker dependencies from source
+  - [ ] 180.1 Update Dockerfile.kiwi-builder with Go toolchain and dev libraries
+    - Add `golang` package to the `dnf install` list in `.github/docker/Dockerfile.kiwi-builder` (required for compiling rootlesskit)
+    - Add `glib2-devel`, `libslirp-devel`, `libcap-devel`, `libseccomp-devel`, `fuse3-devel` to the `dnf install` list (required for compiling slirp4netns and fuse-overlayfs)
+    - Add a comment documenting that these are build-time dependencies for rootless Docker tools compiled from source
+    - _Requirements: 11.14, 53.1, 53.2, 53.3, 53.4_
+
+  - [ ] 180.2 Update appliance.kiwi package list
+    - Remove `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` from the `<packages type="image">` section (they are not available in AL2023 core repos)
+    - Retain `uidmap` (available in AL2023 core repos)
+    - Add runtime library dependencies: `fuse3`, `libseccomp`, `libslirp`, `glib2`, `libcap`
+    - _Requirements: 33.2, 33.11, 33.12, 53.15, 53.16, 53.17_
+
+  - [ ] 180.3 Add source compilation section to build-kiwi-image.sh
+    - After the wolfcrypt wheel build section and before the KIWI Docker build step, add a new section that runs inside the KIWI builder Docker container to compile rootless Docker dependencies:
+    - **rootlesskit** (Go): Clone https://github.com/rootless-containers/rootlesskit at a pinned tag (e.g., `v2.3.1`), build with `go build -o /output/rootlesskit ./cmd/rootlesskit` and `go build -o /output/rootlesskit-docker-proxy ./cmd/rootlesskit-docker-proxy`
+    - **slirp4netns** (C/autotools): Clone https://github.com/rootless-containers/slirp4netns at a pinned tag (e.g., `v1.3.3`), build with `./autogen.sh && ./configure --prefix=/usr && make`
+    - **fuse-overlayfs** (Rust): Clone https://github.com/containers/fuse-overlayfs at a pinned tag (e.g., `v1.14`), build with `cargo build --release`
+    - Copy compiled binaries into `${TEMP_IMAGE_DIR}/root/usr/local/bin/`
+    - If any compilation fails, exit with `::error::` and non-zero exit code
+    - Add comments documenting each pinned version and how to update
+    - _Requirements: 53.5, 53.6, 53.7, 53.8, 53.9, 53.10, 53.11, 53.12, 53.13, 53.14_
+
+  - [ ] 180.4 Add binary verification to config.sh
+    - In `kiwi-descriptions/config.sh`, after the rootless Docker user setup section and before the Python dependency installation section, add verification that `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries exist and are executable at `/usr/local/bin/`
+    - If any binary is missing or not executable, exit with a descriptive error
+    - _Requirements: 53.18, 53.19_
+
+  - [ ] 180.5 Update property tests for source-compiled rootless Docker binaries
+    - Update **Property 116: Docker Package Inclusion in KIWI Image** to verify:
+      - `docker` and `uidmap` ARE listed as DNF packages in appliance.kiwi
+      - `rootlesskit`, `slirp4netns`, `fuse-overlayfs` are NOT listed as DNF packages
+      - Runtime library deps (`fuse3`, `libseccomp`, `libslirp`, `glib2`, `libcap`) ARE listed
+    - Add new property test verifying `build-kiwi-image.sh` contains compilation steps for all three tools at pinned versions
+    - Add new property test verifying `config.sh` contains binary existence checks for all three tools at `/usr/local/bin/`
+    - **Validates: Requirements 33.1, 33.2, 33.11, 33.12, 53.9, 53.14, 53.15, 53.16, 53.17, 53.18, 53.19**
+
+  - [ ] 180.6 Write unit tests for rootless Docker source compilation
+    - Test that build-kiwi-image.sh contains `git clone` commands for rootlesskit, slirp4netns, and fuse-overlayfs at pinned tags
+    - Test that build-kiwi-image.sh contains appropriate build commands (`go build`, `./autogen.sh && ./configure && make`, `cargo build --release`)
+    - Test that build-kiwi-image.sh copies binaries to the KIWI image overlay at `/usr/local/bin/`
+    - Test that Dockerfile.kiwi-builder includes `golang`, `glib2-devel`, `libslirp-devel`, `libcap-devel`, `libseccomp-devel`, `fuse3-devel`
+    - _Requirements: 53.1, 53.2, 53.3, 53.5, 53.6, 53.7, 53.8, 53.9_
+
+- [ ] 181. Checkpoint - Ensure rootless Docker source compilation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

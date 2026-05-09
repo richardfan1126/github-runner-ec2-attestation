@@ -1595,7 +1595,7 @@ class EncryptionContext:
 
 ### Property 164: Docker Daemon Security Configuration
 
-*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true and `live-restore` set to false. The rootless Docker daemon should run under the `gha-executor` service user with uidmap, rootlesskit, slirp4netns, and fuse-overlayfs packages installed, `/etc/subuid` and `/etc/subgid` configured with 65536 subordinate UIDs/GIDs, and `loginctl enable-linger` enabled.
+*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true and `live-restore` set to false. The rootless Docker daemon should run under the `gha-executor` service user with uidmap installed from AL2023 repos and rootlesskit, slirp4netns, and fuse-overlayfs compiled from source and installed at `/usr/local/bin/`, `/etc/subuid` and `/etc/subgid` configured with 65536 subordinate UIDs/GIDs, and `loginctl enable-linger` enabled.
 
 **Validates: Requirements 48.1, 48.2, 48.3, 48.4**
 
@@ -1778,7 +1778,7 @@ class NonceCache:
 
 The KIWI image provisions rootless Docker under a dedicated `gha-executor` service user. The rootless Docker daemon configuration is placed at `~gha-executor/.config/docker/daemon.json`.
 
-**Required Packages:** uidmap, rootlesskit, slirp4netns, fuse-overlayfs, docker
+**Required Packages:** docker, uidmap (from AL2023 repos); rootlesskit, slirp4netns, fuse-overlayfs (compiled from source — see Requirement 53)
 
 **User Configuration:**
 - Dedicated service user: `gha-executor`
@@ -1904,7 +1904,7 @@ Testing uses `hypothesis` for property-based tests (minimum 100 iterations each,
 
 The build process creates an attestable AMI containing the GitHub Actions Remote Executor. The build is performed in two distinct phases:
 
-1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes rootless Docker provisioned under the `gha-executor` service user (with uidmap, rootlesskit, slirp4netns, fuse-overlayfs). The Container_Image used for Execution_Containers is pulled by the GHA_Server at startup time, not baked into the KIWI image.
+1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes rootless Docker provisioned under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, and fuse-overlayfs compiled from source inside the builder container). The Container_Image used for Execution_Containers is pulled by the GHA_Server at startup time, not baked into the KIWI image.
 
 2. **AMI Conversion Phase**: A Python script provisions a temporary EC2 instance using Terraform, installs required tools, verifies artifact signatures, downloads the KIWI image, uploads it as an EBS snapshot using coldsnap, and registers it as an AMI with TPM 2.0 support.
 
@@ -2102,7 +2102,7 @@ See Implementation Details section below. The flow is: provision EC2 via Terrafo
 
 Python dependencies are split between `pyproject.toml` (remote executor: fastapi, uvicorn, requests, docker, cryptography, wolfcrypt-py, PyJWT) and `scripts/pyproject.toml` (build scripts: boto3, paramiko). Only remote executor deps are installed in the KIWI image via a two-phase process: pre-download wheels with network (build-kiwi-image.sh) → offline install from wheels (config.sh). See Requirement 12 and the Overview section for details.
 
-The KIWI image also includes: rootless Docker under the `gha-executor` service user (with uidmap, rootlesskit, slirp4netns, fuse-overlayfs packages, hardened daemon.json at `~gha-executor/.config/docker/daemon.json` — Requirements 33, 48), git package (for repository cloning — Requirement 35). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
+The KIWI image also includes: rootless Docker under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, fuse-overlayfs compiled from source by the build script, hardened daemon.json at `~gha-executor/.config/docker/daemon.json` — Requirements 33, 48, 53), git package (for repository cloning — Requirement 35). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
 
 ## Implementation Details
 
@@ -2310,9 +2310,9 @@ class AttestationBundle:
 
 ### Property 116: Docker Package Inclusion in KIWI Image
 
-*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker`, `uidmap`, `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` packages in the image packages list, ensuring rootless Docker is available at runtime under the `gha-executor` service user.
+*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker` and `uidmap` packages (available in AL2023 core repos), plus runtime library dependencies (`fuse3`, `libseccomp`, `libslirp`, `glib2`, `libcap`). The `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries should NOT be listed as DNF packages (they are not available in AL2023) but should instead be compiled from source by the build script and placed at `/usr/local/bin/` in the KIWI image overlay.
 
-**Validates: Requirements 33.1**
+**Validates: Requirements 33.1, 33.2, 33.11, 33.12, 53.15, 53.16, 53.17**
 
 ### Property 117: Docker Service Enablement
 
