@@ -3206,7 +3206,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that Docker client is initialized with the correct rootless socket base_url
     - _Requirements: 33.2, 48.1_
 
-- [ ] 175. Checkpoint - Ensure rootless Docker migration tests pass
+- [x] 175. Checkpoint - Ensure rootless Docker migration tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 176. Enforce mandatory container image digest pinning
