@@ -186,7 +186,7 @@ The system consists of the following major components:
 - Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
 - When generating for the /attest endpoint: computes a SHA-256 fingerprint of the Server_Public_Key (composite key) and includes the fingerprint in the `public_key` field of the attestation document (because the composite key exceeds the 1024-byte field limit), but does NOT include user_data (no `--user-data` flag is passed to nitro-tpm-attest)
-- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata
+- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata (repository_url, commit_hash, script_path, script_env_hash, timestamp)
 - Accepts an optional nonce parameter; when provided, passes it to nitro-tpm-attest for inclusion in the attestation document
 - Signs documents using NitroTPM cryptographic capabilities
 - Encodes attestation in standard format (CBOR)
@@ -272,7 +272,7 @@ The system consists of the following major components:
 12. Execution Manager checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically; rejects with HTTP 503 if at capacity
 13. Repository Client authenticates and clones the repository at the specified commit into a temporary directory
 14. Repository Client strips token from .git/config and removes .git directory
-15. Attestation Generator creates attestation document with execution metadata and optional nonce (no Server_Public_Key)
+15. Attestation Generator creates attestation document with execution metadata (repository_url, commit_hash, script_path, script_env_hash, timestamp) and optional nonce (no Server_Public_Key)
 16. Execution Manager creates execution record with unique ID (stores `repository` claim)
 17. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
 18. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
@@ -618,8 +618,12 @@ class AttestationGenerator:
         Generates signed attestation document.
         
         Args:
-            metadata: Execution metadata to include in user_data. When None (e.g., for /attest),
-                      user_data is omitted entirely from the attestation document.
+            metadata: Execution metadata to include in user_data (repository_url,
+                      commit_hash, script_path, script_env_hash, timestamp).
+                      When None (e.g., for /attest), user_data is omitted entirely
+                      from the attestation document. script_env_hash is the SHA-256
+                      hex digest of canonicalized script_env (keys sorted, JSON no
+                      whitespace); SHA-256("{}") when script_env is empty or not provided.
             nonce: Optional client-provided nonce for freshness verification
             public_key: Optional SHA-256 fingerprint of the Server_Public_Key to include
                         in the public_key field. Only provided when generating for the
@@ -666,9 +670,11 @@ class ScriptExecutor:
                  memory_limit: str, cpu_limit: float, timeout_seconds: int):
         """
         Initialize with Docker client and container configuration.
+        The docker_client connects to the rootless Docker socket at
+        /run/user/{uid}/docker.sock (where uid is the gha-executor user's UID).
         
         Args:
-            docker_client: Docker SDK client instance
+            docker_client: Docker SDK client instance (connected to rootless socket)
             container_image: Name of the Container_Image to use for Execution_Containers
             memory_limit: Docker memory constraint (e.g., '4g')
             cpu_limit: Docker CPU constraint (e.g., 1.0 for one CPU)
@@ -789,6 +795,7 @@ class AttestationDocument:
     repository_url: str
     commit_hash: str
     script_path: str
+    script_env_hash: str  # SHA-256 hex digest of canonicalized script_env (keys sorted, JSON no whitespace); SHA-256("{}") when empty
     timestamp: datetime
     signature: bytes  # CBOR-encoded NitroTPM attestation
 ```
@@ -825,7 +832,7 @@ class ServerConfig:
     allowed_repositories: list[str]
     expected_audience: str
     container_image: str  # Docker image name for Execution_Containers
-    container_image_digest: str | None  # Optional SHA-256 digest for image verification
+    container_image_digest: str  # Required SHA-256 digest for image verification; server fails to start if empty and container_image lacks @sha256:
     container_memory_limit: str  # Docker memory constraint (e.g., '4g')
     container_cpu_limit: float  # Docker CPU constraint (e.g., 1.0)
     nonce_cache_ttl_seconds: int  # TTL for nonce cache entries, matching OIDC token lifetime
@@ -1540,7 +1547,7 @@ class EncryptionContext:
 
 ### Property 156: Container Image Digest Verification
 
-*For any* configured CONTAINER_IMAGE_DIGEST, the GHA_Server should verify the pulled image digest matches the expected digest at startup. If the digest does not match, the server should fail to start.
+*For any* server startup, if CONTAINER_IMAGE_DIGEST is empty and CONTAINER_IMAGE does not contain `@sha256:`, the server MUST fail to start. *For any* configured CONTAINER_IMAGE_DIGEST, the GHA_Server should verify the pulled image digest matches the expected digest at startup. If the digest does not match, the server should fail to start.
 
 **Validates: Requirements 34.7, 34.8, 34.9, 34.10**
 
@@ -1588,13 +1595,13 @@ class EncryptionContext:
 
 ### Property 164: Docker Daemon Security Configuration
 
-*For any* KIWI image build, the image should include a daemon.json at /etc/docker/daemon.json with `no-new-privileges` set to true and `live-restore` set to false.
+*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true and `live-restore` set to false. The rootless Docker daemon should run under the `gha-executor` service user with uidmap, rootlesskit, slirp4netns, and fuse-overlayfs packages installed, `/etc/subuid` and `/etc/subgid` configured with 65536 subordinate UIDs/GIDs, and `loginctl enable-linger` enabled.
 
 **Validates: Requirements 48.1, 48.2, 48.3, 48.4**
 
 ### Property 165: Systemd Service Hardening
 
-*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=true, RestrictAddressFamilies, StateDirectory=gha-executor, LogsDirectory=github-actions-executor, and ReadWritePaths including /var/lib/gha-executor, /var/log/github-actions-executor, /var/run/docker.sock, and /tmp. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp).
+*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set User=gha-executor, Group=gha-executor, NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=read-only, RestrictAddressFamilies, StateDirectory=gha-executor, LogsDirectory=github-actions-executor, and ReadWritePaths including /var/lib/gha-executor, /var/log/github-actions-executor, and /tmp. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp). The Script_Executor should connect to the rootless Docker socket at /run/user/{uid}/docker.sock.
 
 **Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10**
 
@@ -1767,11 +1774,19 @@ class NonceCache:
         pass
 ```
 
-### Docker Daemon Security Configuration (Requirement 47)
+### Docker Daemon Security Configuration (Requirement 48)
 
-The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/daemon.json`.
+The KIWI image provisions rootless Docker under a dedicated `gha-executor` service user. The rootless Docker daemon configuration is placed at `~gha-executor/.config/docker/daemon.json`.
 
-**daemon.json Configuration:**
+**Required Packages:** uidmap, rootlesskit, slirp4netns, fuse-overlayfs, docker
+
+**User Configuration:**
+- Dedicated service user: `gha-executor`
+- `/etc/subuid` and `/etc/subgid` configured with 65536 subordinate UIDs/GIDs for `gha-executor`
+- `loginctl enable-linger` enabled for `gha-executor` so the rootless daemon persists without an active login session
+- Rootless Docker data-root on a writable path that survives the read-only erofs root filesystem
+
+**daemon.json Configuration (~gha-executor/.config/docker/daemon.json):**
 ```json
 {
   "no-new-privileges": true,
@@ -1782,35 +1797,38 @@ The KIWI image includes a hardened Docker daemon configuration at `/etc/docker/d
 **Design Rationale:**
 - `no-new-privileges`: Prevents privilege escalation via setuid/setgid binaries inside containers
 - `live-restore: false`: Ensures containers stop when the daemon restarts, preventing orphaned containers from persisting across daemon restarts
-- `userns-remap` and `seccomp-profile` were removed because they require additional OS-level configuration (subordinate UID/GID mappings and a seccomp JSON file) that is not present in the KIWI image; the per-container security constraints (cap_drop=ALL with a minimal cap_add set, no-new-privileges, writable root filesystem with ephemeral containers) provide the primary isolation layer
-- The configuration is baked into the KIWI image at `/etc/docker/daemon.json` so it cannot be modified at runtime (read-only root filesystem)
+- `userns-remap` is not needed because rootless Docker natively runs in a user namespace — the `gha-executor` user's subordinate UID/GID mappings provide equivalent isolation without explicit daemon configuration
+- The configuration is placed at the rootless config path (`~gha-executor/.config/docker/daemon.json`) rather than `/etc/docker/daemon.json` which is for the system-wide (rootful) daemon
 - The expected Docker daemon security configuration is documented in code comments
 
 ### Systemd Service Hardening (Requirement 49)
 
-The systemd service unit for `github-actions-remote-executor` includes security hardening directives.
+The systemd service unit for `github-actions-remote-executor` includes security hardening directives and runs as the dedicated `gha-executor` service user.
 
 **Service Unit Hardening:**
 ```ini
 [Service]
+User=gha-executor
+Group=gha-executor
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 StateDirectory=gha-executor
 LogsDirectory=github-actions-executor
-ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /var/run/docker.sock /tmp
+ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /tmp
 ```
 
 **Design Rationale:**
+- `User=gha-executor` / `Group=gha-executor`: The service runs as the dedicated rootless Docker user, connecting to the rootless Docker socket at `/run/user/{uid}/docker.sock`
 - `NoNewPrivileges=true`: Prevents the service process and its children from gaining new privileges
 - `PrivateTmp` is intentionally NOT set to true: The service creates temporary directories under `TEMP_STORAGE_PATH` and passes those host paths to the Docker daemon as bind-mount sources. With `PrivateTmp=true`, systemd places the service's `/tmp` in a private namespace (e.g., `/tmp/systemd-private-xxx-.../tmp/`). The Docker daemon runs outside this namespace, so it cannot see the private paths — every container bind mount would fail with "path not found". To avoid this, `PrivateTmp` is left at its default (false), and `TEMP_STORAGE_PATH` is moved out of `/tmp` entirely to `/var/lib/gha-executor`
 - `ProtectSystem=strict`: Makes the entire filesystem read-only except for explicitly allowed paths
-- `ProtectHome=true`: Makes /home, /root, and /run/user inaccessible
+- `ProtectHome=read-only`: Allows read access to the gha-executor home directory (needed for rootless Docker config and socket) while preventing writes
 - `RestrictAddressFamilies`: Limits network socket types to IPv4, IPv6, Unix, and Netlink
 - `StateDirectory=gha-executor`: Instructs systemd to create and manage `/var/lib/gha-executor` with correct ownership; this is the preferred way to declare persistent state directories under `ProtectSystem=strict`
 - `LogsDirectory=github-actions-executor`: Instructs systemd to create and manage `/var/log/github-actions-executor` for service log files
-- `ReadWritePaths`: Allows write access to `/var/lib/gha-executor` (temporary storage for repo clones and attestation temp files), `/var/log/github-actions-executor` (log files), the Docker socket, and `/tmp` (needed for Python's `tempfile` module and other transient operations)
+- `ReadWritePaths`: Allows write access to `/var/lib/gha-executor` (temporary storage for repo clones and attestation temp files), `/var/log/github-actions-executor` (log files), and `/tmp` (needed for Python's `tempfile` module and other transient operations). `/var/run/docker.sock` is no longer needed because the Script_Executor connects to the rootless Docker socket at `/run/user/{uid}/docker.sock` which is owned by the `gha-executor` user
 
 **TEMP_STORAGE_PATH Change:**
 - The `TEMP_STORAGE_PATH` environment variable is changed from `/tmp/gha-executor` to `/var/lib/gha-executor`
@@ -1886,7 +1904,7 @@ Testing uses `hypothesis` for property-based tests (minimum 100 iterations each,
 
 The build process creates an attestable AMI containing the GitHub Actions Remote Executor. The build is performed in two distinct phases:
 
-1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes the Docker daemon (enabled at boot). The Container_Image used for Execution_Containers is pulled by the GHA_Server at startup time, not baked into the KIWI image.
+1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes rootless Docker provisioned under the `gha-executor` service user (with uidmap, rootlesskit, slirp4netns, fuse-overlayfs). The Container_Image used for Execution_Containers is pulled by the GHA_Server at startup time, not baked into the KIWI image.
 
 2. **AMI Conversion Phase**: A Python script provisions a temporary EC2 instance using Terraform, installs required tools, verifies artifact signatures, downloads the KIWI image, uploads it as an EBS snapshot using coldsnap, and registers it as an AMI with TPM 2.0 support.
 
@@ -2084,7 +2102,7 @@ See Implementation Details section below. The flow is: provision EC2 via Terrafo
 
 Python dependencies are split between `pyproject.toml` (remote executor: fastapi, uvicorn, requests, docker, cryptography, wolfcrypt-py, PyJWT) and `scripts/pyproject.toml` (build scripts: boto3, paramiko). Only remote executor deps are installed in the KIWI image via a two-phase process: pre-download wheels with network (build-kiwi-image.sh) → offline install from wheels (config.sh). See Requirement 12 and the Overview section for details.
 
-The KIWI image also includes: Docker daemon (enabled at boot, with hardened daemon.json — Requirement 33), git package (for repository cloning — Requirement 35). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
+The KIWI image also includes: rootless Docker under the `gha-executor` service user (with uidmap, rootlesskit, slirp4netns, fuse-overlayfs packages, hardened daemon.json at `~gha-executor/.config/docker/daemon.json` — Requirements 33, 48), git package (for repository cloning — Requirement 35). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
 
 ## Implementation Details
 
@@ -2292,13 +2310,13 @@ class AttestationBundle:
 
 ### Property 116: Docker Package Inclusion in KIWI Image
 
-*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker` package in the image packages list, ensuring the Docker daemon is available at runtime.
+*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker`, `uidmap`, `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` packages in the image packages list, ensuring rootless Docker is available at runtime under the `gha-executor` service user.
 
 **Validates: Requirements 33.1**
 
 ### Property 117: Docker Service Enablement
 
-*For any* KIWI image build, the `config.sh` script should enable the `docker` service using `systemctl enable`, ensuring the Docker daemon starts automatically on boot.
+*For any* KIWI image build, the `config.sh` script should set up rootless Docker for the `gha-executor` user by installing the rootless Docker systemd unit and enabling it via `systemctl --user enable docker`, ensuring the rootless Docker daemon starts automatically on boot via lingering.
 
 **Validates: Requirements 33.2**
 

@@ -242,6 +242,14 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 5. THE Attestation_Generator SHALL store the Attestation_Document associated with the Execution_ID
 6. WHEN the Attestation_Document is generated, THE Script_Executor SHALL initiate script execution
 7. IF attestation generation fails, THEN THE GHA_Server SHALL record an attestation error for the Execution_ID
+8. THE codebase SHALL include a documented schema definition for the NitroTPM attestation user_data structure, specifying all fields, their types, and their purpose (currently: repository_url, commit_hash, script_path, timestamp, script_env_hash)
+9. THE Attestation_Generator SHALL include a `script_env_hash` field in the attestation user_data containing a SHA-256 hex digest of the canonicalized script_env dictionary (keys sorted lexicographically, serialized as JSON with no whitespace)
+10. WHEN script_env is empty or not provided, THE Attestation_Generator SHALL set `script_env_hash` to the SHA-256 hex digest of an empty JSON object (`{}`)
+11. THE schema documentation SHALL state that `script_path` is a security-critical field that consumers MUST compare against the expected/requested script path to verify execution intent
+12. THE schema documentation SHALL state that `script_env_hash` enables consumers to verify that no unexpected environment variables were injected that could alter script behavior
+13. THE schema documentation SHALL specify the canonical serialization format for script_env_hash computation so that consumers can independently verify the digest
+14. THE test suite SHALL include regression tests that assert `script_path` and `script_env_hash` are present in the attestation user_data for all successful attestation generation paths
+15. IF `script_path` or `script_env_hash` is removed or renamed in the attestation user_data, THEN THE regression tests SHALL fail
 
 ### Requirement 5: Asynchronous Script Execution in Ephemeral Docker Containers
 
@@ -599,14 +607,20 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 ### Requirement 33: Docker Daemon Provisioning in KIWI Image
 
-**User Story:** As a DevOps engineer, I want the KIWI image to include Docker with the daemon enabled, so that the Remote Executor can create and manage Execution_Containers at runtime without additional provisioning
+**User Story:** As a DevOps engineer, I want the KIWI image to include Docker running in rootless mode under a dedicated service user, so that the Remote Executor can manage Execution_Containers at runtime without granting host-level control via a rootful Docker socket
 
 #### Acceptance Criteria
 
 1. THE appliance.kiwi package definition SHALL include the docker package in the image packages list
-2. THE config.sh configuration script SHALL enable the docker service using systemctl enable during image creation
-3. WHEN the KIWI image boots, THE Docker daemon SHALL be running and accessible to the Script_Executor
-4. IF the docker package is not present in appliance.kiwi, THEN THE KIWI_Builder SHALL fail to produce an image capable of running Execution_Containers
+2. THE appliance.kiwi package definition SHALL include `uidmap` (provides `newuidmap`/`newgidmap`), `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` (or equivalent packages available in AL2023) required for rootless Docker networking and storage
+3. THE config.sh script SHALL create a dedicated non-root service user (e.g., `gha-executor`) with a persistent home directory at a writable path (e.g., `/var/lib/gha-executor`)
+4. THE config.sh script SHALL configure `/etc/subuid` and `/etc/subgid` with at least 65,536 subordinate UIDs/GIDs for the service user
+5. THE config.sh script SHALL configure rootless Docker for the service user using `dockerd-rootless-setuptool.sh` or equivalent systemd unit configuration, with the Docker data-root under the user's state directory
+6. THE config.sh script SHALL run `loginctl enable-linger` for the service user so the rootless Docker daemon persists without an active login session
+7. THE rootless Docker data directory SHALL be located on a writable path that survives the read-only erofs root filesystem (e.g., under the StateDirectory managed by systemd)
+8. WHEN the KIWI image boots, THE rootless Docker daemon SHALL be running under the service user and accessible to the Script_Executor via the rootless socket (e.g., `/run/user/{uid}/docker.sock`)
+9. IF any required rootless Docker dependency (rootlesskit, slirp4netns, fuse-overlayfs) is not available in the AL2023 package repository, THEN the build process SHALL compile or bundle the missing dependency into the KIWI image
+10. IF the docker package is not present in appliance.kiwi, THEN THE KIWI_Builder SHALL fail to produce an image capable of running Execution_Containers
 
 ### Requirement 34: Pull Container Image at Server Startup
 
@@ -620,11 +634,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 4. IF the Container_Image pull fails, THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating the image name and failure reason
 5. IF the Container_Image is already present in the local Docker image store, THE GHA_Server SHALL skip pulling and use the existing image
 6. THE GHA_Server SHALL log the Container_Image pull operation including image name, pull duration, and image size
-7. THE GHA_Server SHALL support an optional CONTAINER_IMAGE_DIGEST configuration value containing a SHA-256 digest
-8. WHEN CONTAINER_IMAGE_DIGEST is configured, THE GHA_Server SHALL verify the pulled image matches the expected digest
-9. IF the digest does not match, THEN fail to start with a descriptive error
-10. THE GHA_Server SHALL support digest-pinned container image references (e.g., ubuntu:24.04@sha256:...)
-11. THE default env file and .env.example SHALL include a CONTAINER_IMAGE_DIGEST entry (empty by default) with a comment instructing operators to set a digest in production to prevent tag drift or registry compromise
+7. THE GHA_Server SHALL require a non-empty CONTAINER_IMAGE_DIGEST configuration value or a CONTAINER_IMAGE reference containing `@sha256:`
+8. IF CONTAINER_IMAGE_DIGEST is empty and CONTAINER_IMAGE does not contain an `@sha256:` reference, THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating that digest pinning is required
+9. WHEN CONTAINER_IMAGE_DIGEST is configured, THE GHA_Server SHALL verify the pulled image matches the expected digest
+10. IF the digest does not match, THEN fail to start with a descriptive error
+11. THE GHA_Server SHALL support digest-pinned container image references (e.g., ubuntu:24.04@sha256:...)
+12. THE default env file and .env.example SHALL include a CONTAINER_IMAGE_DIGEST entry (empty by default) with a comment instructing operators to set a digest before deploying
 
 ### Requirement 35: Git Package Provisioning in KIWI Image
 
@@ -1023,14 +1038,17 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 **User Story:** As a security engineer, I want the Docker daemon configured with explicit security hardening in the KIWI image, so that container isolation does not rely on ambient defaults
 
-**Security Finding:** #19 (High)
-
 #### Acceptance Criteria
 
-1. THE KIWI image SHALL include a daemon.json configuration file for the Docker daemon at /etc/docker/daemon.json
+1. THE KIWI image SHALL include a daemon.json configuration file at the rootless Docker config path for the service user (e.g., `~gha-executor/.config/docker/daemon.json`)
 2. THE daemon.json SHALL set `no-new-privileges` to true to prevent privilege escalation via setuid/setgid
 3. THE daemon.json SHALL set `live-restore` to false to ensure containers stop when the daemon restarts
-4. THE KIWI image build SHALL document the expected Docker daemon security configuration in code comments
+4. THE daemon.json SHALL NOT include `userns-remap` since rootless Docker provides user namespace isolation natively
+5. THE KIWI image build SHALL document the expected Docker daemon security configuration in code comments
+6. THE github-actions-remote-executor.service systemd unit SHALL run as the dedicated service user (via `User=` and `Group=` directives) and connect to the rootless Docker socket instead of `/var/run/docker.sock`
+7. THE systemd unit SHALL NOT include `/var/run/docker.sock` in ReadWritePaths since the rootful socket is no longer used
+8. THE Script_Executor SHALL connect to the rootless Docker socket path (e.g., `/run/user/{uid}/docker.sock`) instead of the system-wide `/var/run/docker.sock`
+9. ALL existing container security constraints SHALL remain enforced under rootless Docker: cap_drop=ALL with minimal cap_add, no-new-privileges, memory/CPU limits, ephemeral container lifecycle, and read-only repository bind mounts
 
 ### Requirement 49: Systemd Service Hardening
 

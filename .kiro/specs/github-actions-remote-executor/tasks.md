@@ -1653,7 +1653,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Place it alongside existing packages (e.g., after `python3.11-pip`)
     - _Requirements: 33.1, 33.4_
 
-  - [x] 74.2 Enable Docker service in config.sh
+  - [x] 74.2 ~~Enable Docker service in config.sh~~ (OBSOLETE — rootless Docker uses user-scoped systemd units via `systemctl --user enable docker`, not system-wide `systemctl enable docker`)
     - Add a `systemctl enable docker` block to `kiwi-descriptions/config.sh`
     - Place it after the existing `systemctl enable github-actions-remote-executor.service` line and before the conditional SSH block
     - Include descriptive echo statements for build audit trail
@@ -2739,7 +2739,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - _Requirements: 37.12, 37.13_
 
 - [x] 146. Implement container image digest pinning
-  - [x] 146.1 Add CONTAINER_IMAGE_DIGEST config to src/config.py
+  - [x] 146.1 ~~Add CONTAINER_IMAGE_DIGEST config to src/config.py~~ (OBSOLETE — container_image_digest is now required, not optional; startup must fail if empty and container_image lacks @sha256:)
     - Add optional `container_image_digest` field (default None)
     - Read from CONTAINER_IMAGE_DIGEST environment variable
     - _Requirements: 34.7_
@@ -2853,7 +2853,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Validates: Requirements 47.1, 47.2, 47.3, 47.4, 47.5, 47.6, 47.7, 47.8**
 
 - [x] 154. Implement Docker daemon security configuration
-  - [x] 154.1 Add daemon.json to KIWI image
+  - [x] 154.1 ~~Add daemon.json to KIWI image~~ (OBSOLETE — rootless Docker daemon.json now goes to ~gha-executor/.config/docker/daemon.json, not /etc/docker/daemon.json)
     - Create `kiwi-descriptions/root/etc/docker/daemon.json` with `no-new-privileges: true` and `live-restore: false`
     - Remove `userns-remap` and `seccomp-profile` settings (require additional OS-level configuration not present in KIWI image)
     - Add code comments documenting the expected Docker daemon security configuration and rationale for removed settings
@@ -2967,12 +2967,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - _Requirements: 17.17_
 
 - [x] 162. Add CONTAINER_IMAGE_DIGEST to default env files
-  - [x] 162.1 Add CONTAINER_IMAGE_DIGEST placeholder to .env.example
+  - [x] 162.1 ~~Add CONTAINER_IMAGE_DIGEST placeholder to .env.example~~ (OBSOLETE — digest is now mandatory, not optional; comments must reflect that startup fails without it)
     - Add `CONTAINER_IMAGE_DIGEST=` (empty, with a comment) to `.env.example` after the `CONTAINER_IMAGE` line
     - Comment should explain: "Optional SHA-256 digest for container image verification (e.g., sha256:abc123...). When set, the server verifies the pulled image matches this digest at startup."
     - _Requirements: 34.7, 34.8_
 
-  - [x] 162.2 Add CONTAINER_IMAGE_DIGEST placeholder to KIWI env file
+  - [x] 162.2 ~~Add CONTAINER_IMAGE_DIGEST placeholder to KIWI env file~~ (OBSOLETE — digest is now mandatory, not optional; comments must reflect that startup fails without it)
     - Add `CONTAINER_IMAGE_DIGEST=` (empty, with a comment) to `kiwi-descriptions/root/etc/github-actions-remote-executor/env` after the `CONTAINER_IMAGE` line
     - Same comment as above
     - _Requirements: 34.7, 34.8_
@@ -3154,6 +3154,132 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Run the full test suite after task 141 changes to verify cap_add does not break existing tests
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 174. Migrate to rootless Docker
+  - [ ] 174.1 Add rootless Docker packages to appliance.kiwi
+    - Add `uidmap`, `rootlesskit`, `slirp4netns`, `fuse-overlayfs` packages to the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
+    - These packages are required for rootless Docker operation (user namespace mapping, networking, and overlay filesystem)
+    - _Requirements: 33.1, 33.4, 48.1_
+
+  - [ ] 174.2 Update config.sh for rootless Docker user setup
+    - Create `gha-executor` user in `kiwi-descriptions/config.sh`
+    - Configure `/etc/subuid` and `/etc/subgid` with 65536 subordinate UIDs/GIDs for `gha-executor`
+    - Set up rootless Docker for `gha-executor` user (install rootless Docker scripts)
+    - Run `loginctl enable-linger gha-executor` to allow user services to run without active login session
+    - Replace `systemctl enable docker` with rootless Docker user-scoped systemd enablement
+    - _Requirements: 33.2, 33.3, 48.1, 48.2_
+
+  - [ ] 174.3 Move daemon.json to rootless Docker location
+    - Move `kiwi-descriptions/root/etc/docker/daemon.json` to `kiwi-descriptions/root/home/gha-executor/.config/docker/daemon.json`
+    - Remove the `userns-remap` setting from daemon.json (rootless Docker already runs in a user namespace)
+    - Retain `no-new-privileges: true` and `live-restore: false` settings
+    - Ensure correct file ownership (gha-executor:gha-executor) is set in config.sh
+    - _Requirements: 48.1, 48.2, 48.3, 48.4_
+
+  - [ ] 174.4 Update systemd service unit for rootless Docker
+    - In `kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service`:
+      - Add `User=gha-executor` and `Group=gha-executor`
+      - Change `ProtectHome=true` to `ProtectHome=read-only` (service needs to read gha-executor's home for Docker socket)
+      - Remove `/var/run/docker.sock` from `ReadWritePaths` (rootless Docker uses `/run/user/{uid}/docker.sock`)
+    - _Requirements: 48.1, 49.1, 49.2_
+
+  - [ ] 174.5 Update src/script_executor.py for rootless Docker socket
+    - Change Docker client connection from `/var/run/docker.sock` to `/run/user/{uid}/docker.sock` where `{uid}` is the UID of the `gha-executor` user
+    - Use `os.getuid()` to determine the current user's UID for socket path construction
+    - Update `base_url` parameter in `docker.DockerClient` initialization
+    - _Requirements: 33.2, 48.1_
+
+  - [ ] 174.6 Update src/main.py Docker client initialization for rootless socket
+    - Update any Docker client initialization in `src/main.py` to use the rootless Docker socket path (`/run/user/{uid}/docker.sock`)
+    - Ensure the Docker health check in startup also uses the rootless socket
+    - _Requirements: 33.2, 48.1_
+
+  - [ ] 174.7 Update property tests for rootless Docker
+    - Update **Property 116: Docker Package Inclusion in KIWI Image** to also verify `uidmap`, `rootlesskit`, `slirp4netns`, `fuse-overlayfs` packages are present
+    - Update **Property 117: Docker Service Enablement** to verify rootless Docker user-scoped enablement instead of `systemctl enable docker`
+    - Update **Property 164: Docker Daemon Security Configuration** to verify daemon.json at `~gha-executor/.config/docker/daemon.json` and absence of `userns-remap`
+    - Update **Property 165: Systemd Service Hardening** to verify `User=gha-executor`, `Group=gha-executor`, `ProtectHome=read-only`, and absence of `/var/run/docker.sock` in ReadWritePaths
+    - **Validates: Requirements 33.1, 33.2, 33.3, 48.1, 48.2, 48.3, 48.4, 49.1, 49.2**
+
+  - [ ] 174.8 Update unit tests for rootless Docker socket connection
+    - Update tests in `tests/test_script_executor.py` and `tests/test_docker_executor_unit.py` to expect rootless Docker socket path
+    - Update any mocks that reference `/var/run/docker.sock` to use `/run/user/{uid}/docker.sock`
+    - Test that Docker client is initialized with the correct rootless socket base_url
+    - _Requirements: 33.2, 48.1_
+
+- [ ] 175. Checkpoint - Ensure rootless Docker migration tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 176. Enforce mandatory container image digest pinning
+  - [ ] 176.1 Update src/config.py to make container_image_digest required
+    - Change `container_image_digest` from optional (default None) to required validation
+    - At startup, if `CONTAINER_IMAGE_DIGEST` is empty AND `CONTAINER_IMAGE` does not contain `@sha256:`, raise a configuration error and fail startup
+    - If `CONTAINER_IMAGE` contains `@sha256:`, extract the digest from the image reference as the effective digest
+    - _Requirements: 34.7, 34.8_
+
+  - [ ] 176.2 Update src/script_executor.py pull_container_image for mandatory digest
+    - Remove the "skip if no digest" code path — digest verification is now always performed
+    - Always verify the pulled image digest matches the configured/extracted digest
+    - Fail startup with a clear error if digest mismatch occurs
+    - _Requirements: 34.8, 34.9, 34.10_
+
+  - [ ] 176.3 Update .env.example and KIWI env file comments for mandatory digest
+    - Update the `CONTAINER_IMAGE_DIGEST` comment in `.env.example` to indicate it is REQUIRED (not optional)
+    - Update comment to: "REQUIRED: SHA-256 digest for container image verification (e.g., sha256:abc123...). Server will fail to start if this is empty and CONTAINER_IMAGE does not contain @sha256:."
+    - Apply same comment update to `kiwi-descriptions/root/etc/github-actions-remote-executor/env`
+    - _Requirements: 34.7, 34.8_
+
+  - [ ] 176.4 Update property test for mandatory digest
+    - Update **Property 156: Container Image Digest Verification** to verify that startup FAILS when digest is empty and container_image lacks `@sha256:`
+    - Remove any test assertions that treat empty digest as a valid/skip scenario
+    - **Validates: Requirements 34.7, 34.8, 34.9, 34.10**
+
+  - [ ] 176.5 Write unit tests for startup failure when digest missing
+    - Test that server startup raises an error when CONTAINER_IMAGE_DIGEST is empty and CONTAINER_IMAGE is a tag-only reference
+    - Test that server startup succeeds when CONTAINER_IMAGE contains `@sha256:` even if CONTAINER_IMAGE_DIGEST is empty
+    - Test that server startup succeeds when CONTAINER_IMAGE_DIGEST is explicitly set
+    - Test that pull_container_image always verifies digest (no skip path)
+    - _Requirements: 34.7, 34.8, 34.9, 34.10_
+
+- [ ] 177. Checkpoint - Ensure mandatory digest pinning tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 178. Add script_env_hash to attestation user_data
+  - [ ] 178.1 Update src/attestation.py to compute and include script_env_hash
+    - Modify the attestation generation function to accept a `script_env` parameter (dict[str, str] or None)
+    - Compute SHA-256 hex digest of canonicalized script_env: sort keys lexicographically, serialize as JSON with `separators=(',', ':')` (compact, no whitespace)
+    - When script_env is empty or None, compute SHA-256 of `{}` (empty JSON object)
+    - Include `script_env_hash` field in the attestation user_data alongside existing fields (repository_url, commit_hash, script_path, timestamp)
+    - _Requirements: 4.9, 4.10_
+
+  - [ ] 178.2 Update src/server.py /execute endpoint to pass script_env to attestation
+    - In the /execute endpoint handler, pass the sanitized `script_env` dictionary to the Attestation_Generator when generating the execution attestation document
+    - Ensure script_env is passed after sanitization but before execution begins
+    - _Requirements: 4.9, 4.10_
+
+  - [ ] 178.3 Create attestation user_data schema documentation
+    - Create documentation (as a docstring in `src/attestation.py` or a `docs/attestation-schema.md` file) specifying:
+      - All fields in the user_data structure: `repository_url`, `commit_hash`, `script_path`, `timestamp`, `script_env_hash`
+      - Field types and purposes
+      - That `script_path` is security-critical and consumers MUST compare it against the expected path
+      - That `script_env_hash` enables verification that no unexpected environment variables were injected
+      - The canonical serialization format for script_env_hash computation (sorted keys, compact JSON, SHA-256 hex digest)
+    - _Requirements: 4.8, 4.11, 4.12, 4.13_
+
+  - [ ] 178.4 Write regression tests for script_path and script_env_hash in attestation user_data
+    - Assert that `script_path` is present in attestation user_data for all successful attestation generation paths
+    - Assert that `script_env_hash` is present in attestation user_data for all successful attestation generation paths
+    - Assert that removing either field causes test failure
+    - _Requirements: 4.14, 4.15_
+
+  - [ ] 178.5 Update existing attestation property tests for script_env_hash
+    - Update **Property 15: Attestation Document Generation** and **Property 16: Attestation Document Completeness** to verify `script_env_hash` is included in user_data
+    - Add test cases for empty script_env (should produce SHA-256 of `{}`)
+    - Add test cases for non-empty script_env (should produce deterministic hash regardless of insertion order)
+    - **Validates: Requirements 4.9, 4.10, 4.14, 4.15**
+
+- [ ] 179. Final checkpoint - Ensure all new requirement tasks pass
+  - Ensure all tests pass, ask the user if questions arise.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -3229,3 +3355,20 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - /attest, /health, and /metrics remain unencrypted plain JSON endpoints
 - Output attestation every-poll change (tasks 125-128): Output_Attestation_Document is now generated on EVERY /execution/{id}/output poll response, not just when execution is complete; the SHA-256 digest covers the current Script_Output (stdout + stderr + exit_code) at the time of each poll regardless of execution status (running, completed, failed, timed_out)
 - Streaming output capture (tasks 129-130): Replaces the batch log capture pattern (capture all output after container.wait() returns) with a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally feed output chunks to the Output_Collector during execution; this ensures polling clients observe partial output while the script is still running rather than seeing empty output until the container exits
+- Rootless Docker migration (task 174): Migrates from rootful Docker (system-wide daemon at /var/run/docker.sock) to rootless Docker running as `gha-executor` user; daemon.json moves to `~gha-executor/.config/docker/daemon.json`, Docker socket moves to `/run/user/{uid}/docker.sock`, and the systemd service unit runs as `gha-executor` with `ProtectHome=read-only`
+- Mandatory container image digest pinning (task 176): Changes CONTAINER_IMAGE_DIGEST from optional to required; server fails startup if digest is empty and CONTAINER_IMAGE does not contain `@sha256:`; removes the "skip if no digest" code path from pull_container_image
+- Attestation user_data schema with script_env_hash (task 178): Adds `script_env_hash` field to attestation user_data containing SHA-256 hex digest of canonicalized script_env (sorted keys, compact JSON); enables consumers to verify no unexpected environment variables were injected
+
+## Task Dependency Graph
+
+```json
+{
+  "waves": [
+    { "id": 0, "tasks": ["174.1", "176.1", "178.1"] },
+    { "id": 1, "tasks": ["174.2", "174.3", "176.2", "178.2"] },
+    { "id": 2, "tasks": ["174.4", "174.5", "176.3", "178.3"] },
+    { "id": 3, "tasks": ["174.6", "176.4", "176.5", "178.4"] },
+    { "id": 4, "tasks": ["174.7", "174.8", "178.5"] }
+  ]
+}
+```
