@@ -108,6 +108,7 @@ def test_config_validation_success():
         container_image="python:3.11-slim",
         container_memory_limit="512m",
         container_cpu_limit=1.0,
+        container_image_digest="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     )
     
     # Should not raise

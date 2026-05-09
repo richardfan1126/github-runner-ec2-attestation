@@ -139,6 +139,7 @@ def test_property_51_port_configuration(port):
         CONTAINER_IMAGE="python:3.11-slim",
         CONTAINER_MEMORY_LIMIT="512m",
         CONTAINER_CPU_LIMIT="1.0",
+        CONTAINER_IMAGE_DIGEST="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     ):
         config = ServerConfig.from_env()
         
@@ -177,6 +178,7 @@ def test_property_52_timeout_configuration(timeout):
         CONTAINER_IMAGE="python:3.11-slim",
         CONTAINER_MEMORY_LIMIT="512m",
         CONTAINER_CPU_LIMIT="1.0",
+        CONTAINER_IMAGE_DIGEST="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     ):
         config = ServerConfig.from_env()
         
@@ -215,6 +217,7 @@ def test_property_53_size_limit_configuration(max_size):
         CONTAINER_IMAGE="python:3.11-slim",
         CONTAINER_MEMORY_LIMIT="512m",
         CONTAINER_CPU_LIMIT="1.0",
+        CONTAINER_IMAGE_DIGEST="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     ):
         config = ServerConfig.from_env()
         
@@ -256,6 +259,7 @@ def test_property_54_rate_limit_configuration(rate_limit, rate_window):
         CONTAINER_IMAGE="python:3.11-slim",
         CONTAINER_MEMORY_LIMIT="512m",
         CONTAINER_CPU_LIMIT="1.0",
+        CONTAINER_IMAGE_DIGEST="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     ):
         config = ServerConfig.from_env()
         
@@ -295,6 +299,7 @@ def test_property_55_storage_path_configuration(storage_path):
         CONTAINER_IMAGE="python:3.11-slim",
         CONTAINER_MEMORY_LIMIT="512m",
         CONTAINER_CPU_LIMIT="1.0",
+        CONTAINER_IMAGE_DIGEST="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     ):
         config = ServerConfig.from_env()
         
@@ -333,6 +338,7 @@ def test_property_56_retention_period_configuration(retention_hours):
         CONTAINER_IMAGE="python:3.11-slim",
         CONTAINER_MEMORY_LIMIT="512m",
         CONTAINER_CPU_LIMIT="1.0",
+        CONTAINER_IMAGE_DIGEST="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     ):
         config = ServerConfig.from_env()
         
@@ -431,6 +437,7 @@ def test_property_invalid_port_validation(port):
         container_image="python:3.11-slim",
         container_memory_limit="512m",
         container_cpu_limit=1.0,
+        container_image_digest="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -464,6 +471,7 @@ def test_property_invalid_positive_int_validation(value):
         container_image="python:3.11-slim",
         container_memory_limit="512m",
         container_cpu_limit=1.0,
+        container_image_digest="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     )
     
     with pytest.raises(ValueError) as exc_info:
@@ -498,6 +506,7 @@ def test_property_empty_path_validation(empty_path):
         container_image="python:3.11-slim",
         container_memory_limit="512m",
         container_cpu_limit=1.0,
+        container_image_digest="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     )
     
     with pytest.raises(ValueError) as exc_info:

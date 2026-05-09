@@ -14,9 +14,20 @@ import pytest
 from src.script_executor import ScriptExecutor
 
 
-def _make_executor(mock_client, image="myorg/myimage:latest"):
+FIXED_DIGEST = "sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb"
+
+
+def _make_executor(mock_client, image="myorg/myimage:latest", digest=FIXED_DIGEST):
     """Helper to build a ScriptExecutor with a mocked Docker client."""
-    return ScriptExecutor(docker_client=mock_client, container_image=image)
+    return ScriptExecutor(docker_client=mock_client, container_image=image, container_image_digest=digest)
+
+
+def _mock_image_with_digest(size=200_000_000, repo_name="myorg/myimage"):
+    """Create a mock image with RepoDigests matching FIXED_DIGEST."""
+    mock_image = MagicMock()
+    mock_image.attrs = {"Size": size, "RepoDigests": [f"{repo_name}@{FIXED_DIGEST}"]}
+    mock_image.id = FIXED_DIGEST
+    return mock_image
 
 
 # ---------------------------------------------------------------------------
@@ -26,8 +37,7 @@ def _make_executor(mock_client, image="myorg/myimage:latest"):
 def test_successful_pull_when_image_not_present():
     """Image not in local store → pull from registry → verify available."""
     mock_client = MagicMock()
-    mock_image = MagicMock()
-    mock_image.attrs = {"Size": 200_000_000}
+    mock_image = _mock_image_with_digest()
 
     # First get raises ImageNotFound, second get succeeds (post-pull verify)
     mock_client.images.get.side_effect = [
@@ -50,7 +60,7 @@ def test_successful_pull_when_image_not_present():
 def test_skip_pull_when_image_already_present():
     """If the image is already in the local store, pull should be skipped."""
     mock_client = MagicMock()
-    mock_client.images.get.return_value = MagicMock()
+    mock_client.images.get.return_value = _mock_image_with_digest()
 
     executor = _make_executor(mock_client)
     executor.pull_container_image()
@@ -120,8 +130,7 @@ def test_pull_failure_authentication_error():
 def test_pull_logs_image_name_duration_and_size(caplog):
     """After a successful pull the log should contain image name, duration, and size."""
     mock_client = MagicMock()
-    mock_image = MagicMock()
-    mock_image.attrs = {"Size": 150_000_000}  # ~143 MB
+    mock_image = _mock_image_with_digest(size=150_000_000, repo_name="registry.io/app")
 
     mock_client.images.get.side_effect = [
         docker.errors.ImageNotFound("not found"),
@@ -144,7 +153,7 @@ def test_pull_logs_image_name_duration_and_size(caplog):
 def test_skip_pull_logs_already_present(caplog):
     """When the image is already present, a skip message should be logged."""
     mock_client = MagicMock()
-    mock_client.images.get.return_value = MagicMock()
+    mock_client.images.get.return_value = _mock_image_with_digest(repo_name="myimg")
 
     executor = _make_executor(mock_client, image="myimg:1")
 
@@ -197,8 +206,7 @@ def test_pull_raises_when_docker_client_is_none():
 def test_api_error_on_initial_check_still_attempts_pull():
     """If images.get raises APIError (not ImageNotFound), pull is still attempted."""
     mock_client = MagicMock()
-    mock_image = MagicMock()
-    mock_image.attrs = {"Size": 50_000_000}
+    mock_image = _mock_image_with_digest(size=50_000_000)
 
     mock_client.images.get.side_effect = [
         docker.errors.APIError("daemon error"),

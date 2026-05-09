@@ -39,7 +39,8 @@ def test_container_image_pull_at_server_startup(image_name: str):
     # First images.get() raises ImageNotFound (not present locally)
     # Second images.get() succeeds (available after pull)
     mock_image = MagicMock()
-    mock_image.attrs = {"Size": 150_000_000}
+    mock_image.attrs = {"Size": 150_000_000, "RepoDigests": [f"{image_name}@sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb"]}
+    mock_image.id = "sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb"
     mock_client.images.get.side_effect = [
         docker.errors.ImageNotFound(f"Image {image_name} not found"),
         mock_image,
@@ -49,6 +50,7 @@ def test_container_image_pull_at_server_startup(image_name: str):
     executor = ScriptExecutor(
         docker_client=mock_client,
         container_image=image_name,
+        container_image_digest="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     )
 
     executor.pull_container_image()
@@ -120,11 +122,14 @@ def test_container_image_skip_pull_when_already_present(image_name: str):
 
     # images.get() succeeds — image is already present
     mock_image = MagicMock()
+    mock_image.attrs = {"Size": 150_000_000, "RepoDigests": [f"{image_name}@sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb"]}
+    mock_image.id = "sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb"
     mock_client.images.get.return_value = mock_image
 
     executor = ScriptExecutor(
         docker_client=mock_client,
         container_image=image_name,
+        container_image_digest="sha256:aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
     )
 
     executor.pull_container_image()

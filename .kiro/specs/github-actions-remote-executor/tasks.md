@@ -3240,7 +3240,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Test that pull_container_image always verifies digest (no skip path)
     - _Requirements: 34.7, 34.8, 34.9, 34.10_
 
-- [ ] 177. Checkpoint - Ensure mandatory digest pinning tests pass
+- [x] 177. Checkpoint - Ensure mandatory digest pinning tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 178. Add script_env_hash to attestation user_data
