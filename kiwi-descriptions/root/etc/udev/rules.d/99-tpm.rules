@@ -1,0 +1,4 @@
+# Grant gha-executor direct access to the NitroTPM device.
+# This is a single-purpose appliance — only gha-executor needs TPM access.
+KERNEL=="tpm[0-9]*", OWNER="gha-executor", MODE="0600"
+KERNEL=="tpmrm[0-9]*", OWNER="gha-executor", MODE="0600"

@@ -27,6 +27,6 @@ EXPECTED_AUDIENCE=test-workflow
 # Container Execution Configuration
 CONTAINER_IMAGE=ubuntu:24.04
 # REQUIRED: SHA-256 digest for container image verification (e.g., sha256:abc123...). Server will fail to start if this is empty and CONTAINER_IMAGE does not contain @sha256:.
-CONTAINER_IMAGE_DIGEST=
+CONTAINER_IMAGE_DIGEST=sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
 CONTAINER_MEMORY_LIMIT=4g
 CONTAINER_CPU_LIMIT=1.0

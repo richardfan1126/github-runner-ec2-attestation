@@ -36,16 +36,30 @@ RUN dnf install -y \
     libtool \
     # Build-time dependencies for rootless Docker tools compiled from source.
     # golang: required for compiling rootlesskit (Go project).
-    # glib2-devel, libslirp-devel, libcap-devel, libseccomp-devel: required for
+    # glib2-devel, libcap-devel, libseccomp-devel: required for
     #   compiling slirp4netns (C/autotools, links against these libraries).
     # fuse3-devel: required for compiling fuse-overlayfs (C/autotools, links against libfuse3).
+    # meson, ninja-build: required for building libslirp from source (not packaged in AL2023).
     golang \
     glib2-devel \
-    libslirp-devel \
     libcap-devel \
     libseccomp-devel \
     fuse3-devel \
+    meson \
+    ninja-build \
     && dnf clean all
+
+# Build and install libslirp from source.
+# libslirp-devel is not available in AL2023 repositories, so we compile it.
+# Required by slirp4netns for rootless networking.
+RUN cd /tmp \
+    && git clone --depth 1 --branch v4.8.0 https://gitlab.freedesktop.org/slirp/libslirp.git \
+    && cd libslirp \
+    && meson setup build \
+    && ninja -C build \
+    && ninja -C build install \
+    && ldconfig \
+    && rm -rf /tmp/libslirp
 
 # Create output directory for build artifacts
 RUN mkdir -p /output

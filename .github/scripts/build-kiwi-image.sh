@@ -184,7 +184,11 @@ echo "=== Compiling Rootless Docker Dependencies from Source ==="
 
 # Pinned versions for rootless Docker tools
 # rootlesskit: https://github.com/rootless-containers/rootlesskit/releases
-ROOTLESSKIT_VERSION="v2.3.5"
+# NOTE: Using v1.1.1 (the last v1.x release) because v2.x generates a third
+# UID/GID mapping entry ("fill mappings") that causes "Invalid argument" errors
+# from newuidmap on kernels that reject overlapping host ranges. v1.x produces
+# the standard 2-entry mapping which is fully compatible with Docker 25.0.x.
+ROOTLESSKIT_VERSION="v1.1.1"
 # slirp4netns: https://github.com/rootless-containers/slirp4netns/releases
 SLIRP4NETNS_VERSION="v1.3.3"
 # fuse-overlayfs: https://github.com/containers/fuse-overlayfs/releases
@@ -195,13 +199,17 @@ echo "  rootlesskit:    ${ROOTLESSKIT_VERSION}"
 echo "  slirp4netns:    ${SLIRP4NETNS_VERSION}"
 echo "  fuse-overlayfs: ${FUSE_OVERLAYFS_VERSION}"
 
-# Create output directory for compiled binaries
+# Create output directories for compiled binaries and libraries
 mkdir -p "${TEMP_IMAGE_DIR}/root/usr/local/bin"
+mkdir -p "${TEMP_IMAGE_DIR}/root/usr/local/lib64"
 
-# Compile all three tools inside the KIWI builder Docker container
+# Compile all three tools inside the KIWI builder Docker container.
+# Also copy the libslirp shared library (built from source in the Dockerfile)
+# since it is not available as a package in AL2023.
 echo "Building rootless Docker tools inside builder container..."
 if ! docker run --rm \
     -v "${TEMP_IMAGE_DIR}/root/usr/local/bin:/output" \
+    -v "${TEMP_IMAGE_DIR}/root/usr/local/lib64:/output-lib" \
     kiwi-builder:latest \
     bash -c "
 set -e -o pipefail
@@ -232,6 +240,18 @@ cp fuse-overlayfs /output/fuse-overlayfs
 echo '✓ fuse-overlayfs compiled successfully'
 
 echo '--- All rootless Docker tools compiled ---'
+
+echo '--- Copying libslirp shared library ---'
+cp -a /usr/local/lib64/libslirp.so* /output-lib/ 2>/dev/null || \
+cp -a /usr/local/lib/libslirp.so* /output-lib/ 2>/dev/null || {
+    echo 'ERROR: libslirp shared library not found in builder container'
+    exit 1
+}
+echo '✓ libslirp shared library copied'
+
+echo '--- Setting executable permissions ---'
+chmod +x /output/rootlesskit /output/rootlesskit-docker-proxy /output/slirp4netns /output/fuse-overlayfs
+echo '✓ Permissions set'
 "; then
     echo "::error::Failed to compile rootless Docker dependencies from source"
     exit 1
@@ -243,10 +263,50 @@ for binary in rootlesskit rootlesskit-docker-proxy slirp4netns fuse-overlayfs; d
         echo "::error::Compiled binary not found: ${binary}"
         exit 1
     fi
-    chmod +x "${TEMP_IMAGE_DIR}/root/usr/local/bin/${binary}"
 done
 
+# Verify libslirp shared library was copied
+if ! ls "${TEMP_IMAGE_DIR}/root/usr/local/lib64"/libslirp.so* > /dev/null 2>&1; then
+    echo "::error::libslirp shared library not found in image overlay"
+    exit 1
+fi
+
 echo "✓ All rootless Docker binaries compiled and placed in image overlay"
+echo "✓ libslirp shared library placed in /usr/local/lib64/"
+
+################################################################################
+# Install dockerd-rootless.sh
+################################################################################
+# The AL2023 'docker' package provides dockerd but does NOT include
+# dockerd-rootless.sh (the wrapper script that launches dockerd under
+# rootlesskit with user namespace isolation). We download it from the
+# official Moby repository, pinned to a specific commit for reproducibility.
+################################################################################
+
+echo ""
+echo "=== Installing dockerd-rootless.sh ==="
+
+# Pinned commit from https://github.com/moby/moby
+# Using v20.10.27 (the last 20.10.x release) because its dockerd-rootless.sh
+# is compatible with rootlesskit v1.x. The v25.0.x version of the script
+# passes --detach-netns which requires rootlesskit v2.1+, but v2.x generates
+# a third UID mapping entry that causes "Invalid argument" errors from
+# newuidmap on AL2023 kernels.
+MOBY_COMMIT="v20.10.27"
+
+echo "Downloading dockerd-rootless.sh from moby/moby (${MOBY_COMMIT})..."
+curl -fsSL "https://raw.githubusercontent.com/moby/moby/${MOBY_COMMIT}/contrib/dockerd-rootless.sh" \
+    -o "${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh"
+
+chmod +x "${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh"
+
+# Verify the script was downloaded successfully
+if [ ! -s "${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh" ]; then
+    echo "::error::Failed to download dockerd-rootless.sh"
+    exit 1
+fi
+
+echo "✓ dockerd-rootless.sh installed to /usr/local/bin/"
 
 # Make scripts executable
 chmod +x "${TEMP_IMAGE_DIR}/config.sh"

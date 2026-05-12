@@ -1595,15 +1595,15 @@ class EncryptionContext:
 
 ### Property 164: Docker Daemon Security Configuration
 
-*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true and `live-restore` set to false. The rootless Docker daemon should run under the `gha-executor` service user with uidmap installed from AL2023 repos and rootlesskit, slirp4netns, and fuse-overlayfs compiled from source and installed at `/usr/local/bin/`, `/etc/subuid` and `/etc/subgid` configured with 65536 subordinate UIDs/GIDs, and `loginctl enable-linger` enabled.
+*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true, `live-restore` set to false, and `data-root` set to `/var/lib/gha-executor/docker`. The rootless Docker daemon should run under the `gha-executor` service user with rootlesskit, slirp4netns, fuse-overlayfs, libslirp, and dockerd-rootless.sh compiled/downloaded from source and installed at `/usr/local/bin/` (binaries) and `/usr/local/lib64/` (libslirp shared library), `/etc/subuid` and `/etc/subgid` configured with two non-overlapping 65536-ID ranges, `loginctl enable-linger` enabled, a udev rule granting TPM device ownership to gha-executor, and `/etc/ld.so.conf.d/usr-local-lib64.conf` ensuring libslirp is discoverable at runtime.
 
-**Validates: Requirements 48.1, 48.2, 48.3, 48.4**
+**Validates: Requirements 48.1, 48.2, 48.3, 48.4, 48.5**
 
 ### Property 165: Systemd Service Hardening
 
-*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set User=gha-executor, Group=gha-executor, NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=read-only, RestrictAddressFamilies, StateDirectory=gha-executor, LogsDirectory=github-actions-executor, and ReadWritePaths including /var/lib/gha-executor, /var/log/github-actions-executor, and /tmp. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp). The Script_Executor should connect to the rootless Docker socket at /run/user/{uid}/docker.sock.
+*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set User=gha-executor, Group=gha-executor, NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=read-only, RestrictAddressFamilies, StateDirectory=gha-executor, LogsDirectory=github-actions-executor, ReadWritePaths including /var/lib/gha-executor, /var/log/github-actions-executor, and /tmp, DeviceAllow=/dev/tpm0 rw, After=user@1000.service, Requires=user@1000.service, and an ExecStartPre that waits for the rootless Docker socket. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp). The Script_Executor should connect to the rootless Docker socket at /run/user/{uid}/docker.sock.
 
-**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10**
+**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10, 49.11, 49.12, 49.13**
 
 ### Property 168: Host Login Access Hardening
 
@@ -1778,28 +1778,39 @@ class NonceCache:
 
 The KIWI image provisions rootless Docker under a dedicated `gha-executor` service user. The rootless Docker daemon configuration is placed at `~gha-executor/.config/docker/daemon.json`.
 
-**Required Packages:** docker, uidmap (from AL2023 repos); rootlesskit, slirp4netns, fuse-overlayfs (compiled from source — see Requirement 53)
+**Required Packages:** docker (from AL2023 repos); rootlesskit, slirp4netns, fuse-overlayfs, libslirp, dockerd-rootless.sh (compiled/downloaded from source — see Requirement 53)
 
 **User Configuration:**
 - Dedicated service user: `gha-executor`
-- `/etc/subuid` and `/etc/subgid` configured with 65536 subordinate UIDs/GIDs for `gha-executor`
+- `/etc/subuid` and `/etc/subgid` configured with two non-overlapping 65536-ID ranges for `gha-executor` (e.g., `100000:65536` and `200000:65536`) to avoid "Invalid argument" errors from `newuidmap` when rootlesskit generates a third UID/GID mapping entry
 - `loginctl enable-linger` enabled for `gha-executor` so the rootless daemon persists without an active login session
-- Rootless Docker data-root on a writable path that survives the read-only erofs root filesystem
+- Rootless Docker data-root explicitly set to `/var/lib/gha-executor/docker` via daemon.json
+- Runtime directories (`/var/lib/gha-executor/docker`, `/home/gha-executor/.local/share`) pre-created during image build
 
 **daemon.json Configuration (~gha-executor/.config/docker/daemon.json):**
 ```json
 {
   "no-new-privileges": true,
-  "live-restore": false
+  "live-restore": false,
+  "data-root": "/var/lib/gha-executor/docker"
 }
 ```
 
 **Design Rationale:**
 - `no-new-privileges`: Prevents privilege escalation via setuid/setgid binaries inside containers
 - `live-restore: false`: Ensures containers stop when the daemon restarts, preventing orphaned containers from persisting across daemon restarts
+- `data-root`: Explicitly places Docker storage on a writable path that survives the read-only erofs root filesystem, rather than relying on the default `~/.local/share/docker` which may not be writable
 - `userns-remap` is not needed because rootless Docker natively runs in a user namespace — the `gha-executor` user's subordinate UID/GID mappings provide equivalent isolation without explicit daemon configuration
 - The configuration is placed at the rootless config path (`~gha-executor/.config/docker/daemon.json`) rather than `/etc/docker/daemon.json` which is for the system-wide (rootful) daemon
 - The expected Docker daemon security configuration is documented in code comments
+
+**TPM Device Access:**
+- A udev rules file (`/etc/udev/rules.d/99-tpm.rules`) sets ownership of `/dev/tpm[0-9]*` and `/dev/tpmrm[0-9]*` to `gha-executor` with mode 0600
+- The systemd unit includes `DeviceAllow=/dev/tpm0 rw` because `ProtectSystem=strict` implies `DevicePolicy=closed`
+
+**Dynamic Linker Configuration:**
+- `/etc/ld.so.conf.d/usr-local-lib64.conf` adds `/usr/local/lib64` to the linker search path
+- `ldconfig` is run during image preparation so `libslirp.so` (compiled from source) is discoverable at runtime
 
 ### Systemd Service Hardening (Requirement 49)
 
@@ -1807,9 +1818,15 @@ The systemd service unit for `github-actions-remote-executor` includes security 
 
 **Service Unit Hardening:**
 ```ini
+[Unit]
+After=network-online.target user@1000.service
+Wants=network-online.target
+Requires=user@1000.service
+
 [Service]
 User=gha-executor
 Group=gha-executor
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -S /run/user/1000/docker.sock ] && exit 0; sleep 1; done; echo "Timed out waiting for rootless Docker socket"; exit 1'
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
@@ -1817,9 +1834,12 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 StateDirectory=gha-executor
 LogsDirectory=github-actions-executor
 ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /tmp
+DeviceAllow=/dev/tpm0 rw
 ```
 
 **Design Rationale:**
+- `After=user@1000.service` / `Requires=user@1000.service`: Ensures the gha-executor user's systemd instance (which manages the rootless Docker daemon) is started before the executor service. Without this, the rootless Docker socket may not exist when the service tries to connect.
+- `ExecStartPre` socket wait: Polls for the rootless Docker socket at `/run/user/1000/docker.sock` with a 30-second timeout. Even with the `Requires` dependency, the user service may take a moment to create the socket. This prevents startup races.
 - `User=gha-executor` / `Group=gha-executor`: The service runs as the dedicated rootless Docker user, connecting to the rootless Docker socket at `/run/user/{uid}/docker.sock`
 - `NoNewPrivileges=true`: Prevents the service process and its children from gaining new privileges
 - `PrivateTmp` is intentionally NOT set to true: The service creates temporary directories under `TEMP_STORAGE_PATH` and passes those host paths to the Docker daemon as bind-mount sources. With `PrivateTmp=true`, systemd places the service's `/tmp` in a private namespace (e.g., `/tmp/systemd-private-xxx-.../tmp/`). The Docker daemon runs outside this namespace, so it cannot see the private paths — every container bind mount would fail with "path not found". To avoid this, `PrivateTmp` is left at its default (false), and `TEMP_STORAGE_PATH` is moved out of `/tmp` entirely to `/var/lib/gha-executor`
@@ -1829,6 +1849,7 @@ ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /tmp
 - `StateDirectory=gha-executor`: Instructs systemd to create and manage `/var/lib/gha-executor` with correct ownership; this is the preferred way to declare persistent state directories under `ProtectSystem=strict`
 - `LogsDirectory=github-actions-executor`: Instructs systemd to create and manage `/var/log/github-actions-executor` for service log files
 - `ReadWritePaths`: Allows write access to `/var/lib/gha-executor` (temporary storage for repo clones and attestation temp files), `/var/log/github-actions-executor` (log files), and `/tmp` (needed for Python's `tempfile` module and other transient operations). `/var/run/docker.sock` is no longer needed because the Script_Executor connects to the rootless Docker socket at `/run/user/{uid}/docker.sock` which is owned by the `gha-executor` user
+- `DeviceAllow=/dev/tpm0 rw`: Grants access to the NitroTPM device. `ProtectSystem=strict` implies `DevicePolicy=closed`, which blocks all device access by default. This explicit allowance is required for attestation generation.
 
 **TEMP_STORAGE_PATH Change:**
 - The `TEMP_STORAGE_PATH` environment variable is changed from `/tmp/gha-executor` to `/var/lib/gha-executor`
@@ -2310,9 +2331,9 @@ class AttestationBundle:
 
 ### Property 116: Docker Package Inclusion in KIWI Image
 
-*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker` and `uidmap` packages (available in AL2023 core repos), plus runtime library dependencies (`fuse3`, `libseccomp`, `libslirp`, `glib2`, `libcap`). The `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries should NOT be listed as DNF packages (they are not available in AL2023) but should instead be compiled from source by the build script and placed at `/usr/local/bin/` in the KIWI image overlay.
+*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker` package (available in AL2023 core repos), plus runtime library dependencies (`fuse3`, `libseccomp`, `glib2`, `libcap`). The `uidmap` package should NOT be listed separately because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection. The `libslirp` package should NOT be listed because it is not available in AL2023 and is instead compiled from source and shipped as a shared library in `/usr/local/lib64/`. The `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries should NOT be listed as DNF packages (they are not available in AL2023) but should instead be compiled from source by the build script and placed at `/usr/local/bin/` in the KIWI image overlay.
 
-**Validates: Requirements 33.1, 33.2, 33.11, 33.12, 53.15, 53.16, 53.17**
+**Validates: Requirements 33.1, 33.2, 33.11, 33.12, 53.21, 53.22, 53.23, 53.24**
 
 ### Property 117: Docker Service Enablement
 

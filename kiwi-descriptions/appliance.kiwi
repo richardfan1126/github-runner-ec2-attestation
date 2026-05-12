@@ -70,13 +70,15 @@
         <package name="python3.11"/>
         <package name="python3.11-pip"/>
         <package name="docker"/>
-        <package name="uidmap"/>
         <!-- Runtime library dependencies for source-compiled rootless Docker binaries
              (rootlesskit, slirp4netns, fuse-overlayfs are compiled from source in
-             build-kiwi-image.sh because they are not available in AL2023 core repos) -->
+             build-kiwi-image.sh because they are not available in AL2023 core repos).
+             Note: uidmap (newuidmap/newgidmap) is provided by shadow-utils which is
+             already included via the core collection.
+             Note: libslirp is not packaged in AL2023; the shared library is copied
+             from the builder container by build-kiwi-image.sh. -->
         <package name="fuse3"/>
         <package name="libseccomp"/>
-        <package name="libslirp"/>
         <package name="glib2"/>
         <package name="libcap"/>
         <package name="git"/>

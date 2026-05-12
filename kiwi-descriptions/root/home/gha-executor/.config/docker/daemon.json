@@ -1,4 +1,5 @@
 {
     "no-new-privileges": true,
-    "live-restore": false
+    "live-restore": false,
+    "data-root": "/var/lib/gha-executor/docker"
 }

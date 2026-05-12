@@ -399,7 +399,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. THE Dockerfile for the KIWI builder SHALL include comments documenting that DNF packages are installed without explicit version pinning
 12. THE documentation SHALL suggest using --releasever lock or documenting expected package versions for audit purposes
 13. THE KIWI image description (appliance.kiwi) SHALL pin the AL2023 package repository URL to a specific release version instead of using the floating `latest` mirrorlist path, and SHALL include a comment explaining the pinning rationale and how to update it
-14. THE Dockerfile for the KIWI builder SHALL include the Go toolchain and C compilation tools (gcc, make, autoconf, automake, libtool) required for compiling rootless Docker dependencies from source (see Requirement 53)
+14. THE Dockerfile for the KIWI builder SHALL include the Go toolchain, C compilation tools (gcc, make, autoconf, automake, libtool), and meson/ninja-build required for compiling rootless Docker dependencies from source including libslirp (see Requirement 53)
 
 ### Requirement 12: Separate Python Dependency Configurations
 
@@ -614,17 +614,20 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 #### Acceptance Criteria
 
 1. THE appliance.kiwi package definition SHALL include the docker package in the image packages list
-2. THE appliance.kiwi package definition SHALL include `shadow-utils` (provides `newuidmap`/`newgidmap` via the `uidmap` subpackage) from the AL2023 core repository for user namespace mapping; THE appliance.kiwi SHALL NOT list `rootlesskit`, `slirp4netns`, or `fuse-overlayfs` as DNF packages because they are not available in the AL2023 core repository
-3. THE config.sh script SHALL create a dedicated non-root service user (e.g., `gha-executor`) with a persistent home directory at a writable path (e.g., `/var/lib/gha-executor`)
-4. THE config.sh script SHALL configure `/etc/subuid` and `/etc/subgid` with at least 65,536 subordinate UIDs/GIDs for the service user
-5. THE config.sh script SHALL configure rootless Docker for the service user using `dockerd-rootless-setuptool.sh` or equivalent systemd unit configuration, with the Docker data-root under the user's state directory
+2. THE appliance.kiwi package definition SHALL NOT list `uidmap` as a separate package because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection; THE appliance.kiwi SHALL NOT list `rootlesskit`, `slirp4netns`, or `fuse-overlayfs` as DNF packages because they are not available in the AL2023 core repository
+3. THE config.sh script SHALL create a dedicated non-root service user (e.g., `gha-executor`) with a persistent home directory at a writable path (e.g., `/var/lib/gha-executor`) and create runtime directories needed by rootless Docker (`/var/lib/gha-executor/docker` for the data-root, `/home/gha-executor/.local/share` for XDG data)
+4. THE config.sh script SHALL configure `/etc/subuid` and `/etc/subgid` with two non-overlapping 65,536-ID ranges for the service user (e.g., `100000:65536` and `200000:65536`) to avoid "Invalid argument" errors from `newuidmap` when rootlesskit generates a third UID/GID mapping entry
+5. THE config.sh script SHALL configure rootless Docker for the service user using a user-scoped systemd unit that invokes `dockerd-rootless.sh` (downloaded from the Moby repository at a pinned version), with the Docker data-root set to `/var/lib/gha-executor/docker`
 6. THE config.sh script SHALL run `loginctl enable-linger` for the service user so the rootless Docker daemon persists without an active login session
-7. THE rootless Docker data directory SHALL be located on a writable path that survives the read-only erofs root filesystem (e.g., under the StateDirectory managed by systemd)
+7. THE rootless Docker data directory SHALL be located on a writable path that survives the read-only erofs root filesystem (explicitly set via `data-root` in daemon.json to `/var/lib/gha-executor/docker`)
 8. WHEN the KIWI image boots, THE rootless Docker daemon SHALL be running under the service user and accessible to the Script_Executor via the rootless socket (e.g., `/run/user/{uid}/docker.sock`)
-9. BECAUSE `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` are not available in the AL2023 core package repository, THE build process SHALL compile these dependencies from source inside the KIWI builder Docker container and install the resulting binaries into the KIWI image overlay at `/usr/local/bin/` (see Requirement 53 for detailed build-from-source acceptance criteria)
+9. BECAUSE `rootlesskit`, `slirp4netns`, `fuse-overlayfs`, `libslirp`, and `dockerd-rootless.sh` are not available in the AL2023 core package repository, THE build process SHALL compile rootlesskit, slirp4netns, fuse-overlayfs, and libslirp from source inside the KIWI builder Docker container, download `dockerd-rootless.sh` from the Moby repository at a pinned version, and install the resulting binaries and libraries into the KIWI image overlay at `/usr/local/bin/` and `/usr/local/lib64/` respectively (see Requirement 53 for detailed build-from-source acceptance criteria)
 10. IF the docker package is not present in appliance.kiwi, THEN THE KIWI_Builder SHALL fail to produce an image capable of running Execution_Containers
-11. THE appliance.kiwi package definition SHALL include runtime library dependencies required by the compiled rootless Docker binaries: `fuse3` (for fuse-overlayfs), `libseccomp` (for slirp4netns), `libslirp` (for slirp4netns), `glib2` (for slirp4netns), `libcap` (for slirp4netns); build-time `-devel` headers are only needed in the KIWI builder Dockerfile, not in the target image
+11. THE appliance.kiwi package definition SHALL include runtime library dependencies required by the compiled rootless Docker binaries: `fuse3` (for fuse-overlayfs), `libseccomp` (for slirp4netns), `glib2` (for slirp4netns), `libcap` (for slirp4netns); `libslirp` is NOT listed as a package because it is not available in AL2023 and is instead compiled from source and shipped as a shared library in `/usr/local/lib64/`; build-time `-devel` headers are only needed in the KIWI builder Dockerfile, not in the target image
 12. THE appliance.kiwi package definition SHALL NOT include `rootlesskit`, `slirp4netns`, or `fuse-overlayfs` as package entries; these binaries SHALL only be provided via the source compilation process defined in Requirement 53
+13. THE KIWI image SHALL include an `/etc/ld.so.conf.d/usr-local-lib64.conf` file that adds `/usr/local/lib64` to the dynamic linker search path, and config.sh SHALL run `ldconfig` to refresh the linker cache so that `libslirp.so` (compiled from source) is discoverable at runtime
+14. THE config.sh script SHALL verify that `dockerd-rootless.sh` is present and executable at `/usr/local/bin/` alongside the other rootless Docker binaries
+15. THE KIWI image SHALL include a udev rules file (`/etc/udev/rules.d/99-tpm.rules`) that sets ownership of `/dev/tpm[0-9]*` and `/dev/tpmrm[0-9]*` to the `gha-executor` user with mode 0600, so the service can access the NitroTPM device without running as root
 
 ### Requirement 34: Pull Container Image at Server Startup
 
@@ -643,7 +646,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 9. WHEN CONTAINER_IMAGE_DIGEST is configured, THE GHA_Server SHALL verify the pulled image matches the expected digest
 10. IF the digest does not match, THEN fail to start with a descriptive error
 11. THE GHA_Server SHALL support digest-pinned container image references (e.g., ubuntu:24.04@sha256:...)
-12. THE default env file and .env.example SHALL include a CONTAINER_IMAGE_DIGEST entry (empty by default) with a comment instructing operators to set a digest before deploying
+12. THE default env file and .env.example SHALL include a CONTAINER_IMAGE_DIGEST entry with a pinned digest value; operators SHOULD update this digest when changing the container image version
 
 ### Requirement 35: Git Package Provisioning in KIWI Image
 
@@ -1047,12 +1050,13 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE KIWI image SHALL include a daemon.json configuration file at the rootless Docker config path for the service user (e.g., `~gha-executor/.config/docker/daemon.json`)
 2. THE daemon.json SHALL set `no-new-privileges` to true to prevent privilege escalation via setuid/setgid
 3. THE daemon.json SHALL set `live-restore` to false to ensure containers stop when the daemon restarts
-4. THE daemon.json SHALL NOT include `userns-remap` since rootless Docker provides user namespace isolation natively
-5. THE KIWI image build SHALL document the expected Docker daemon security configuration in code comments
-6. THE github-actions-remote-executor.service systemd unit SHALL run as the dedicated service user (via `User=` and `Group=` directives) and connect to the rootless Docker socket instead of `/var/run/docker.sock`
-7. THE systemd unit SHALL NOT include `/var/run/docker.sock` in ReadWritePaths since the rootful socket is no longer used
-8. THE Script_Executor SHALL connect to the rootless Docker socket path (e.g., `/run/user/{uid}/docker.sock`) instead of the system-wide `/var/run/docker.sock`
-9. ALL existing container security constraints SHALL remain enforced under rootless Docker: cap_drop=ALL with minimal cap_add, no-new-privileges, memory/CPU limits, ephemeral container lifecycle, and read-only repository bind mounts
+4. THE daemon.json SHALL set `data-root` to `/var/lib/gha-executor/docker` to explicitly place Docker storage on a writable path that survives the read-only erofs root filesystem
+5. THE daemon.json SHALL NOT include `userns-remap` since rootless Docker provides user namespace isolation natively
+6. THE KIWI image build SHALL document the expected Docker daemon security configuration in code comments
+7. THE github-actions-remote-executor.service systemd unit SHALL run as the dedicated service user (via `User=` and `Group=` directives) and connect to the rootless Docker socket instead of `/var/run/docker.sock`
+8. THE systemd unit SHALL NOT include `/var/run/docker.sock` in ReadWritePaths since the rootful socket is no longer used
+9. THE Script_Executor SHALL connect to the rootless Docker socket path (e.g., `/run/user/{uid}/docker.sock`) instead of the system-wide `/var/run/docker.sock`
+10. ALL existing container security constraints SHALL remain enforced under rootless Docker: cap_drop=ALL with minimal cap_add, no-new-privileges, memory/CPU limits, ephemeral container lifecycle, and read-only repository bind mounts
 
 ### Requirement 49: Systemd Service Hardening
 
@@ -1069,9 +1073,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 5. THE systemd service unit SHALL set RestrictAddressFamilies to AF_INET AF_INET6 AF_UNIX AF_NETLINK
 6. THE systemd service unit SHALL set StateDirectory to gha-executor so systemd creates and manages /var/lib/gha-executor
 7. THE systemd service unit SHALL set LogsDirectory to github-actions-executor so systemd creates and manages /var/log/github-actions-executor
-8. THE systemd service unit SHALL set ReadWritePaths to include /var/lib/gha-executor, /var/log/github-actions-executor, /var/run/docker.sock, and /tmp
+8. THE systemd service unit SHALL set ReadWritePaths to include /var/lib/gha-executor, /var/log/github-actions-executor, and /tmp
 9. THE TEMP_STORAGE_PATH configuration value SHALL be set to a path outside of /tmp (e.g. /var/lib/gha-executor) to avoid conflicts with PrivateTmp on other services and to ensure Docker bind mounts resolve correctly
 10. THE env configuration file SHALL set TEMP_STORAGE_PATH to /var/lib/gha-executor
+11. THE systemd service unit SHALL declare `After=user@1000.service` and `Requires=user@1000.service` to ensure the gha-executor user's systemd instance (and therefore the rootless Docker daemon) is started before the executor service
+12. THE systemd service unit SHALL include an `ExecStartPre` command that waits (with a timeout) for the rootless Docker socket at `/run/user/1000/docker.sock` to appear before starting the main process
+13. THE systemd service unit SHALL set `DeviceAllow=/dev/tpm0 rw` to grant access to the NitroTPM device, because `ProtectSystem=strict` implies `DevicePolicy=closed` which would otherwise block TPM access
 
 ### Requirement 51: Host Login Access Hardening
 
@@ -1122,32 +1129,43 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 1. THE Dockerfile for the KIWI builder (`.github/docker/Dockerfile.kiwi-builder`) SHALL install the Go toolchain (golang) required for compiling rootlesskit from source
 2. THE Dockerfile for the KIWI builder SHALL install C compilation tools (gcc, make, autoconf, automake, libtool) and the Rust toolchain (cargo) required for compiling slirp4netns (C/autotools) and fuse-overlayfs (Rust) from source
-3. THE Dockerfile for the KIWI builder SHALL install library development headers required for compilation: `glib2-devel` and `libslirp-devel` and `libcap-devel` and `libseccomp-devel` (for slirp4netns), and `fuse3-devel` (for fuse-overlayfs)
-4. THE Dockerfile SHALL pin the Go toolchain to a specific version for build reproducibility; the Rust toolchain version is already pinned via the Dockerfile's base image releasever lock
+3. THE Dockerfile for the KIWI builder SHALL install library development headers required for compilation: `glib2-devel`, `libcap-devel`, `libseccomp-devel` (for slirp4netns), and `fuse3-devel` (for fuse-overlayfs); `libslirp-devel` is NOT installed as a package because libslirp is not available in AL2023 and is instead built from source within the Dockerfile
+4. THE Dockerfile SHALL install `meson` and `ninja-build` required for building libslirp from source
+5. THE Dockerfile SHALL build and install libslirp from source (cloned from https://gitlab.freedesktop.org/slirp/libslirp at a pinned release tag) using `meson setup build && ninja -C build && ninja -C build install`, making the shared library and development headers available for the subsequent slirp4netns compilation
 
 ##### Build Script Compilation Steps
 
-5. THE build-kiwi-image.sh script SHALL compile rootlesskit from source by cloning the official repository (https://github.com/rootless-containers/rootlesskit) at a pinned release tag inside the KIWI builder Docker container, and building it using `go build` (rootlesskit is a Go project)
-6. THE build-kiwi-image.sh script SHALL compile slirp4netns from source by cloning the official repository (https://github.com/rootless-containers/slirp4netns) at a pinned release tag inside the KIWI builder Docker container, and building it using the autotools build system (`./autogen.sh && ./configure && make`); slirp4netns is a C project that links against libslirp, glib2, libcap, and libseccomp
-7. THE build-kiwi-image.sh script SHALL compile fuse-overlayfs from source by cloning the official repository (https://github.com/containers/fuse-overlayfs) at a pinned release tag inside the KIWI builder Docker container, and building it using `cargo build --release` (fuse-overlayfs is a Rust project that depends on libfuse3)
-8. THE compilation of all three tools SHALL occur inside the KIWI builder Docker container (which has the correct target architecture and compilers), NOT on the GitHub Actions runner host
-9. THE compiled binaries SHALL be placed into the KIWI image overlay directory (e.g., `${TEMP_IMAGE_DIR}/root/usr/local/bin/`) so they are available in the final KIWI image at `/usr/local/bin/`
-10. EACH pinned release tag SHALL be documented with a comment explaining the version choice and how to update it
+6. THE build-kiwi-image.sh script SHALL compile rootlesskit from source by cloning the official repository (https://github.com/rootless-containers/rootlesskit) at a pinned release tag inside the KIWI builder Docker container, and building it using `go build` (rootlesskit is a Go project); the pinned version SHALL be v1.1.1 (the last v1.x release) because v2.x generates a third UID/GID mapping entry that causes "Invalid argument" errors from newuidmap on kernels that reject overlapping host ranges
+7. THE build-kiwi-image.sh script SHALL compile slirp4netns from source by cloning the official repository (https://github.com/rootless-containers/slirp4netns) at a pinned release tag inside the KIWI builder Docker container, and building it using the autotools build system (`./autogen.sh && ./configure && make`); slirp4netns is a C project that links against libslirp (built from source in the Dockerfile), glib2, libcap, and libseccomp
+8. THE build-kiwi-image.sh script SHALL compile fuse-overlayfs from source by cloning the official repository (https://github.com/containers/fuse-overlayfs) at a pinned release tag inside the KIWI builder Docker container, and building it using `cargo build --release` (fuse-overlayfs is a Rust project that depends on libfuse3)
+9. THE compilation of all three tools SHALL occur inside the KIWI builder Docker container (which has the correct target architecture and compilers), NOT on the GitHub Actions runner host
+10. THE compiled binaries SHALL be placed into the KIWI image overlay directory (e.g., `${TEMP_IMAGE_DIR}/root/usr/local/bin/`) so they are available in the final KIWI image at `/usr/local/bin/`
+11. THE libslirp shared library (built from source in the Dockerfile) SHALL be copied from the builder container into the KIWI image overlay at `${TEMP_IMAGE_DIR}/root/usr/local/lib64/` so it is available at runtime
+12. EACH pinned release tag SHALL be documented with a comment explaining the version choice and how to update it
+
+##### dockerd-rootless.sh Installation
+
+13. THE build-kiwi-image.sh script SHALL download `dockerd-rootless.sh` from the official Moby repository (https://github.com/moby/moby) at a pinned version tag (v20.10.27, the last 20.10.x release whose script is compatible with rootlesskit v1.x) and install it to `${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh`
+14. THE pinned Moby version SHALL be documented with a comment explaining that v25.0.x's `dockerd-rootless.sh` passes `--detach-netns` which requires rootlesskit v2.1+, and why v20.10.27 is used instead
+15. IF the download of `dockerd-rootless.sh` fails or produces an empty file, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message
 
 ##### Version Pinning and Integrity
 
-11. THE rootlesskit version SHALL be pinned to a specific release tag (e.g., `v2.3.1`) rather than building from HEAD
-12. THE slirp4netns version SHALL be pinned to a specific release tag (e.g., `v1.3.3`) rather than building from HEAD
-13. THE fuse-overlayfs version SHALL be pinned to a specific release tag (e.g., `v1.14`) rather than building from HEAD
-14. IF any source compilation fails, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message indicating which tool failed to compile
+16. THE rootlesskit version SHALL be pinned to v1.1.1 (the last v1.x release) rather than building from HEAD or using v2.x
+17. THE slirp4netns version SHALL be pinned to a specific release tag (e.g., `v1.3.3`) rather than building from HEAD
+18. THE fuse-overlayfs version SHALL be pinned to a specific release tag (e.g., `v1.14`) rather than building from HEAD
+19. THE libslirp version SHALL be pinned to a specific release tag (e.g., `v4.8.0`) rather than building from HEAD
+20. IF any source compilation fails, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message indicating which tool failed to compile
 
 ##### appliance.kiwi Package Changes
 
-15. THE appliance.kiwi package definition SHALL remove `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` from the `<packages type="image">` section since they are not available in the AL2023 core repository
-16. THE appliance.kiwi package definition SHALL retain `uidmap` (or `shadow-utils` which provides it) in the `<packages type="image">` section since it IS available in the AL2023 core repository
-17. THE appliance.kiwi package definition SHALL add runtime library dependencies required by the compiled binaries: `fuse3` (runtime dependency of fuse-overlayfs), `libseccomp` (runtime dependency of slirp4netns), `libslirp` (runtime dependency of slirp4netns), `glib2` (runtime dependency of slirp4netns), `libcap` (runtime dependency of slirp4netns)
+21. THE appliance.kiwi package definition SHALL remove `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` from the `<packages type="image">` section since they are not available in the AL2023 core repository
+22. THE appliance.kiwi package definition SHALL NOT list `uidmap` as a separate package because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection
+23. THE appliance.kiwi package definition SHALL NOT list `libslirp` as a package because it is not available in AL2023; the shared library is compiled from source and copied into the image by build-kiwi-image.sh
+24. THE appliance.kiwi package definition SHALL add runtime library dependencies required by the compiled binaries: `fuse3` (runtime dependency of fuse-overlayfs), `libseccomp` (runtime dependency of slirp4netns), `glib2` (runtime dependency of slirp4netns), `libcap` (runtime dependency of slirp4netns)
 
 ##### Verification
 
-18. THE config.sh script SHALL verify that `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries are present and executable at `/usr/local/bin/` during image preparation
-19. IF any of the three binaries is missing or not executable, THEN config.sh SHALL exit with a non-zero exit code and a descriptive error message
+25. THE config.sh script SHALL verify that `rootlesskit`, `slirp4netns`, `fuse-overlayfs`, and `dockerd-rootless.sh` are present and executable at `/usr/local/bin/` during image preparation
+26. THE config.sh script SHALL run `ldconfig` to refresh the dynamic linker cache so that `libslirp.so` in `/usr/local/lib64/` is discoverable at runtime
+27. IF any of the required binaries is missing or not executable, THEN config.sh SHALL exit with a non-zero exit code and a descriptive error message

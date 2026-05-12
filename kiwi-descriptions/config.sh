@@ -23,13 +23,29 @@ echo "Creating gha-executor service user..."
 useradd -m -s /bin/bash gha-executor
 echo "✓ gha-executor user created"
 
+# Create directories that rootless Docker needs at runtime.
+# The erofs root filesystem is read-only, so these directories must exist in
+# the base image layer. The tmpfs overlay makes them writable at boot.
+# - /var/lib/gha-executor/docker: Docker data-root (images, containers, volumes)
+# - /home/gha-executor/.local/share: default XDG data directory (Docker may probe it)
+echo "Creating rootless Docker runtime directories..."
+mkdir -p /var/lib/gha-executor/docker
+mkdir -p /home/gha-executor/.local/share
+chown -R gha-executor:gha-executor /var/lib/gha-executor
+chown -R gha-executor:gha-executor /home/gha-executor/.local
+echo "✓ Rootless Docker runtime directories created"
+
 # Configure subordinate UID/GID ranges for rootless Docker user namespace mapping.
-# 65536 subordinate IDs are required for proper container user namespace isolation.
-# These mappings allow rootless Docker to create user namespaces for containers.
+# Two separate ranges are required because rootlesskit generates a third UID/GID
+# mapping entry to cover container UIDs above the subordinate count. If only one
+# range is provided, the third entry overlaps the second on the host side, causing
+# "newuidmap: Invalid argument". Two non-overlapping ranges solve this.
 echo "Configuring subordinate UID/GID mappings..."
-echo "gha-executor:100000:65536" >> /etc/subuid
-echo "gha-executor:100000:65536" >> /etc/subgid
-echo "✓ /etc/subuid and /etc/subgid configured with 65536 subordinate IDs"
+echo "gha-executor:100000:65536" > /etc/subuid
+echo "gha-executor:200000:65536" >> /etc/subuid
+echo "gha-executor:100000:65536" > /etc/subgid
+echo "gha-executor:200000:65536" >> /etc/subgid
+echo "✓ /etc/subuid and /etc/subgid configured with two non-overlapping 65536-ID ranges"
 
 # Enable lingering for gha-executor so that the user's systemd instance
 # (and therefore the rootless Docker daemon) starts at boot and persists
@@ -62,7 +78,7 @@ Documentation=https://docs.docker.com/go/rootless/
 
 [Service]
 Environment=PATH=/usr/bin:/sbin:/usr/sbin:/usr/local/bin
-ExecStart=/usr/bin/dockerd-rootless.sh
+ExecStart=/usr/local/bin/dockerd-rootless.sh
 ExecReload=/bin/kill -s HUP $MAINPID
 TimeoutSec=0
 RestartSec=2
@@ -100,9 +116,15 @@ echo "✓ Rootless Docker systemd user service installed and enabled"
 # Verify that rootlesskit, slirp4netns, and fuse-overlayfs binaries
 # (compiled from source by build-kiwi-image.sh) are present and executable
 # at /usr/local/bin/. These are required for rootless Docker operation.
+# Also refresh the dynamic linker cache so libslirp.so (in /usr/local/lib64/)
+# is discoverable at runtime.
+echo "Refreshing dynamic linker cache for /usr/local/lib64..."
+ldconfig
+echo "✓ ldconfig completed"
+
 echo "Verifying rootless Docker binaries..."
 
-ROOTLESS_BINARIES="rootlesskit slirp4netns fuse-overlayfs"
+ROOTLESS_BINARIES="rootlesskit slirp4netns fuse-overlayfs dockerd-rootless.sh"
 for binary in ${ROOTLESS_BINARIES}; do
     if [ ! -f "/usr/local/bin/${binary}" ]; then
         echo "ERROR: Required binary /usr/local/bin/${binary} is missing"

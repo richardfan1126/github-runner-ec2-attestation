@@ -1,13 +1,15 @@
 [Unit]
 Description=GitHub Actions Remote Executor
-After=network-online.target
+After=network-online.target user@1000.service
 Wants=network-online.target
+Requires=user@1000.service
 
 [Service]
 Type=simple
 User=gha-executor
 Group=gha-executor
 EnvironmentFile=/etc/github-actions-remote-executor/env
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -S /run/user/1000/docker.sock ] && exit 0; sleep 1; done; echo "Timed out waiting for rootless Docker socket"; exit 1'
 ExecStart=/usr/local/bin/github-actions-remote-executor
 Restart=always
 RestartSec=10
@@ -23,6 +25,10 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 StateDirectory=gha-executor
 LogsDirectory=github-actions-executor
 ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /tmp
+
+# NitroTPM access — ProtectSystem=strict implies DevicePolicy=closed,
+# so we must explicitly allow the TPM character device.
+DeviceAllow=/dev/tpm0 rw
 
 [Install]
 WantedBy=multi-user.target
