@@ -344,17 +344,20 @@ def test_dockerfile_has_pinned_versions():
     assert "dnf clean" in content, "Dockerfile should clean dnf cache"
 
 
-def test_docker_package_inclusion_in_kiwi_image():
+@given(dummy=st.integers(min_value=0, max_value=999))
+@settings(max_examples=100)
+def test_docker_package_inclusion_in_kiwi_image(dummy: int):
     """
     Property 116: Docker Package Inclusion in KIWI Image
 
-    The docker package and all rootless Docker dependencies (uidmap,
-    rootlesskit, slirp4netns, fuse-overlayfs) must be listed in the
-    <packages type="image"> section of kiwi-descriptions/appliance.kiwi
-    so the rootless Docker daemon is available at runtime for managing
-    Execution_Containers.
+    The appliance.kiwi package definition should include the `docker` and
+    `uidmap` packages (available in AL2023 core repos), plus runtime library
+    dependencies (`fuse3`, `libseccomp`, `libslirp`, `glib2`, `libcap`).
+    The `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries should
+    NOT be listed as DNF packages (they are not available in AL2023) but
+    should instead be compiled from source by the build script.
 
-    **Validates: Requirements 33.1, 33.2**
+    **Validates: Requirements 33.1, 33.2, 33.11, 33.12, 53.15, 53.16, 53.17**
     """
     import xml.etree.ElementTree as ET
 
@@ -383,12 +386,29 @@ def test_docker_package_inclusion_in_kiwi_image():
         "docker package must be listed in <packages type='image'> section"
     )
 
-    # Requirement 33.2: rootless Docker dependencies must be present
-    rootless_deps = ["uidmap", "rootlesskit", "slirp4netns", "fuse-overlayfs"]
-    for dep in rootless_deps:
+    # Requirement 33.2: uidmap must be present (available in AL2023 core repos)
+    assert "uidmap" in package_names, (
+        "uidmap package must be listed in <packages type='image'> section "
+        "for rootless Docker user namespace mapping"
+    )
+
+    # Requirement 33.2, 33.12, 53.15: rootlesskit, slirp4netns, fuse-overlayfs
+    # must NOT be listed as DNF packages (not available in AL2023 core repos;
+    # they are compiled from source by build-kiwi-image.sh)
+    source_compiled_tools = ["rootlesskit", "slirp4netns", "fuse-overlayfs"]
+    for tool in source_compiled_tools:
+        assert tool not in package_names, (
+            f"{tool} must NOT be listed as a DNF package in appliance.kiwi — "
+            f"it is not available in AL2023 core repos and is compiled from source"
+        )
+
+    # Requirement 33.11, 53.17: Runtime library dependencies must be present
+    runtime_lib_deps = ["fuse3", "libseccomp", "libslirp", "glib2", "libcap"]
+    for dep in runtime_lib_deps:
         assert dep in package_names, (
-            f"{dep} package must be listed in <packages type='image'> section "
-            f"for rootless Docker support"
+            f"{dep} runtime library dependency must be listed in "
+            f"<packages type='image'> section for source-compiled rootless "
+            f"Docker binaries"
         )
 
 
@@ -584,3 +604,127 @@ def test_al2023_mirrorlist_references_specific_version():
             f"Repository URL '{url}' does not reference a specific version; "
             "expected a path segment matching YYYY.M.YYYYMMDD (e.g. 2023.10.20260302)"
         )
+
+
+# Feature: github-actions-remote-executor, Property: Build Script Source Compilation
+@given(dummy=st.integers(min_value=0, max_value=999))
+@settings(max_examples=100)
+def test_build_script_source_compilation_steps(dummy: int):
+    """
+    Property: Build Script Contains Source Compilation Steps
+
+    For any check, the build-kiwi-image.sh script must contain compilation
+    steps for rootlesskit, slirp4netns, and fuse-overlayfs at pinned version
+    tags. Each tool must be cloned from its official repository and built
+    using the appropriate build system inside the KIWI builder Docker container.
+
+    **Validates: Requirements 53.9, 53.14**
+    """
+    build_script_path = Path(".github/scripts/build-kiwi-image.sh")
+    assert build_script_path.exists(), "build-kiwi-image.sh must exist"
+
+    content = build_script_path.read_text()
+
+    # Verify pinned version variables exist for all three tools
+    assert "ROOTLESSKIT_VERSION=" in content, (
+        "build-kiwi-image.sh must define a ROOTLESSKIT_VERSION variable "
+        "with a pinned release tag"
+    )
+    assert "SLIRP4NETNS_VERSION=" in content, (
+        "build-kiwi-image.sh must define a SLIRP4NETNS_VERSION variable "
+        "with a pinned release tag"
+    )
+    assert "FUSE_OVERLAYFS_VERSION=" in content, (
+        "build-kiwi-image.sh must define a FUSE_OVERLAYFS_VERSION variable "
+        "with a pinned release tag"
+    )
+
+    # Verify git clone commands for each tool's official repository
+    assert "github.com/rootless-containers/rootlesskit" in content, (
+        "build-kiwi-image.sh must clone rootlesskit from its official repository"
+    )
+    assert "github.com/rootless-containers/slirp4netns" in content, (
+        "build-kiwi-image.sh must clone slirp4netns from its official repository"
+    )
+    assert "github.com/containers/fuse-overlayfs" in content, (
+        "build-kiwi-image.sh must clone fuse-overlayfs from its official repository"
+    )
+
+    # Verify appropriate build commands for each tool
+    # rootlesskit is a Go project
+    assert "go build" in content, (
+        "build-kiwi-image.sh must use 'go build' to compile rootlesskit"
+    )
+    # slirp4netns and fuse-overlayfs are C/autotools projects
+    assert "./autogen.sh" in content, (
+        "build-kiwi-image.sh must use './autogen.sh' for C/autotools builds"
+    )
+    assert "./configure" in content, (
+        "build-kiwi-image.sh must use './configure' for C/autotools builds"
+    )
+    assert "make" in content, (
+        "build-kiwi-image.sh must use 'make' for C/autotools builds"
+    )
+
+    # Verify binaries are placed in the KIWI image overlay at /usr/local/bin/
+    assert "/usr/local/bin" in content, (
+        "build-kiwi-image.sh must place compiled binaries at /usr/local/bin/"
+    )
+
+    # Verify error handling: script should exit on compilation failure
+    assert "::error::" in content, (
+        "build-kiwi-image.sh must emit ::error:: on compilation failure"
+    )
+
+
+# Feature: github-actions-remote-executor, Property: Config.sh Binary Verification
+@given(dummy=st.integers(min_value=0, max_value=999))
+@settings(max_examples=100)
+def test_config_sh_binary_existence_checks(dummy: int):
+    """
+    Property: Config.sh Contains Binary Existence Checks
+
+    For any check, the config.sh script must verify that rootlesskit,
+    slirp4netns, and fuse-overlayfs binaries exist and are executable
+    at /usr/local/bin/. If any binary is missing or not executable,
+    config.sh must exit with a descriptive error.
+
+    **Validates: Requirements 53.18, 53.19**
+    """
+    config_path = Path("kiwi-descriptions/config.sh")
+    assert config_path.exists(), "config.sh must exist"
+
+    content = config_path.read_text()
+
+    # Verify that config.sh references all three binary names for verification
+    required_binaries = ["rootlesskit", "slirp4netns", "fuse-overlayfs"]
+
+    for binary in required_binaries:
+        assert binary in content, (
+            f"config.sh must reference '{binary}' for binary existence verification"
+        )
+
+    # Verify the /usr/local/bin/ path is used for binary checks
+    assert "/usr/local/bin/" in content, (
+        "config.sh must check binaries at /usr/local/bin/ path"
+    )
+
+    # Verify existence check pattern (checking if file exists)
+    assert "! -f" in content, (
+        "config.sh must use file existence checks (! -f) for binary verification"
+    )
+
+    # Verify executable check pattern (checking if file is executable)
+    assert "! -x" in content, (
+        "config.sh must use executable checks (! -x) for binary verification"
+    )
+
+    # Verify error exit on missing binary
+    assert "exit 1" in content, (
+        "config.sh must exit with non-zero code if a binary is missing"
+    )
+
+    # Verify descriptive error messages are present for missing/non-executable binaries
+    assert "ERROR" in content, (
+        "config.sh must output descriptive ERROR messages for missing binaries"
+    )

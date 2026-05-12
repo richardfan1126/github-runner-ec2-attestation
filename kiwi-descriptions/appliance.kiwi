@@ -71,9 +71,14 @@
         <package name="python3.11-pip"/>
         <package name="docker"/>
         <package name="uidmap"/>
-        <package name="rootlesskit"/>
-        <package name="slirp4netns"/>
-        <package name="fuse-overlayfs"/>
+        <!-- Runtime library dependencies for source-compiled rootless Docker binaries
+             (rootlesskit, slirp4netns, fuse-overlayfs are compiled from source in
+             build-kiwi-image.sh because they are not available in AL2023 core repos) -->
+        <package name="fuse3"/>
+        <package name="libseccomp"/>
+        <package name="libslirp"/>
+        <package name="glib2"/>
+        <package name="libcap"/>
         <package name="git"/>
         <!-- Don't install these packages -->
         <ignore name="ec2-hibinit-agent"/>

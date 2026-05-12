@@ -34,6 +34,17 @@ RUN dnf install -y \
     autoconf \
     automake \
     libtool \
+    # Build-time dependencies for rootless Docker tools compiled from source.
+    # golang: required for compiling rootlesskit (Go project).
+    # glib2-devel, libslirp-devel, libcap-devel, libseccomp-devel: required for
+    #   compiling slirp4netns (C/autotools, links against these libraries).
+    # fuse3-devel: required for compiling fuse-overlayfs (C/autotools, links against libfuse3).
+    golang \
+    glib2-devel \
+    libslirp-devel \
+    libcap-devel \
+    libseccomp-devel \
+    fuse3-devel \
     && dnf clean all
 
 # Create output directory for build artifacts

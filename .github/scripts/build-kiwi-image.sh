@@ -164,6 +164,90 @@ fi
 
 echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image description directory"
 
+################################################################################
+# Compile Rootless Docker Dependencies from Source
+################################################################################
+# rootlesskit, slirp4netns, and fuse-overlayfs are not available as packages in
+# the AL2023 core repository. They are compiled from source inside the KIWI
+# builder Docker container (which has the correct target architecture and
+# compilers) and placed into the KIWI image overlay at /usr/local/bin/.
+#
+# To update versions:
+#   1. Change the *_VERSION variable below to the desired release tag
+#   2. Verify the new tag exists on the upstream repository
+#   3. Run the build and confirm compilation succeeds
+#   4. Test rootless Docker functionality on the resulting image
+################################################################################
+
+echo ""
+echo "=== Compiling Rootless Docker Dependencies from Source ==="
+
+# Pinned versions for rootless Docker tools
+# rootlesskit: https://github.com/rootless-containers/rootlesskit/releases
+ROOTLESSKIT_VERSION="v2.3.5"
+# slirp4netns: https://github.com/rootless-containers/slirp4netns/releases
+SLIRP4NETNS_VERSION="v1.3.3"
+# fuse-overlayfs: https://github.com/containers/fuse-overlayfs/releases
+FUSE_OVERLAYFS_VERSION="v1.14"
+
+echo "Versions:"
+echo "  rootlesskit:    ${ROOTLESSKIT_VERSION}"
+echo "  slirp4netns:    ${SLIRP4NETNS_VERSION}"
+echo "  fuse-overlayfs: ${FUSE_OVERLAYFS_VERSION}"
+
+# Create output directory for compiled binaries
+mkdir -p "${TEMP_IMAGE_DIR}/root/usr/local/bin"
+
+# Compile all three tools inside the KIWI builder Docker container
+echo "Building rootless Docker tools inside builder container..."
+if ! docker run --rm \
+    -v "${TEMP_IMAGE_DIR}/root/usr/local/bin:/output" \
+    kiwi-builder:latest \
+    bash -c "
+set -e -o pipefail
+
+echo '--- Compiling rootlesskit ${ROOTLESSKIT_VERSION} (Go) ---'
+git clone --depth 1 --branch ${ROOTLESSKIT_VERSION} https://github.com/rootless-containers/rootlesskit.git /tmp/rootlesskit
+cd /tmp/rootlesskit
+go build -o /output/rootlesskit ./cmd/rootlesskit
+go build -o /output/rootlesskit-docker-proxy ./cmd/rootlesskit-docker-proxy
+echo '✓ rootlesskit compiled successfully'
+
+echo '--- Compiling slirp4netns ${SLIRP4NETNS_VERSION} (C/autotools) ---'
+git clone --depth 1 --branch ${SLIRP4NETNS_VERSION} https://github.com/rootless-containers/slirp4netns.git /tmp/slirp4netns
+cd /tmp/slirp4netns
+./autogen.sh
+./configure --prefix=/usr
+make
+cp slirp4netns /output/slirp4netns
+echo '✓ slirp4netns compiled successfully'
+
+echo '--- Compiling fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} (C/autotools) ---'
+git clone --depth 1 --branch ${FUSE_OVERLAYFS_VERSION} https://github.com/containers/fuse-overlayfs.git /tmp/fuse-overlayfs
+cd /tmp/fuse-overlayfs
+./autogen.sh
+./configure --prefix=/usr
+make
+cp fuse-overlayfs /output/fuse-overlayfs
+echo '✓ fuse-overlayfs compiled successfully'
+
+echo '--- All rootless Docker tools compiled ---'
+"; then
+    echo "::error::Failed to compile rootless Docker dependencies from source"
+    exit 1
+fi
+
+# Verify all expected binaries were produced
+for binary in rootlesskit rootlesskit-docker-proxy slirp4netns fuse-overlayfs; do
+    if [ ! -f "${TEMP_IMAGE_DIR}/root/usr/local/bin/${binary}" ]; then
+        echo "::error::Compiled binary not found: ${binary}"
+        exit 1
+    fi
+    chmod +x "${TEMP_IMAGE_DIR}/root/usr/local/bin/${binary}"
+done
+
+echo "✓ All rootless Docker binaries compiled and placed in image overlay"
+
 # Make scripts executable
 chmod +x "${TEMP_IMAGE_DIR}/config.sh"
 chmod +x "${TEMP_IMAGE_DIR}/edit_boot_install.sh"

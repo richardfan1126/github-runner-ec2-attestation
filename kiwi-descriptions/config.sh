@@ -95,6 +95,29 @@ chown -R gha-executor:gha-executor "${GHA_USER_HOME}/.config"
 echo "✓ Rootless Docker systemd user service installed and enabled"
 
 ################################
+# Rootless Docker Binary Check #
+################################
+# Verify that rootlesskit, slirp4netns, and fuse-overlayfs binaries
+# (compiled from source by build-kiwi-image.sh) are present and executable
+# at /usr/local/bin/. These are required for rootless Docker operation.
+echo "Verifying rootless Docker binaries..."
+
+ROOTLESS_BINARIES="rootlesskit slirp4netns fuse-overlayfs"
+for binary in ${ROOTLESS_BINARIES}; do
+    if [ ! -f "/usr/local/bin/${binary}" ]; then
+        echo "ERROR: Required binary /usr/local/bin/${binary} is missing"
+        exit 1
+    fi
+    if [ ! -x "/usr/local/bin/${binary}" ]; then
+        echo "ERROR: Binary /usr/local/bin/${binary} exists but is not executable"
+        exit 1
+    fi
+    echo "  ✓ /usr/local/bin/${binary} present and executable"
+done
+
+echo "✓ All rootless Docker binaries verified"
+
+################################
 # Conditional sshd Enablement  #
 ################################
 if [ "${ENABLE_SSH}" = "true" ]; then
