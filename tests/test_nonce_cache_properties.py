@@ -135,7 +135,8 @@ _nonce_strategy = st.text(
 def test_property_154_duplicate_nonce_rejected_on_execute(nonce):
     """
     For any encrypted /execute request whose nonce has been previously seen
-    in the Nonce_Cache, the server should reject the request with HTTP 400.
+    in the Nonce_Cache, the server should reject the request with an encrypted
+    error envelope (HTTP 200 at transport layer, error_code 400 inside envelope).
 
     **Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5**
     """
@@ -148,12 +149,16 @@ def test_property_154_duplicate_nonce_rejected_on_execute(nonce):
     )
 
     # Second request with the same nonce should be rejected as duplicate
+    # Post-decryption errors return HTTP 200 with encrypted error envelope
     resp2 = _send_execute_with_nonce(app, client, ctx, nonce)
-    assert resp2.status_code == 400, (
-        f"Duplicate nonce={nonce!r} should return 400, got {resp2.status_code}"
+    assert resp2.status_code == 200, (
+        f"Duplicate nonce response should be HTTP 200 (encrypted envelope), got {resp2.status_code}"
     )
-    detail = resp2.json().get("detail", {})
-    assert detail.get("error") == "duplicate_nonce"
+    decrypted = decrypt_execute_response(resp2.json(), ctx.shared_key)
+    assert decrypted.get("error") == "duplicate_nonce", (
+        f"Duplicate nonce={nonce!r} should return duplicate_nonce error, got {decrypted}"
+    )
+    assert decrypted.get("error_code") == 400
 
 
 @settings(max_examples=30, deadline=None)

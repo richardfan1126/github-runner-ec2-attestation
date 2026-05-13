@@ -72,7 +72,12 @@ def _encrypt_output_request(payload_dict: dict, shared_key: bytes) -> dict:
     """Encrypt a request payload for the output endpoint using the shared key.
 
     Returns the outer JSON body with encrypted_payload field.
+    If 'nonce' is not present in payload_dict, a random UUID nonce is
+    automatically added (nonce is mandatory on /execution/{id}/output).
     """
+    import uuid
+    if "nonce" not in payload_dict:
+        payload_dict = {**payload_dict, "nonce": str(uuid.uuid4())}
     plaintext = json.dumps(payload_dict).encode("utf-8")
     nonce = os.urandom(12)
     ciphertext = AESGCM(shared_key).encrypt(nonce, plaintext, None)
@@ -470,13 +475,14 @@ def test_invalid_execution_id_response(execution_id):
                 )
                 response = _client.post(f"/execution/{execution_id}/output", json=body)
                 
-                assert response.status_code == 404, \
-                    f"Expected 404 for non-existent execution, got {response.status_code}"
+                # Post-decryption errors return HTTP 200 with encrypted error envelope
+                assert response.status_code == 200, \
+                    f"Expected 200 (encrypted error envelope) for non-existent execution, got {response.status_code}"
                 
-                data = response.json()
-                assert "error" in data.get("detail", {}), "Response missing error field"
-                assert data["detail"]["error"] == "execution_not_found", \
+                data = _decrypt_output_response(response.json(), shared_key)
+                assert data.get("error") == "execution_not_found", \
                     "Error should be 'execution_not_found'"
+                assert data.get("error_code") == 404
     finally:
         _encryption_manager.remove_encryption_context(execution_id)
 
@@ -750,11 +756,13 @@ def test_property_149_concurrency_enforcement(max_concurrent):
                             # The next request should be rejected with 503
                             body = make_encrypted_execute_request(request_data, ctx)
                             resp = client.post("/execute", json=body)
-                            assert resp.status_code == 503, (
-                                f"Expected 503 at capacity ({max_concurrent}), got {resp.status_code}"
+                            # Post-decryption errors return HTTP 200 with encrypted error envelope
+                            assert resp.status_code == 200, (
+                                f"Expected 200 (encrypted error envelope) at capacity ({max_concurrent}), got {resp.status_code}"
                             )
-                            data = resp.json()
-                            assert data["detail"]["error"] == "at_capacity"
+                            data = decrypt_execute_response(resp.json(), ctx.shared_key)
+                            assert data["error"] == "at_capacity"
+                            assert data["error_code"] == 503
 
     assert accepted_count == max_concurrent
 
@@ -822,12 +830,14 @@ def test_property_150_script_size_enforcement(max_script_size, file_size):
                             resp = client.post("/execute", json=body)
 
                             if file_size > max_script_size:
-                                assert resp.status_code == 413, (
-                                    f"Expected 413 for file_size={file_size} > max={max_script_size}, "
+                                # Post-decryption errors return HTTP 200 with encrypted error envelope
+                                assert resp.status_code == 200, (
+                                    f"Expected 200 (encrypted error envelope) for file_size={file_size} > max={max_script_size}, "
                                     f"got {resp.status_code}"
                                 )
-                                data = resp.json()
-                                assert data["detail"]["error"] == "script_too_large"
+                                data = decrypt_execute_response(resp.json(), ctx.shared_key)
+                                assert data["error"] == "script_too_large"
+                                assert data["error_code"] == 413
                             else:
                                 assert resp.status_code == 200, (
                                     f"Expected 200 for file_size={file_size} <= max={max_script_size}, "

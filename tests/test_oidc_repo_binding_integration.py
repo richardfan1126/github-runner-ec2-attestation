@@ -222,9 +222,11 @@ class TestOIDCRepoBindingIntegration:
         body = make_encrypted_execute_request(request_data, encryption_ctx)
         response = client.post("/execute", json=body)
 
-        assert response.status_code == 403
-        detail = response.json().get("detail", {})
-        assert detail.get("error") == "repository_mismatch"
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert response.status_code == 200
+        decrypted = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        assert decrypted.get("error") == "repository_mismatch"
+        assert decrypted.get("error_code") == 403
 
     def test_execute_mismatched_owner_returns_403(
         self, app_and_client, encryption_ctx
@@ -252,9 +254,11 @@ class TestOIDCRepoBindingIntegration:
         body = make_encrypted_execute_request(request_data, encryption_ctx)
         response = client.post("/execute", json=body)
 
-        assert response.status_code == 403
-        detail = response.json().get("detail", {})
-        assert detail.get("error") == "repository_mismatch"
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert response.status_code == 200
+        decrypted = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        assert decrypted.get("error") == "repository_mismatch"
+        assert decrypted.get("error_code") == 403
 
     def test_execute_mismatched_repo_name_returns_403(
         self, app_and_client, encryption_ctx
@@ -281,9 +285,11 @@ class TestOIDCRepoBindingIntegration:
         body = make_encrypted_execute_request(request_data, encryption_ctx)
         response = client.post("/execute", json=body)
 
-        assert response.status_code == 403
-        detail = response.json().get("detail", {})
-        assert detail.get("error") == "repository_mismatch"
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert response.status_code == 200
+        decrypted = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+        assert decrypted.get("error") == "repository_mismatch"
+        assert decrypted.get("error_code") == 403
 
 
 class TestOutputSharedKeyAuthIntegration:

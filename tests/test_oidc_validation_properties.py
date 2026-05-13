@@ -119,6 +119,7 @@ from tests.encryption_test_helpers import (
     EncryptionTestContext,
     make_encrypted_execute_request,
     make_encrypted_output_request,
+    decrypt_execute_response,
 )
 
 _server_ctx = EncryptionTestContext()
@@ -295,8 +296,13 @@ def test_property_008_oidc_token_required_on_protected_endpoints(execution_id):
     }
     body = make_encrypted_execute_request(req_data, _server_ctx)
     resp_execute = _server_client.post("/execute", json=body)
-    assert resp_execute.status_code == 401, (
-        f"/execute without oidc_token should return 401, got {resp_execute.status_code}"
+    # Post-decryption errors return HTTP 200 with encrypted error envelope
+    assert resp_execute.status_code == 200, (
+        f"/execute without oidc_token should return 200 (encrypted error envelope), got {resp_execute.status_code}"
+    )
+    decrypted = decrypt_execute_response(resp_execute.json(), _server_ctx.shared_key)
+    assert decrypted.get("error_code") == 401, (
+        f"/execute without oidc_token should have error_code 401 in envelope, got {decrypted}"
     )
 
     # POST /execution/{id}/output without oidc_token in encrypted body

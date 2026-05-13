@@ -21,6 +21,7 @@ from src.validation import GITHUB_OIDC_ISSUER
 from tests.encryption_test_helpers import (
     EncryptionTestContext,
     make_encrypted_execute_request,
+    decrypt_execute_response,
 )
 
 ALLOWED_REPOS = ["owner/repo"]
@@ -117,9 +118,10 @@ def test_property_142_oidc_repository_claim_binding(oidc_repo, url_owner_repo, s
         body = make_encrypted_execute_request(request_data, ctx)
         response = client.post("/execute", json=body)
 
-    assert response.status_code == 403, (
+    assert response.status_code == 200, (
         f"Mismatched repos (claim={oidc_repo!r}, url_repo={url_owner_repo!r}) "
-        f"should return 403, got {response.status_code}"
+        f"should return 200 (encrypted error envelope), got {response.status_code}"
     )
-    detail = response.json().get("detail", {})
-    assert detail.get("error") == "repository_mismatch"
+    decrypted = decrypt_execute_response(response.json(), ctx.shared_key)
+    assert decrypted.get("error") == "repository_mismatch"
+    assert decrypted.get("error_code") == 403

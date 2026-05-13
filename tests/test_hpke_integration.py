@@ -280,7 +280,7 @@ class TestEncryptedErrorScenarios:
     def test_expired_oidc_token_in_encrypted_body(
         self, app, client, encryption_ctx, mock_github_and_attestation
     ):
-        """Expired OIDC token inside encrypted payload returns 401."""
+        """Expired OIDC token inside encrypted payload returns encrypted error envelope with HTTP 200."""
         expired_result = OIDCValidationResult(
             valid=False,
             status_code=401,
@@ -300,12 +300,16 @@ class TestEncryptedErrorScenarios:
         }
 
         resp = _post_execute(client, encryption_ctx, request_data)
-        assert resp.status_code == 401
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert resp.status_code == 200
+        decrypted = decrypt_execute_response(resp.json(), encryption_ctx.shared_key)
+        assert decrypted["error_code"] == 401
+        assert "expired" in decrypted["message"].lower() or "authentication" in decrypted["message"].lower()
 
     def test_unauthorized_repository_in_encrypted_body(
         self, app, client, encryption_ctx, mock_github_and_attestation
     ):
-        """OIDC token from unauthorized repo inside encrypted payload returns 403."""
+        """OIDC token from unauthorized repo inside encrypted payload returns encrypted error envelope with HTTP 200."""
         forbidden_result = OIDCValidationResult(
             valid=False,
             status_code=403,
@@ -325,4 +329,8 @@ class TestEncryptedErrorScenarios:
         }
 
         resp = _post_execute(client, encryption_ctx, request_data)
-        assert resp.status_code == 403
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert resp.status_code == 200
+        decrypted = decrypt_execute_response(resp.json(), encryption_ctx.shared_key)
+        assert decrypted["error_code"] == 403
+        assert "repository" in decrypted["message"].lower() or "not allowed" in decrypted["message"].lower()

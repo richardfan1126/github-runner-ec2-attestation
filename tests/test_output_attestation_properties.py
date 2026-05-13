@@ -216,9 +216,12 @@ def test_property_44_output_attestation_digest_integrity(
 
     assert result_bytes is not None, f"Expected success but got error: {error}"
     assert error is None
-    assert captured_user_data["content"] == expected_digest, (
+    # user_data is now JSON containing the output_digest
+    import json as _json
+    user_data_parsed = _json.loads(captured_user_data["content"])
+    assert user_data_parsed["output_digest"] == expected_digest, (
         f"user_data digest mismatch for status {exec_status.value}: "
-        f"got {captured_user_data['content']}, expected {expected_digest}"
+        f"got {user_data_parsed['output_digest']}, expected {expected_digest}"
     )
 
 

@@ -249,12 +249,15 @@ class TestEndToEndIntegration:
         assert rate_limited, "Rate limit should have been enforced"
 
     def test_execution_not_found(self, client, encryption_ctx):
-        """Test retrieving non-existent execution"""
+        """Test retrieving non-existent execution returns encrypted error envelope"""
         fake_id = "00000000-0000-0000-0000-000000000000"
         # Store encryption context so we get past the "no encryption context" check
         encryption_ctx.encryption_manager.store_encryption_context(fake_id, encryption_ctx.shared_key)
         response = _post_output(client, fake_id, encryption_ctx.shared_key)
-        assert response.status_code == 404
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert response.status_code == 200
+        decrypted = decrypt_output_response(response.json(), encryption_ctx.shared_key)
+        assert decrypted["error_code"] == 404
 
     def test_health_endpoint(self, client):
         """Test health check endpoint"""
@@ -270,7 +273,7 @@ class TestErrorScenarios:
     """Test error handling scenarios"""
 
     def test_authentication_failure(self, client, test_config, encryption_ctx):
-        """Test GitHub authentication failure"""
+        """Test GitHub authentication failure returns encrypted error envelope"""
         with patch('requests.Session') as mock_session_class:
             mock_session = Mock()
             mock_session_class.return_value = mock_session
@@ -286,7 +289,10 @@ class TestErrorScenarios:
             }
 
             response = _post_execute(client, encryption_ctx, request_data)
-            assert response.status_code == 401
+            # Post-decryption errors return HTTP 200 with encrypted error envelope
+            assert response.status_code == 200
+            decrypted = decrypt_execute_response(response.json(), encryption_ctx.shared_key)
+            assert decrypted["error_code"] == 401
 
     def test_execution_timeout(self, test_config, mock_github_and_attestation, temp_dir):
         """Test script execution timeout"""
@@ -611,8 +617,8 @@ class TestCleanupAndRetention:
         removed = exec_manager.cleanup_expired()
         assert removed >= 1
 
-        # Verify execution was removed - now get_execution returns None,
-        # but the encryption context may still exist, so we get 404 from the endpoint
+        # Verify execution was removed - cleanup also removes encryption context,
+        # so the server returns a pre-decryption 404 (execution not found)
         response = _post_output(client, execution_id, encryption_ctx.shared_key)
         assert response.status_code == 404
 

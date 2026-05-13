@@ -121,13 +121,15 @@ def test_nonce_passthrough_attest_endpoint(nonce):
 
 # Feature: github-actions-remote-executor, Property 126: Nonce Passthrough in Attestation – /execute
 @settings(max_examples=100, deadline=None)
-@given(nonce=nonce_strategy)
+@given(nonce=st.text(min_size=1, max_size=64).filter(lambda s: s.strip()))
 def test_nonce_passthrough_execute_endpoint(nonce):
     """
     **Validates: Requirements 38.2, 38.4**
 
     For random nonce values on /execute, verify the nonce from the request
     body is passed to generate_attestation.
+    
+    Note: nonce is mandatory on /execute (Req 45.6), so None is not tested here.
     """
     ctx = EncryptionTestContext()
     app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
@@ -140,9 +142,8 @@ def test_nonce_passthrough_execute_endpoint(nonce):
         "script_path": "run.sh",
         "github_token": "ghp_testtoken1234567890",
         "oidc_token": "valid.oidc.token",
+        "nonce": nonce,
     }
-    if nonce is not None:
-        req_data["nonce"] = nonce
 
     with patch.object(
         app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
@@ -189,7 +190,7 @@ def test_nonce_passthrough_execute_endpoint(nonce):
 
 # Feature: github-actions-remote-executor, Property 126: Nonce Passthrough in Attestation – /output
 @settings(max_examples=100, deadline=None)
-@given(nonce=nonce_strategy)
+@given(nonce=st.text(min_size=1, max_size=64).filter(lambda s: s.strip()))
 def test_nonce_passthrough_output_endpoint(nonce):
     """
     **Validates: Requirements 38.3, 38.4**
@@ -197,6 +198,8 @@ def test_nonce_passthrough_output_endpoint(nonce):
     For random nonce values on /execution/{id}/output, verify the nonce
     is passed to generate_output_attestation when generating the
     Output_Attestation_Document.
+    
+    Note: nonce is mandatory on /output (Req 45.6), so None is not tested here.
     """
     ctx = EncryptionTestContext()
     app = create_app(get_test_config(), encryption_manager=ctx.encryption_manager)
@@ -240,9 +243,7 @@ def test_nonce_passthrough_output_endpoint(nonce):
     ) as mock_output_attest:
         mock_output_attest.return_value = (b"output_attestation_bytes", None)
 
-        payload = {"oidc_token": "valid.oidc.token", "offset": 0}
-        if nonce is not None:
-            payload["nonce"] = nonce
+        payload = {"oidc_token": "valid.oidc.token", "offset": 0, "nonce": nonce}
 
         req_body = make_encrypted_output_request(payload, ctx.shared_key)
         response = client.post(

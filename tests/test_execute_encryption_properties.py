@@ -139,12 +139,15 @@ def _make_encrypted_request_body(
 
 
 def _valid_decrypted_payload(oidc_token: str = "valid.oidc.token") -> dict:
+    import uuid
+
     return {
         "repository_url": "https://github.com/owner/repo",
         "commit_hash": "a" * 40,
         "script_path": "scripts/build.sh",
         "github_token": "ghp_testtoken123",
         "oidc_token": oidc_token,
+        "nonce": str(uuid.uuid4()),
     }
 
 

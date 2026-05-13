@@ -287,8 +287,8 @@ class TestOIDCProtectedEndpoints:
     # ---- POST /execute ----
 
     def test_execute_without_auth_header_returns_401(self):
-        """POST /execute with no oidc_token in encrypted body → 401"""
-        from tests.encryption_test_helpers import make_encrypted_execute_request
+        """POST /execute with no oidc_token in encrypted body → encrypted 401 error envelope"""
+        from tests.encryption_test_helpers import make_encrypted_execute_request, decrypt_execute_response
         client, app, ctx = self._create_client()
 
         # Send encrypted request WITHOUT oidc_token field
@@ -300,11 +300,14 @@ class TestOIDCProtectedEndpoints:
         }
         body = make_encrypted_execute_request(request_data, ctx)
         response = client.post("/execute", json=body)
-        assert response.status_code == 401
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert response.status_code == 200
+        decrypted = decrypt_execute_response(response.json(), ctx.shared_key)
+        assert decrypted["error_code"] == 401
 
     def test_execute_with_invalid_token_returns_401(self):
-        """POST /execute with an invalid/bad-signature token → 401"""
-        from tests.encryption_test_helpers import make_encrypted_execute_request
+        """POST /execute with an invalid/bad-signature token → encrypted 401 error envelope"""
+        from tests.encryption_test_helpers import make_encrypted_execute_request, decrypt_execute_response
         client, app, ctx = self._create_client()
 
         with patch.object(
@@ -322,11 +325,14 @@ class TestOIDCProtectedEndpoints:
             body = make_encrypted_execute_request(request_data, ctx)
             response = client.post("/execute", json=body)
 
-        assert response.status_code == 401
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert response.status_code == 200
+        decrypted = decrypt_execute_response(response.json(), ctx.shared_key)
+        assert decrypted["error_code"] == 401
 
     def test_execute_with_unauthorized_repo_returns_403(self):
-        """POST /execute with token from unauthorized repo → 403"""
-        from tests.encryption_test_helpers import make_encrypted_execute_request
+        """POST /execute with token from unauthorized repo → encrypted 403 error envelope"""
+        from tests.encryption_test_helpers import make_encrypted_execute_request, decrypt_execute_response
         client, app, ctx = self._create_client()
 
         with patch.object(
@@ -344,7 +350,10 @@ class TestOIDCProtectedEndpoints:
             body = make_encrypted_execute_request(request_data, ctx)
             response = client.post("/execute", json=body)
 
-        assert response.status_code == 403
+        # Post-decryption errors return HTTP 200 with encrypted error envelope
+        assert response.status_code == 200
+        decrypted = decrypt_execute_response(response.json(), ctx.shared_key)
+        assert decrypted["error_code"] == 403
 
     def test_execute_with_valid_token_proceeds(self):
         """POST /execute with valid OIDC token proceeds to execution flow"""
