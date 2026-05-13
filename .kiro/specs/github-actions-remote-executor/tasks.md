@@ -81,16 +81,16 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - [x] 181. Checkpoint - Ensure rootless Docker source compilation tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 182. Security hardening: Mandatory nonce, request body limits, encrypted error envelopes, execution_id binding, post-clone cleanup, strict boolean parsing, raw filename sanitization, debug gate fail-closed, lockfile-enforced deps, helper source integrity
+- [x] 182. Security hardening: Mandatory nonce, request body limits, encrypted error envelopes, execution_id binding, post-clone cleanup, strict boolean parsing, raw filename sanitization, debug gate fail-closed, lockfile-enforced deps, helper source integrity
 
-  - [ ] 182.1 Make nonce mandatory on /execute and /execution/{id}/output
+  - [x] 182.1 Make nonce mandatory on /execute and /execution/{id}/output
     - In `src/server.py`, after decrypting the /execute request payload, validate that the `nonce` field is present and non-empty (not None, not empty string, not whitespace-only); reject with HTTP 400 if missing or empty
     - Apply the same mandatory nonce validation to /execution/{id}/output after decryption
     - The nonce presence check must occur BEFORE the nonce cache duplicate check
     - Update the `DecryptedExecuteRequest` and `DecryptedOutputRequest` models to make `nonce` a required field (remove `Optional` / default `None`)
     - _Requirements: 45.6, 45.7, 45.8, 45.9_
 
-  - [ ] 182.2 Add request body size limits
+  - [x] 182.2 Add request body size limits
     - Add `max_request_body_bytes` (default 1048576), `max_encrypted_payload_bytes` (default 524288), and `max_decrypted_payload_bytes` (default 262144) to `ServerConfig` in `src/config.py`; read from environment variables MAX_REQUEST_BODY_BYTES, MAX_ENCRYPTED_PAYLOAD_BYTES, MAX_DECRYPTED_PAYLOAD_BYTES
     - In `src/server.py` /execute endpoint: check raw request body length against `max_request_body_bytes` before JSON parsing; reject with HTTP 413 if exceeded
     - After JSON parsing: check `len(body["encrypted_payload"])` against `max_encrypted_payload_bytes` and `len(body["client_public_key"])` against 2048; reject with HTTP 400 if exceeded
@@ -98,7 +98,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Apply the same raw body size check to /execution/{id}/output
     - _Requirements: 8.21, 8.22, 8.23, 8.24, 8.25, 8.26_
 
-  - [ ] 182.3 Implement encrypted error envelopes after successful decryption
+  - [x] 182.3 Implement encrypted error envelopes after successful decryption
     - In `src/server.py`, once /execute decryption succeeds (Shared_Key established), wrap all subsequent processing in a try/except that catches application errors and returns them as encrypted JSON envelopes: `{"error": "description", "error_code": 403, "error_details": {...}}`
     - The encrypted error envelope is returned with HTTP 200 at the transport layer (so observers cannot distinguish errors from successes)
     - Errors covered on /execute: OIDC validation (401/403), repository mismatch (403), nonce duplicate (400), validation errors (400), script size exceeded (413), capacity exceeded (503), clone failures, attestation failures
@@ -106,40 +106,40 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Pre-decryption errors (malformed JSON, invalid client_public_key, decryption failure, missing encryption context, body size exceeded) remain as plaintext HTTP errors
     - _Requirements: 42.9, 42.10, 42.11, 42.12_
 
-  - [ ] 182.4 Add execution_id to attestation user_data
+  - [x] 182.4 Add execution_id to attestation user_data
     - In `src/attestation.py`, add `execution_id` parameter to `generate_attestation()` for execution and output attestation calls
     - Include `execution_id` in the user_data JSON alongside repository_url, commit_hash, script_path, script_env_hash, timestamp
     - In `src/server.py`, pass the execution_id when generating the /execute response attestation and the /execution/{id}/output attestation
     - Update the attestation user_data schema documentation to include execution_id (string, UUID v4)
     - _Requirements: 4.8, 4.16, 4.17, 4.18, 4.19, 4.20, 4.21, 6.14_
 
-  - [ ] 182.5 Add post-clone resource cleanup on unexpected errors
+  - [x] 182.5 Add post-clone resource cleanup on unexpected errors
     - In `src/server.py` /execute handler, wrap all post-clone processing (script size validation, attestation generation, execution record creation, async execution handoff) in a `try/finally` block
     - The `finally` block removes the clone directory with `shutil.rmtree(clone_path, ignore_errors=True)` ONLY if ownership has NOT been handed to the Script_Executor
     - Use a boolean flag (e.g., `execution_handed_off = False`) set to `True` just before `execute_async()` is called; the `finally` block checks this flag
     - _Requirements: 3.13, 3.14, 3.15, 3.16_
 
-  - [ ] 182.6 Implement strict boolean configuration parsing
+  - [x] 182.6 Implement strict boolean configuration parsing
     - In `src/config.py`, replace the current boolean parsing logic (which treats unrecognized values as `False`) with a strict parser that only accepts: `true`, `1`, `yes` (case-insensitive) → True; `false`, `0`, `no` (case-insensitive) → False
     - If the value is not in the recognized set, raise a `ValueError` with a message including the config key name, the invalid value, and the list of accepted values
     - Apply this strict parsing to all boolean config values (REQUIRE_PROTECTED_REF and any future booleans)
     - The server should fail to start if an invalid boolean value is provided
     - _Requirements: 9.13, 9.14, 9.15_
 
-  - [ ] 182.7 Add raw image filename sanitization to build-ami.py
+  - [x] 182.7 Add raw image filename sanitization to build-ami.py
     - In `scripts/build-ami.py`, replace the `ls *.raw` shell command with a programmatic directory listing (Python `glob.glob` or `os.listdir` with filtering)
     - Enforce exactly one `.raw` file; terminate with error if zero or more than one found
     - Validate the basename against regex `^[a-zA-Z0-9][a-zA-Z0-9._-]*\.raw$`; terminate with error if it doesn't match
     - Use `shlex.quote()` when interpolating the filename into shell commands, or use subprocess list arguments to avoid shell interpolation entirely
     - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.5_
 
-  - [ ] 182.8 Make debug-image production gate fail closed
+  - [x] 182.8 Make debug-image production gate fail closed
     - In `scripts/build-ami.py`, update the debug annotation check: if `oras manifest fetch` fails (non-zero exit code) or JSON parsing of the manifest fails, terminate with an error indicating the debug status could not be verified
     - Only proceed when `--allow-debug` is explicitly provided in the indeterminate case
     - Remove the current "log warning and proceed" behavior on fetch/parse failure
     - _Requirements: 46.6, 46.7, 46.8, 46.9_
 
-  - [ ] 182.9 Implement lockfile-enforced Python dependency installation
+  - [x] 182.9 Implement lockfile-enforced Python dependency installation
     - In `.github/scripts/build-kiwi-image.sh`, replace the `pip3 download` from `pyproject.toml` version ranges with a lockfile-enforced path:
       - Export from `uv.lock` using `uv export --frozen --format requirements-txt --no-dev --generate-hashes`
       - Install using `pip install --require-hashes -r <exported-requirements> --no-index --find-links <wheels-dir>`
@@ -147,24 +147,24 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Fail the build if `uv.lock` is missing or the `--frozen` export fails
     - _Requirements: 12.19, 12.20, 12.21, 12.22, 12.23_
 
-  - [ ] 182.10 Add rootless Docker helper source integrity verification
+  - [x] 182.10 Add rootless Docker helper source integrity verification
     - In `.github/scripts/build-kiwi-image.sh`, replace mutable release tags with immutable full commit SHAs (40-character hex) for rootlesskit, slirp4netns, fuse-overlayfs, and libslirp
     - After each `git clone`, verify `git rev-parse HEAD` matches the expected SHA; exit with error if mismatch
     - Add SHA-256 checksum verification for the `dockerd-rootless.sh` download; exit with error if mismatch
     - Document each pinned commit SHA with a comment indicating the corresponding release tag and date
     - _Requirements: 53.21, 53.22, 53.23, 53.24_
 
-  - [ ] 182.11 Pin gha-executor UID to 1000 and add LimitCORE=0
+  - [x] 182.11 Pin gha-executor UID to 1000 and add LimitCORE=0
     - In `kiwi-descriptions/config.sh`, update the `useradd` command for `gha-executor` to include `--uid 1000` explicitly
     - In `kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service`, add `LimitCORE=0` to the `[Service]` section
     - _Requirements: 33.3, 49.14, 49.15_
 
-  - [ ] 182.12 Pass config.max_output_size_bytes to OutputCollector
+  - [x] 182.12 Pass config.max_output_size_bytes to OutputCollector
     - In `src/server.py`, update the `OutputCollector()` constructor call to pass `config.max_output_size_bytes` as a parameter
     - In `src/output_collector.py`, update the `__init__` method to accept `max_output_size_bytes` parameter and use it instead of a hardcoded default
     - _Requirements: 5.17, 5.18_
 
-  - [ ] 182.13 Write tests for all security hardening changes
+  - [x] 182.13 Write tests for all security hardening changes
     - **Mandatory nonce tests**: Verify /execute rejects requests without nonce (HTTP 400), with empty nonce (HTTP 400), with whitespace-only nonce (HTTP 400); same for /execution/{id}/output
     - **Body size limit tests**: Verify oversized request body returns HTTP 413; oversized encrypted_payload returns HTTP 400; oversized client_public_key returns HTTP 400; oversized decrypted payload returns HTTP 400
     - **Encrypted error envelope tests**: Verify post-decryption OIDC failure returns encrypted envelope with HTTP 200 (not plaintext 401); verify pre-decryption errors still return plaintext HTTP errors

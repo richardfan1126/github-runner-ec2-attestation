@@ -89,7 +89,13 @@ def make_encrypted_execute_request(
     """Build the outer JSON body for POST /execute.
 
     Returns {"encrypted_payload": "...", "client_public_key": "..."}.
+    
+    If 'nonce' is not present in payload_dict, a random UUID nonce is
+    automatically added (nonce is mandatory on /execute).
     """
+    import uuid
+    if "nonce" not in payload_dict:
+        payload_dict = {**payload_dict, "nonce": str(uuid.uuid4())}
     encrypted = ctx._encrypt_with_shared_key(payload_dict)
     return {
         "encrypted_payload": base64.b64encode(encrypted).decode(),
@@ -111,7 +117,13 @@ def make_encrypted_output_request(
     """Build the outer JSON body for POST /execution/{id}/output.
 
     Returns {"encrypted_payload": "..."}.
+    
+    If 'nonce' is not present in payload_dict, a random UUID nonce is
+    automatically added (nonce is mandatory on /execution/{id}/output).
     """
+    import uuid
+    if "nonce" not in payload_dict:
+        payload_dict = {**payload_dict, "nonce": str(uuid.uuid4())}
     plaintext = json.dumps(payload_dict).encode()
     nonce = os.urandom(12)
     ciphertext = AESGCM(shared_key).encrypt(nonce, plaintext, None)
@@ -122,3 +134,33 @@ def make_encrypted_output_request(
 def decrypt_output_response(response_json: dict, shared_key: bytes) -> dict:
     """Decrypt the encrypted_response field from an /output 200 response."""
     return decrypt_execute_response(response_json, shared_key)
+
+
+def assert_encrypted_error(response, shared_key: bytes, expected_error_code: str, expected_status: int = None):
+    """Assert that a response contains an encrypted error envelope.
+    
+    Post-decryption errors are returned as HTTP 200 with an encrypted error
+    envelope inside. This helper decrypts the response and verifies the error.
+    
+    Args:
+        response: The HTTP response object
+        shared_key: The shared key for decryption
+        expected_error_code: Expected error code string in the envelope
+        expected_status: Optional expected error_code (status) in the envelope
+    
+    Returns:
+        The decrypted error payload dict
+    """
+    assert response.status_code == 200, (
+        f"Expected HTTP 200 (encrypted error envelope) but got {response.status_code}: {response.text}"
+    )
+    decrypted = decrypt_execute_response(response.json(), shared_key)
+    assert "error" in decrypted, f"Expected 'error' field in decrypted response: {decrypted}"
+    assert decrypted["error"] == expected_error_code, (
+        f"Expected error code '{expected_error_code}' but got '{decrypted['error']}'"
+    )
+    if expected_status is not None:
+        assert decrypted.get("error_code") == expected_status, (
+            f"Expected error_code {expected_status} but got {decrypted.get('error_code')}"
+        )
+    return decrypted

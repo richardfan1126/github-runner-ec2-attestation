@@ -77,8 +77,8 @@ def test_snapshot_upload_returns_valid_snapshot_id(raw_filename, snapshot_id):
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         def side_effect(ssh_client, command, stream_output=True):
-            if "ls *.raw" in command:
-                return (0, raw_filename, "")
+            if "find" in command and ".raw" in command:
+                return (0, f"/home/ec2-user/artifacts/build-output/{raw_filename}", "")
             if "coldsnap upload" in command:
                 return (0, f"Uploading snapshot...\n{snapshot_id}", "")
             return (0, "", "")
@@ -111,8 +111,8 @@ def test_snapshot_upload_parses_id_from_multiline_output(raw_filename, snapshot_
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         def side_effect(ssh_client, command, stream_output=True):
-            if "ls *.raw" in command:
-                return (0, raw_filename, "")
+            if "find" in command and ".raw" in command:
+                return (0, f"/home/ec2-user/artifacts/build-output/{raw_filename}", "")
             if "coldsnap upload" in command:
                 # Snapshot ID embedded in multi-line output
                 output = f"Starting upload...\nProgress: 50%\nProgress: 100%\n{snapshot_id}\nDone."
@@ -140,8 +140,8 @@ def test_snapshot_upload_fails_when_no_snapshot_id(raw_filename):
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         def side_effect(ssh_client, command, stream_output=True):
-            if "ls *.raw" in command:
-                return (0, raw_filename, "")
+            if "find" in command and ".raw" in command:
+                return (0, f"/home/ec2-user/artifacts/build-output/{raw_filename}", "")
             if "coldsnap upload" in command:
                 return (0, "Upload complete, no ID here", "")
             return (0, "", "")
@@ -167,8 +167,8 @@ def test_snapshot_upload_fails_on_coldsnap_error(raw_filename):
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         def side_effect(ssh_client, command, stream_output=True):
-            if "ls *.raw" in command:
-                return (0, raw_filename, "")
+            if "find" in command and ".raw" in command:
+                return (0, f"/home/ec2-user/artifacts/build-output/{raw_filename}", "")
             if "coldsnap upload" in command:
                 return (1, "", "Upload failed: permission denied")
             return (0, "", "")
@@ -315,8 +315,8 @@ def test_coldsnap_output_streamed_to_logs(raw_filename, snapshot_id):
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         def side_effect(ssh_client, command, stream_output=True):
-            if "ls *.raw" in command:
-                return (0, raw_filename, "")
+            if "find" in command and ".raw" in command:
+                return (0, f"/home/ec2-user/artifacts/build-output/{raw_filename}", "")
             if "coldsnap upload" in command:
                 # Verify stream_output is True for coldsnap command
                 assert stream_output is True, \
@@ -355,8 +355,8 @@ def test_coldsnap_uses_full_binary_path(raw_filename, snapshot_id):
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         def side_effect(ssh_client, command, stream_output=True):
-            if "ls *.raw" in command:
-                return (0, raw_filename, "")
+            if "find" in command and ".raw" in command:
+                return (0, f"/home/ec2-user/artifacts/build-output/{raw_filename}", "")
             if "coldsnap" in command:
                 assert "/home/ec2-user/.cargo/bin/coldsnap" in command, \
                     "Should use full path to coldsnap binary"

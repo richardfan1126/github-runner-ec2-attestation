@@ -22,6 +22,7 @@ from tests.encryption_test_helpers import (
     make_encrypted_execute_request,
     make_encrypted_output_request,
     decrypt_execute_response,
+    assert_encrypted_error,
 )
 
 ALLOWED_REPOS = ["owner/repo"]
@@ -228,9 +229,8 @@ class TestExecuteEndpointNonceValidation:
         assert resp1.status_code == 200
 
         resp2 = _send_execute_with_nonce(app, client, ctx, "replay-nonce")
-        assert resp2.status_code == 400
-        detail = resp2.json().get("detail", {})
-        assert detail.get("error") == "duplicate_nonce"
+        # Post-decryption errors return encrypted error envelopes with HTTP 200
+        assert_encrypted_error(resp2, ctx.shared_key, "duplicate_nonce", 400)
 
     def test_request_without_nonce_always_accepted(self):
         """Requests without a nonce field should always be accepted."""
@@ -323,9 +323,8 @@ class TestOutputEndpointNonceValidation:
 
             body2 = make_encrypted_output_request(output_payload, ctx.shared_key)
             resp2 = client.post(f"/execution/{execution_id}/output", json=body2)
-            assert resp2.status_code == 400
-            detail = resp2.json().get("detail", {})
-            assert detail.get("error") == "duplicate_nonce"
+            # Post-decryption errors return encrypted error envelopes with HTTP 200
+            assert_encrypted_error(resp2, ctx.shared_key, "duplicate_nonce", 400)
 
     def test_different_nonces_on_output_accepted(self):
         """Different nonces on /output endpoint should both be accepted."""
@@ -377,6 +376,5 @@ class TestOutputEndpointNonceValidation:
         ):
             body = make_encrypted_output_request(output_payload, ctx.shared_key)
             resp2 = client.post(f"/execution/{execution_id}/output", json=body)
-            assert resp2.status_code == 400
-            detail = resp2.json().get("detail", {})
-            assert detail.get("error") == "duplicate_nonce"
+            # Post-decryption errors return encrypted error envelopes with HTTP 200
+            assert_encrypted_error(resp2, ctx.shared_key, "duplicate_nonce", 400)

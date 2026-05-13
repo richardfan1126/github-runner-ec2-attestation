@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import time
 import uuid
 from collections import defaultdict
@@ -48,6 +49,41 @@ def create_error_response(
         "message": message,
         "details": details or {}
     }
+
+
+def _encrypted_error_response(encryption_manager, shared_key, error_code, error_status_code, message, details=None):
+    """
+    Create an encrypted error envelope returned with HTTP 200.
+    
+    After successful decryption (Shared_Key established), all application errors
+    are returned as encrypted JSON envelopes so observers cannot distinguish
+    errors from successes at the transport layer.
+    
+    Args:
+        encryption_manager: The encryption manager instance
+        shared_key: The shared key for this session
+        error_code: Machine-readable error code
+        error_status_code: Application-level error status code (inside envelope)
+        message: Human-readable error message
+        details: Optional additional context
+    
+    Returns:
+        JSONResponse with HTTP 200 containing encrypted error envelope
+    """
+    import base64
+    error_payload = {
+        "error": error_code,
+        "error_code": error_status_code,
+        "error_details": details or {},
+        "message": message,
+    }
+    encrypted_response = encryption_manager.encrypt_response(error_payload, shared_key)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "encrypted_response": base64.b64encode(encrypted_response).decode('utf-8')
+        }
+    )
 
 
 class RateLimiter:
@@ -196,7 +232,7 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
             docker_client = None
     
     # Initialize components
-    output_collector = OutputCollector()
+    output_collector = OutputCollector(max_output_size_bytes=config.max_output_size_bytes)
     execution_manager = ExecutionManager(config.output_retention_hours, encryption_manager=encryption_manager, output_collector=output_collector)
     repository_client = RepositoryClient(config.temp_storage_path)
     attestation_generator = AttestationGenerator(config.tpm_attest_path)
@@ -371,9 +407,25 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Check raw request body size before JSON parsing
+            raw_body = await request.body()
+            config = request.app.state.config
+            if len(raw_body) > config.max_request_body_bytes:
+                logger.warning(
+                    f"Request body too large: {len(raw_body)} bytes exceeds limit of {config.max_request_body_bytes}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=create_error_response(
+                        "request_body_too_large",
+                        "Request body exceeds maximum allowed size"
+                    )
+                )
+
             # Parse outer JSON envelope
+            import json as json_module
             try:
-                outer_body = await request.json()
+                outer_body = json_module.loads(raw_body)
             except Exception as e:
                 logger.warning(f"Malformed request body: {e}")
                 raise HTTPException(
@@ -396,6 +448,31 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Check encrypted_payload and client_public_key sizes
+            if len(encrypted_payload_b64) > config.max_encrypted_payload_bytes:
+                logger.warning(
+                    f"Encrypted payload too large: {len(encrypted_payload_b64)} bytes"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "payload_too_large",
+                        "Encrypted payload exceeds maximum allowed size"
+                    )
+                )
+
+            if len(client_public_key_b64) > 2048:
+                logger.warning(
+                    f"Client public key too large: {len(client_public_key_b64)} bytes"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "client_key_too_large",
+                        "Client public key exceeds maximum allowed size"
+                    )
+                )
+
             # Decrypt the request payload
             try:
                 encrypted_payload = base64.b64decode(encrypted_payload_b64)
@@ -413,6 +490,31 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Check decrypted payload size
+            import json as json_mod
+            decrypted_json = json_mod.dumps(body)
+            if len(decrypted_json) > config.max_decrypted_payload_bytes:
+                logger.warning(
+                    f"Decrypted payload too large: {len(decrypted_json)} bytes"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "decrypted_payload_too_large",
+                        "Decrypted payload exceeds maximum allowed size"
+                    )
+                )
+
+            # Mandatory nonce validation (must occur BEFORE nonce cache duplicate check)
+            request_nonce = body.get("nonce")
+            if request_nonce is None or (isinstance(request_nonce, str) and not request_nonce.strip()):
+                logger.warning("Missing or empty nonce on /execute request")
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "missing_nonce", 400,
+                    "Nonce is required and must be a non-empty string"
+                )
+
             # OIDC authentication from decrypted body
             oidc_start = time.time()
             validator = request.app.state.request_validator
@@ -425,12 +527,10 @@ def add_routes(app: FastAPI) -> None:
                     f"OIDC validation failed: status={oidc_result.status_code}, "
                     f"repository={repo_claim}, error={oidc_result.error_message}"
                 )
-                raise HTTPException(
-                    status_code=oidc_result.status_code,
-                    detail=create_error_response(
-                        "oidc_authentication_failed",
-                        oidc_result.error_message or "Authentication failed"
-                    )
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "oidc_authentication_failed", oidc_result.status_code,
+                    oidc_result.error_message or "Authentication failed"
                 )
 
             logger.info(
@@ -453,27 +553,21 @@ def add_routes(app: FastAPI) -> None:
                     f"Repository mismatch: OIDC claim={oidc_repo_claim}, "
                     f"request URL={request_repo_url} (parsed={repo_from_url})"
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=create_error_response(
-                        "repository_mismatch",
-                        "OIDC token repository claim does not match request repository_url"
-                    )
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "repository_mismatch", 403,
+                    "OIDC token repository claim does not match request repository_url"
                 )
 
-            # Anti-replay nonce check
-            request_nonce = body.get("nonce")
-            if request_nonce is not None:
-                nonce_cache = request.app.state.nonce_cache
-                if not nonce_cache.check_and_store(request_nonce):
-                    logger.warning(f"Duplicate nonce detected on /execute: {request_nonce}")
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=create_error_response(
-                            "duplicate_nonce",
-                            "Duplicate nonce detected; request rejected as potential replay"
-                        )
-                    )
+            # Anti-replay nonce cache duplicate check
+            nonce_cache = request.app.state.nonce_cache
+            if not nonce_cache.check_and_store(request_nonce):
+                logger.warning(f"Duplicate nonce detected on /execute: {request_nonce}")
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "duplicate_nonce", 400,
+                    "Duplicate nonce detected; request rejected as potential replay"
+                )
 
             # Log request details (exclude token)
             logger.info(
@@ -487,13 +581,11 @@ def add_routes(app: FastAPI) -> None:
             
             if not validation_result.valid:
                 logger.warning(f"Validation failed: {validation_result.errors}")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=create_error_response(
-                        "validation_failed",
-                        "Request validation failed",
-                        {"errors": validation_result.errors}
-                    )
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "validation_failed", 400,
+                    "Request validation failed",
+                    {"errors": validation_result.errors}
                 )
             
             phase_times['validation'] = (time.time() - validation_start) * 1000
@@ -505,12 +597,10 @@ def add_routes(app: FastAPI) -> None:
             auth_result = repo_client.authenticate(body['github_token'])
             if not auth_result.success:
                 logger.warning(f"Authentication failed: {auth_result.error_message}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=create_error_response(
-                        "authentication_failed",
-                        auth_result.error_message or "GitHub authentication failed"
-                    )
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "authentication_failed", 401,
+                    auth_result.error_message or "GitHub authentication failed"
                 )
             
             phase_times['authentication'] = (time.time() - auth_start) * 1000
@@ -518,156 +608,149 @@ def add_routes(app: FastAPI) -> None:
             # Clone repository
             fetch_start = time.time()
             clone_result = None
+            execution_handed_off = False
             try:
                 from src.repository import GitHubAPIError
-                clone_result = repo_client.clone_repo(
-                    body['repository_url'],
-                    body['commit_hash'],
-                    body['github_token']
-                )
-                # Validate script exists in cloned repo
-                repo_client.validate_script_exists(
-                    clone_result.clone_path,
-                    body['script_path']
-                )
-                clone_result = CloneResult(
-                    clone_path=clone_result.clone_path,
-                    script_path=body['script_path']
-                )
-            except GitHubAPIError as e:
-                logger.warning(f"GitHub API error: {e.message}")
-                if clone_result:
-                    repo_client.cleanup_clone(clone_result.clone_path)
-                raise HTTPException(
-                    status_code=e.status_code,
-                    detail=create_error_response(
-                        "github_api_error",
+                try:
+                    clone_result = repo_client.clone_repo(
+                        body['repository_url'],
+                        body['commit_hash'],
+                        body['github_token']
+                    )
+                    # Validate script exists in cloned repo
+                    repo_client.validate_script_exists(
+                        clone_result.clone_path,
+                        body['script_path']
+                    )
+                    clone_result = CloneResult(
+                        clone_path=clone_result.clone_path,
+                        script_path=body['script_path']
+                    )
+                except GitHubAPIError as e:
+                    logger.warning(f"GitHub API error: {e.message}")
+                    if clone_result:
+                        repo_client.cleanup_clone(clone_result.clone_path)
+                    return _encrypted_error_response(
+                        encryption_manager, shared_key,
+                        "github_api_error", e.status_code,
                         e.message
                     )
-                )
-            
-            phase_times['file_retrieval'] = (time.time() - fetch_start) * 1000
-            
-            # Get config for later use
-            config = request.app.state.config
-            
-            # Check script file size against MAX_SCRIPT_SIZE_BYTES
-            script_full_path = os.path.join(clone_result.clone_path, clone_result.script_path)
-            script_size = os.path.getsize(script_full_path)
-            if script_size > config.max_script_size_bytes:
-                logger.warning(
-                    f"Script file too large: {script_size} bytes exceeds limit of {config.max_script_size_bytes} bytes"
-                )
-                repo_client.cleanup_clone(clone_result.clone_path)
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=create_error_response(
-                        "script_too_large",
+                
+                phase_times['file_retrieval'] = (time.time() - fetch_start) * 1000
+                
+                # Check script file size against MAX_SCRIPT_SIZE_BYTES
+                script_full_path = os.path.join(clone_result.clone_path, clone_result.script_path)
+                script_size = os.path.getsize(script_full_path)
+                if script_size > config.max_script_size_bytes:
+                    logger.warning(
+                        f"Script file too large: {script_size} bytes exceeds limit of {config.max_script_size_bytes} bytes"
+                    )
+                    return _encrypted_error_response(
+                        encryption_manager, shared_key,
+                        "script_too_large", 413,
                         "Script file exceeds maximum allowed size"
                     )
-                )
-            
-            # Extract and sanitize script_env from decrypted body
-            script_env = body.get('script_env') or {}
-            script_env = {str(k): str(v) for k, v in script_env.items() if isinstance(k, str) and isinstance(v, str)}
-            
-            # Generate attestation
-            attestation_start = time.time()
-            attestation_gen = request.app.state.attestation_generator
-            
-            attestation_doc, attestation_error = attestation_gen.generate_attestation(
-                body['repository_url'],
-                body['commit_hash'],
-                body['script_path'],
-                nonce=body.get('nonce'),
-                script_env=script_env,
-            )
-            
-            if attestation_error:
-                logger.error(
-                    f"Attestation generation failed: {attestation_error.context}"
-                )
-                repo_client.cleanup_clone(clone_result.clone_path)
                 
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=create_error_response(
-                        "attestation_failed",
-                        "Failed to generate attestation document"
-                    )
+                # Extract and sanitize script_env from decrypted body
+                script_env = body.get('script_env') or {}
+                script_env = {str(k): str(v) for k, v in script_env.items() if isinstance(k, str) and isinstance(v, str)}
+                
+                # Create execution record with atomic concurrency check
+                exec_manager = request.app.state.execution_manager
+                execution_record, accepted = exec_manager.try_create_execution(
+                    body['repository_url'],
+                    body['commit_hash'],
+                    body['script_path'],
+                    config.execution_timeout_seconds,
+                    max_concurrent=config.max_concurrent_executions,
+                    repository=oidc_repo_claim
                 )
-            
-            phase_times['attestation'] = (time.time() - attestation_start) * 1000
-            
-            # Create execution record with atomic concurrency check
-            exec_manager = request.app.state.execution_manager
-            execution_record, accepted = exec_manager.try_create_execution(
-                body['repository_url'],
-                body['commit_hash'],
-                body['script_path'],
-                config.execution_timeout_seconds,
-                max_concurrent=config.max_concurrent_executions,
-                repository=oidc_repo_claim
-            )
 
-            if not accepted:
-                repo_client.cleanup_clone(clone_result.clone_path)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=create_error_response(
-                        "at_capacity",
+                if not accepted:
+                    return _encrypted_error_response(
+                        encryption_manager, shared_key,
+                        "at_capacity", 503,
                         "Server is at maximum execution capacity. Please try again later."
                     )
+                
+                # Generate attestation with execution_id in user_data
+                attestation_start = time.time()
+                attestation_gen = request.app.state.attestation_generator
+                
+                attestation_doc, attestation_error = attestation_gen.generate_attestation(
+                    body['repository_url'],
+                    body['commit_hash'],
+                    body['script_path'],
+                    nonce=body.get('nonce'),
+                    script_env=script_env,
+                    execution_id=execution_record.execution_id,
                 )
-            
-            # Store encryption context for this execution
-            encryption_manager.store_encryption_context(
-                execution_record.execution_id, shared_key
-            )
-            
-            # Set log context with execution ID
-            set_log_context(execution_id=execution_record.execution_id)
-            
-            logger.info(f"Created execution record: {execution_record.execution_id}")
-            logger.info(f"Attestation generated for execution: {execution_record.execution_id}")
-            
-            # Prepare response
-            response_data = {
-                "execution_id": execution_record.execution_id,
-                "attestation_document": base64.b64encode(attestation_doc.signature).decode('utf-8'),
-                "status": execution_record.status.value
-            }
-            
-            # Initiate async execution
-            executor = request.app.state.script_executor
-            
-            executor.execute_async(execution_record.execution_id, clone_result.clone_path, clone_result.script_path, script_env=script_env)
-            
-            logger.info(f"Initiated async execution: {execution_record.execution_id}")
-            
-            # Log phase durations
-            total_time = (time.time() - start_time) * 1000
-            logger.info(
-                f"Request processing phases for {execution_record.execution_id}: "
-                f"oidc_auth={phase_times.get('oidc_auth', 0):.2f}ms, "
-                f"validation={phase_times.get('validation', 0):.2f}ms, "
-                f"auth={phase_times.get('authentication', 0):.2f}ms, "
-                f"fetch={phase_times.get('file_retrieval', 0):.2f}ms, "
-                f"attestation={phase_times.get('attestation', 0):.2f}ms, "
-                f"total={total_time:.2f}ms"
-            )
-            
-            # Encrypt response with shared key
-            encrypted_response = encryption_manager.encrypt_response(
-                response_data, shared_key
-            )
-            
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content={
-                    "encrypted_response": base64.b64encode(encrypted_response).decode('utf-8')
+                
+                if attestation_error:
+                    logger.error(
+                        f"Attestation generation failed: {attestation_error.context}"
+                    )
+                    return _encrypted_error_response(
+                        encryption_manager, shared_key,
+                        "attestation_failed", 500,
+                        "Failed to generate attestation document"
+                    )
+                
+                phase_times['attestation'] = (time.time() - attestation_start) * 1000
+                
+                # Store encryption context for this execution
+                encryption_manager.store_encryption_context(
+                    execution_record.execution_id, shared_key
+                )
+                
+                # Set log context with execution ID
+                set_log_context(execution_id=execution_record.execution_id)
+                
+                logger.info(f"Created execution record: {execution_record.execution_id}")
+                logger.info(f"Attestation generated for execution: {execution_record.execution_id}")
+                
+                # Prepare response
+                response_data = {
+                    "execution_id": execution_record.execution_id,
+                    "attestation_document": base64.b64encode(attestation_doc.signature).decode('utf-8'),
+                    "status": execution_record.status.value
                 }
-            )
+                
+                # Initiate async execution
+                executor = request.app.state.script_executor
+                
+                executor.execute_async(execution_record.execution_id, clone_result.clone_path, clone_result.script_path, script_env=script_env)
+                execution_handed_off = True
+                
+                logger.info(f"Initiated async execution: {execution_record.execution_id}")
+                
+                # Log phase durations
+                total_time = (time.time() - start_time) * 1000
+                logger.info(
+                    f"Request processing phases for {execution_record.execution_id}: "
+                    f"oidc_auth={phase_times.get('oidc_auth', 0):.2f}ms, "
+                    f"validation={phase_times.get('validation', 0):.2f}ms, "
+                    f"auth={phase_times.get('authentication', 0):.2f}ms, "
+                    f"fetch={phase_times.get('file_retrieval', 0):.2f}ms, "
+                    f"attestation={phase_times.get('attestation', 0):.2f}ms, "
+                    f"total={total_time:.2f}ms"
+                )
+                
+                # Encrypt response with shared key
+                encrypted_response = encryption_manager.encrypt_response(
+                    response_data, shared_key
+                )
+                
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "encrypted_response": base64.b64encode(encrypted_response).decode('utf-8')
+                    }
+                )
+            finally:
+                # Post-clone cleanup: remove clone directory if execution was NOT handed off
+                if clone_result and not execution_handed_off:
+                    shutil.rmtree(clone_result.clone_path, ignore_errors=True)
             
         except HTTPException:
             raise
@@ -699,7 +782,7 @@ def add_routes(app: FastAPI) -> None:
 
         Decrypted request payload:
         {
-            "nonce": "optional-client-nonce",
+            "nonce": "client-nonce (mandatory)",
             "offset": 0
         }
 
@@ -744,9 +827,25 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Check raw request body size before JSON parsing
+            raw_body = await request.body()
+            config = request.app.state.config
+            if len(raw_body) > config.max_request_body_bytes:
+                logger.warning(
+                    f"Request body too large on output endpoint: {len(raw_body)} bytes"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=create_error_response(
+                        "request_body_too_large",
+                        "Request body exceeds maximum allowed size"
+                    )
+                )
+
             # Parse outer JSON envelope
+            import json as json_module
             try:
-                outer_body = await request.json()
+                outer_body = json_module.loads(raw_body)
             except Exception as e:
                 logger.warning(f"Malformed request body on output endpoint: {e}")
                 raise HTTPException(
@@ -782,19 +881,36 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
-            # Extract optional offset and nonce from decrypted body (no oidc_token field required)
-            offset = body.get("offset", 0)
+            # Mandatory nonce validation (must occur BEFORE nonce cache duplicate check)
             nonce = body.get("nonce")
+            if nonce is None or (isinstance(nonce, str) and not nonce.strip()):
+                logger.warning("Missing or empty nonce on /output request")
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "missing_nonce", 400,
+                    "Nonce is required and must be a non-empty string"
+                )
+
+            # Anti-replay nonce cache duplicate check
+            nonce_cache = request.app.state.nonce_cache
+            if not nonce_cache.check_and_store(nonce):
+                logger.warning(f"Duplicate nonce detected on /output: {nonce}")
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "duplicate_nonce", 400,
+                    "Duplicate nonce detected; request rejected as potential replay"
+                )
+
+            # Extract offset from decrypted body
+            offset = body.get("offset", 0)
 
             # Validate offset
             if not isinstance(offset, int) or offset < 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=create_error_response(
-                        "invalid_offset",
-                        "Offset must be a non-negative integer",
-                        {"offset": offset}
-                    )
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "invalid_offset", 400,
+                    "Offset must be a non-negative integer",
+                    {"offset": offset}
                 )
             
             # Retrieve execution record
@@ -803,26 +919,11 @@ def add_routes(app: FastAPI) -> None:
             
             if not execution_record:
                 logger.warning(f"Execution not found: {execution_id}")
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=create_error_response(
-                        "execution_not_found",
-                        f"Execution ID not found: {execution_id}"
-                    )
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "execution_not_found", 404,
+                    f"Execution ID not found: {execution_id}"
                 )
-
-            # Anti-replay nonce check
-            if nonce is not None:
-                nonce_cache = request.app.state.nonce_cache
-                if not nonce_cache.check_and_store(nonce):
-                    logger.warning(f"Duplicate nonce detected on /output: {nonce}")
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=create_error_response(
-                            "duplicate_nonce",
-                            "Duplicate nonce detected; request rejected as potential replay"
-                        )
-                    )
 
             # Retrieve output
             output_collector = request.app.state.output_collector
@@ -875,7 +976,9 @@ def add_routes(app: FastAPI) -> None:
 
             attestation_gen = request.app.state.attestation_generator
             attestation_bytes, attestation_error_msg = (
-                attestation_gen.generate_output_attestation(script_output, nonce=nonce)
+                attestation_gen.generate_output_attestation(
+                    script_output, nonce=nonce, execution_id=execution_id
+                )
             )
 
             if attestation_bytes is not None:

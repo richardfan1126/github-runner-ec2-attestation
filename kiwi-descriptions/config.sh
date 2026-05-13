@@ -20,8 +20,8 @@ systemctl enable github-actions-remote-executor.service
 # rootless Docker daemon. Its home directory is at /home/gha-executor
 # (writable via the tmpfs overlay on the read-only erofs root filesystem).
 echo "Creating gha-executor service user..."
-useradd -m -s /bin/bash gha-executor
-echo "✓ gha-executor user created"
+useradd --uid 1000 -m -s /bin/bash gha-executor
+echo "✓ gha-executor user created (UID 1000)"
 
 # Create directories that rootless Docker needs at runtime.
 # The erofs root filesystem is read-only, so these directories must exist in

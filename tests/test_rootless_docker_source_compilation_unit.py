@@ -39,42 +39,54 @@ def dockerfile_content():
 # =============================================================================
 
 class TestGitCloneCommands:
-    """Test that build-kiwi-image.sh clones each tool at a pinned tag."""
+    """Test that build-kiwi-image.sh clones each tool at a pinned commit SHA."""
 
     def test_rootlesskit_git_clone_at_pinned_tag(self, build_script_content):
-        """rootlesskit is cloned from the official repo at a pinned release tag."""
-        # Verify a version variable is defined with a pinned tag
+        """rootlesskit is cloned from the official repo and checked out at a pinned commit SHA."""
+        # Verify a commit SHA variable is defined (40-char hex)
         assert re.search(
-            r'ROOTLESSKIT_VERSION="v[\d.]+"',
+            r'ROOTLESSKIT_COMMIT="[0-9a-f]{40}"',
             build_script_content
-        ), "build-kiwi-image.sh must define ROOTLESSKIT_VERSION with a pinned tag"
-        # Verify git clone uses the version variable
+        ), "build-kiwi-image.sh must define ROOTLESSKIT_COMMIT with a 40-char hex SHA"
+        # Verify git clone and checkout
         assert re.search(
-            r"git clone.*--branch.*ROOTLESSKIT_VERSION.*rootless-containers/rootlesskit",
+            r"git clone.*rootless-containers/rootlesskit",
             build_script_content
-        ), "build-kiwi-image.sh must clone rootlesskit at the pinned version"
+        ), "build-kiwi-image.sh must clone rootlesskit"
+        assert re.search(
+            r"git checkout.*ROOTLESSKIT_COMMIT",
+            build_script_content
+        ), "build-kiwi-image.sh must checkout rootlesskit at the pinned commit"
 
     def test_slirp4netns_git_clone_at_pinned_tag(self, build_script_content):
-        """slirp4netns is cloned from the official repo at a pinned release tag."""
+        """slirp4netns is cloned from the official repo and checked out at a pinned commit SHA."""
         assert re.search(
-            r'SLIRP4NETNS_VERSION="v[\d.]+"',
+            r'SLIRP4NETNS_COMMIT="[0-9a-f]{40}"',
             build_script_content
-        ), "build-kiwi-image.sh must define SLIRP4NETNS_VERSION with a pinned tag"
+        ), "build-kiwi-image.sh must define SLIRP4NETNS_COMMIT with a 40-char hex SHA"
         assert re.search(
-            r"git clone.*--branch.*SLIRP4NETNS_VERSION.*rootless-containers/slirp4netns",
+            r"git clone.*rootless-containers/slirp4netns",
             build_script_content
-        ), "build-kiwi-image.sh must clone slirp4netns at the pinned version"
+        ), "build-kiwi-image.sh must clone slirp4netns"
+        assert re.search(
+            r"git checkout.*SLIRP4NETNS_COMMIT",
+            build_script_content
+        ), "build-kiwi-image.sh must checkout slirp4netns at the pinned commit"
 
     def test_fuse_overlayfs_git_clone_at_pinned_tag(self, build_script_content):
-        """fuse-overlayfs is cloned from the official repo at a pinned release tag."""
+        """fuse-overlayfs is cloned from the official repo and checked out at a pinned commit SHA."""
         assert re.search(
-            r'FUSE_OVERLAYFS_VERSION="v[\d.]+"',
+            r'FUSE_OVERLAYFS_COMMIT="[0-9a-f]{40}"',
             build_script_content
-        ), "build-kiwi-image.sh must define FUSE_OVERLAYFS_VERSION with a pinned tag"
+        ), "build-kiwi-image.sh must define FUSE_OVERLAYFS_COMMIT with a 40-char hex SHA"
         assert re.search(
-            r"git clone.*--branch.*FUSE_OVERLAYFS_VERSION.*containers/fuse-overlayfs",
+            r"git clone.*containers/fuse-overlayfs",
             build_script_content
-        ), "build-kiwi-image.sh must clone fuse-overlayfs at the pinned version"
+        ), "build-kiwi-image.sh must clone fuse-overlayfs"
+        assert re.search(
+            r"git checkout.*FUSE_OVERLAYFS_COMMIT",
+            build_script_content
+        ), "build-kiwi-image.sh must checkout fuse-overlayfs at the pinned commit"
 
 
 # =============================================================================
@@ -191,12 +203,11 @@ class TestDockerfileBuildDependencies:
         ), "Dockerfile must install glib2-devel for slirp4netns"
 
     def test_libslirp_devel_installed(self, dockerfile_content):
-        """libslirp-devel is installed for slirp4netns compilation."""
+        """libslirp is built from source (not available as package in AL2023)."""
         assert re.search(
-            r"^\s*libslirp-devel\s*\\?\s*$",
+            r"git clone.*libslirp",
             dockerfile_content,
-            re.MULTILINE
-        ), "Dockerfile must install libslirp-devel for slirp4netns"
+        ), "Dockerfile must build libslirp from source (not available as dnf package)"
 
     def test_libcap_devel_installed(self, dockerfile_content):
         """libcap-devel is installed for slirp4netns compilation."""

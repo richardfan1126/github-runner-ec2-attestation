@@ -19,6 +19,7 @@ from tests.encryption_test_helpers import (
     EncryptionTestContext,
     make_encrypted_execute_request,
     decrypt_execute_response,
+    assert_encrypted_error,
 )
 
 ALLOWED_REPOS = ["owner/repo"]
@@ -165,38 +166,37 @@ class TestRepoClaimBindingMismatch:
     """Tests where repository claim does NOT match repository_url (should 403)."""
 
     def test_mismatched_repo_returns_403(self):
-        """Different owner/repo in claim vs URL → 403"""
-        response, _ = _execute_with_repo_binding(
+        """Different owner/repo in claim vs URL → encrypted 403 error"""
+        response, ctx = _execute_with_repo_binding(
             "https://github.com/owner/repo", "other-owner/other-repo"
         )
-        assert response.status_code == 403
+        assert_encrypted_error(response, ctx.shared_key, "repository_mismatch", 403)
 
     def test_mismatched_owner_returns_403(self):
-        """Same repo name but different owner → 403"""
-        response, _ = _execute_with_repo_binding(
+        """Same repo name but different owner → encrypted 403 error"""
+        response, ctx = _execute_with_repo_binding(
             "https://github.com/owner/repo", "evil-owner/repo"
         )
-        assert response.status_code == 403
+        assert_encrypted_error(response, ctx.shared_key, "repository_mismatch", 403)
 
     def test_mismatched_repo_name_returns_403(self):
-        """Same owner but different repo name → 403"""
-        response, _ = _execute_with_repo_binding(
+        """Same owner but different repo name → encrypted 403 error"""
+        response, ctx = _execute_with_repo_binding(
             "https://github.com/owner/repo", "owner/different-repo"
         )
-        assert response.status_code == 403
+        assert_encrypted_error(response, ctx.shared_key, "repository_mismatch", 403)
 
     def test_mismatch_error_message(self):
-        """403 response includes repository_mismatch error code."""
-        response, _ = _execute_with_repo_binding(
+        """Encrypted error envelope includes repository_mismatch error code."""
+        response, ctx = _execute_with_repo_binding(
             "https://github.com/owner/repo", "attacker/malicious"
         )
-        assert response.status_code == 403
-        detail = response.json().get("detail", {})
-        assert detail.get("error") == "repository_mismatch"
+        error_data = assert_encrypted_error(response, ctx.shared_key, "repository_mismatch", 403)
+        assert "repository" in error_data.get("message", "").lower()
 
     def test_mismatch_with_git_suffix_url(self):
-        """Mismatch even when URL has .git suffix → 403"""
-        response, _ = _execute_with_repo_binding(
+        """Mismatch even when URL has .git suffix → encrypted 403 error"""
+        response, ctx = _execute_with_repo_binding(
             "https://github.com/owner/repo.git", "other/repo"
         )
-        assert response.status_code == 403
+        assert_encrypted_error(response, ctx.shared_key, "repository_mismatch", 403)

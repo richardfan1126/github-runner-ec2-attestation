@@ -21,6 +21,7 @@ from tests.encryption_test_helpers import (
     decrypt_execute_response,
     make_encrypted_output_request,
     decrypt_output_response,
+    assert_encrypted_error,
 )
 
 
@@ -190,9 +191,7 @@ class TestOIDCRepositoryBindingIntegration:
         )
 
         response = _post_execute(client, encryption_ctx, _base_request_data())
-        assert response.status_code == 403
-        detail = response.json()["detail"]
-        assert detail["error"] == "repository_mismatch"
+        assert_encrypted_error(response, encryption_ctx.shared_key, "repository_mismatch", 403)
 
     def test_output_matching_repo_claim(self, client, encryption_ctx, app):
         """
@@ -273,9 +272,7 @@ class TestAntiReplayNonceIntegration:
         # But the app's encryption manager is the same, so we need to use the same one
         # Actually we can reuse the same encryption_ctx for the second call
         resp2 = _post_execute(client, encryption_ctx, request_data)
-        assert resp2.status_code == 400
-        detail = resp2.json()["detail"]
-        assert detail["error"] == "duplicate_nonce"
+        assert_encrypted_error(resp2, encryption_ctx.shared_key, "duplicate_nonce", 400)
 
     def test_output_with_duplicate_nonce(self, client, encryption_ctx):
         """
@@ -298,9 +295,7 @@ class TestAntiReplayNonceIntegration:
 
         # Second output request with same nonce is rejected
         resp2 = _post_output(client, execution_id, encryption_ctx.shared_key, nonce=nonce)
-        assert resp2.status_code == 400
-        detail = resp2.json()["detail"]
-        assert detail["error"] == "duplicate_nonce"
+        assert_encrypted_error(resp2, encryption_ctx.shared_key, "duplicate_nonce", 400)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +356,4 @@ class TestConcurrencyEnforcementIntegration:
         req2 = _base_request_data(commit_hash="2222222222222222222222222222222222222222")
         body2 = make_encrypted_execute_request(req2, ctx)
         resp2 = test_client.post("/execute", json=body2)
-        assert resp2.status_code == 503
-        detail = resp2.json()["detail"]
-        assert detail["error"] == "at_capacity"
+        assert_encrypted_error(resp2, ctx.shared_key, "at_capacity", 503)

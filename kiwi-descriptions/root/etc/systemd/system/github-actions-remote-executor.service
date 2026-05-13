@@ -25,6 +25,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 StateDirectory=gha-executor
 LogsDirectory=github-actions-executor
 ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /tmp
+LimitCORE=0
 
 # NitroTPM access — ProtectSystem=strict implies DevicePolicy=closed,
 # so we must explicitly allow the TPM character device.

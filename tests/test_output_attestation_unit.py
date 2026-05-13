@@ -96,8 +96,11 @@ class TestGenerateOutputAttestation:
         script_output = "stdout:test output\nstderr:warn\nexit_code:1"
         generator.generate_output_attestation(script_output)
 
-        expected = hashlib.sha256(script_output.encode("utf-8")).hexdigest()
-        assert captured["user_data"] == expected
+        expected_digest = hashlib.sha256(script_output.encode("utf-8")).hexdigest()
+        # user_data is now JSON with output_digest field
+        import json
+        user_data = json.loads(captured["user_data"])
+        assert user_data["output_digest"] == expected_digest
 
     @patch("subprocess.run")
     def test_failure_returns_none_and_error(self, mock_run, generator):
@@ -256,7 +259,10 @@ class TestOutputEndpointWithAttestation:
         assert decoded == attestation_bytes
         # Verify the canonical script output was passed
         expected_script_output = "stdout:partial\nstderr:\nexit_code:None"
-        mock_gen.assert_called_once_with(expected_script_output, nonce=None)
+        mock_gen.assert_called_once()
+        call_args = mock_gen.call_args
+        assert call_args[0][0] == expected_script_output
+        assert call_args[1].get("execution_id") == "test-running"
 
     def test_queued_execution_includes_output_attestation(self):
         """Test queued execution (no output buffer) includes output_attestation_document with empty output"""
@@ -289,4 +295,7 @@ class TestOutputEndpointWithAttestation:
         assert decoded == attestation_bytes
         # Verify empty output was used for canonical script output
         expected_script_output = "stdout:\nstderr:\nexit_code:None"
-        mock_gen.assert_called_once_with(expected_script_output, nonce=None)
+        mock_gen.assert_called_once()
+        call_args = mock_gen.call_args
+        assert call_args[0][0] == expected_script_output
+        assert call_args[1].get("execution_id") == "test-queued"

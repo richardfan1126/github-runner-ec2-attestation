@@ -883,15 +883,28 @@ def check_debug_annotation(ssh_client: paramiko.SSHClient, artifact_ref: str, al
     )
 
     if exit_code != 0:
+        if not allow_debug:
+            raise RuntimeError(
+                f"REFUSING TO BUILD: Failed to fetch manifest for debug annotation check "
+                f"(exit code {exit_code}): {stderr}. "
+                "Cannot verify debug status — failing closed. "
+                "Re-run with --allow-debug to proceed without debug verification."
+            )
         logger.warning(f"Failed to fetch manifest for debug annotation check: {stderr}")
-        logger.warning("Proceeding without debug annotation check")
+        logger.warning("Proceeding because --allow-debug was provided")
         return
 
     try:
         manifest = json.loads(stdout)
     except (json.JSONDecodeError, ValueError) as e:
+        if not allow_debug:
+            raise RuntimeError(
+                f"REFUSING TO BUILD: Failed to parse manifest JSON: {e}. "
+                "Cannot verify debug status — failing closed. "
+                "Re-run with --allow-debug to proceed without debug verification."
+            )
         logger.warning(f"Failed to parse manifest JSON: {e}")
-        logger.warning("Proceeding without debug annotation check")
+        logger.warning("Proceeding because --allow-debug was provided")
         return
 
     # Look for debug annotation in manifest annotations
@@ -1105,20 +1118,41 @@ def upload_snapshot(ssh_client: paramiko.SSHClient, region: str) -> str:
     """
     logger.info("Uploading raw disk image to EBS snapshot...")
     
-    # Find the raw disk image file in build-output directory
+    # Find the raw disk image file in build-output directory using programmatic listing
     exit_code, stdout, stderr = execute_remote_command(
         ssh_client,
-        "cd ~/artifacts/build-output && ls *.raw",
+        "find ~/artifacts/build-output -maxdepth 1 -name '*.raw' -type f",
         stream_output=False
     )
     
     if exit_code != 0:
-        raise RuntimeError(f"Failed to find raw disk image: {stderr}")
+        raise RuntimeError(f"Failed to list raw disk images: {stderr}")
     
-    raw_image_path = f"~/artifacts/build-output/{stdout.strip()}"
+    raw_files = [line.strip() for line in stdout.strip().split('\n') if line.strip()]
+    
+    # Enforce exactly one .raw file
+    if len(raw_files) == 0:
+        raise RuntimeError("No .raw file found in build-output directory")
+    if len(raw_files) > 1:
+        raise RuntimeError(
+            f"Expected exactly one .raw file, found {len(raw_files)}: {raw_files}"
+        )
+    
+    raw_image_path = raw_files[0]
+    # Extract basename for validation
+    raw_basename = os.path.basename(raw_image_path)
+    
+    # Validate the basename against a strict allowlist regex
+    raw_filename_pattern = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*\.raw$')
+    if not raw_filename_pattern.match(raw_basename):
+        raise RuntimeError(
+            f"Invalid raw image filename: '{raw_basename}'. "
+            "Filename must match pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*\\.raw$"
+        )
+    
     logger.info(f"Found raw disk image: {raw_image_path}")
     
-    # Upload using coldsnap
+    # Upload using coldsnap with subprocess list arguments (no shell interpolation)
     logger.info("Uploading snapshot with coldsnap (this may take several minutes)...")
     
     coldsnap_command = f"/home/ec2-user/.cargo/bin/coldsnap upload {raw_image_path}"

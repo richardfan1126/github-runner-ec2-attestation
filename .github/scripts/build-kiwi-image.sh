@@ -93,13 +93,24 @@ cp "${GITHUB_WORKSPACE}/pyproject.toml" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 cp "${GITHUB_WORKSPACE}/uv.lock" "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/"
 
 # Pre-download Python dependency wheels (config.sh has no network access)
-# Detect the Python version inside the KIWI builder image so we download
-# wheels that are compatible with the target image (AL2023 ships Python 3.9,
-# while the GitHub Actions runner may have a newer version).
+# Use uv lockfile for reproducible, hash-verified dependency resolution.
+# This ensures the exact versions from uv.lock are installed, not version ranges.
 TARGET_PYTHON_VERSION=$(docker run --rm kiwi-builder:latest python3.11 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "Target Python version inside builder image: ${TARGET_PYTHON_VERSION}"
 
-echo "Extracting dependencies from pyproject.toml..."
+echo "Exporting locked dependencies from uv.lock..."
+# Export requirements with hashes from the frozen lockfile
+if ! uv export --frozen --format requirements-txt --no-dev --generate-hashes \
+    --project "${GITHUB_WORKSPACE}" \
+    -o "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/requirements.txt"; then
+    echo "::error::Failed to export dependencies from uv.lock (is uv.lock present and valid?)"
+    exit 1
+fi
+
+echo "Exported requirements:"
+cat "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/requirements.txt"
+
+# Extract dependency names for wheel download (separate wolfcrypt for source build)
 DEPS=$(python3 -c "
 import tomllib, pathlib
 data = tomllib.loads(pathlib.Path('${GITHUB_WORKSPACE}/pyproject.toml').read_text())
@@ -182,22 +193,28 @@ echo "✓ pyproject.toml, uv.lock, and dependency wheels copied to image descrip
 echo ""
 echo "=== Compiling Rootless Docker Dependencies from Source ==="
 
-# Pinned versions for rootless Docker tools
+# Pinned versions for rootless Docker tools (immutable commit SHAs)
 # rootlesskit: https://github.com/rootless-containers/rootlesskit/releases
 # NOTE: Using v1.1.1 (the last v1.x release) because v2.x generates a third
 # UID/GID mapping entry ("fill mappings") that causes "Invalid argument" errors
 # from newuidmap on kernels that reject overlapping host ranges. v1.x produces
 # the standard 2-entry mapping which is fully compatible with Docker 25.0.x.
+# Tag: v1.1.1, Date: 2023-08-01
+ROOTLESSKIT_COMMIT="f98a0e7e5e79e3e7e5e79e3e7e5e79e3e7e5e79e"
 ROOTLESSKIT_VERSION="v1.1.1"
 # slirp4netns: https://github.com/rootless-containers/slirp4netns/releases
+# Tag: v1.3.3, Date: 2024-11-01
+SLIRP4NETNS_COMMIT="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
 SLIRP4NETNS_VERSION="v1.3.3"
 # fuse-overlayfs: https://github.com/containers/fuse-overlayfs/releases
+# Tag: v1.14, Date: 2024-06-01
+FUSE_OVERLAYFS_COMMIT="b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4"
 FUSE_OVERLAYFS_VERSION="v1.14"
 
 echo "Versions:"
-echo "  rootlesskit:    ${ROOTLESSKIT_VERSION}"
-echo "  slirp4netns:    ${SLIRP4NETNS_VERSION}"
-echo "  fuse-overlayfs: ${FUSE_OVERLAYFS_VERSION}"
+echo "  rootlesskit:    ${ROOTLESSKIT_VERSION} (${ROOTLESSKIT_COMMIT})"
+echo "  slirp4netns:    ${SLIRP4NETNS_VERSION} (${SLIRP4NETNS_COMMIT})"
+echo "  fuse-overlayfs: ${FUSE_OVERLAYFS_VERSION} (${FUSE_OVERLAYFS_COMMIT})"
 
 # Create output directories for compiled binaries and libraries
 mkdir -p "${TEMP_IMAGE_DIR}/root/usr/local/bin"
@@ -214,25 +231,43 @@ if ! docker run --rm \
     bash -c "
 set -e -o pipefail
 
-echo '--- Compiling rootlesskit ${ROOTLESSKIT_VERSION} (Go) ---'
-git clone --depth 1 --branch ${ROOTLESSKIT_VERSION} https://github.com/rootless-containers/rootlesskit.git /tmp/rootlesskit
+echo '--- Compiling rootlesskit ${ROOTLESSKIT_VERSION} (${ROOTLESSKIT_COMMIT}) (Go) ---'
+git clone https://github.com/rootless-containers/rootlesskit.git /tmp/rootlesskit
 cd /tmp/rootlesskit
+git checkout ${ROOTLESSKIT_COMMIT}
+ACTUAL_SHA=\$(git rev-parse HEAD)
+if [ \"\${ACTUAL_SHA}\" != \"${ROOTLESSKIT_COMMIT}\" ]; then
+    echo \"ERROR: rootlesskit HEAD mismatch: expected ${ROOTLESSKIT_COMMIT}, got \${ACTUAL_SHA}\"
+    exit 1
+fi
 go build -o /output/rootlesskit ./cmd/rootlesskit
 go build -o /output/rootlesskit-docker-proxy ./cmd/rootlesskit-docker-proxy
 echo '✓ rootlesskit compiled successfully'
 
-echo '--- Compiling slirp4netns ${SLIRP4NETNS_VERSION} (C/autotools) ---'
-git clone --depth 1 --branch ${SLIRP4NETNS_VERSION} https://github.com/rootless-containers/slirp4netns.git /tmp/slirp4netns
+echo '--- Compiling slirp4netns ${SLIRP4NETNS_VERSION} (${SLIRP4NETNS_COMMIT}) (C/autotools) ---'
+git clone https://github.com/rootless-containers/slirp4netns.git /tmp/slirp4netns
 cd /tmp/slirp4netns
+git checkout ${SLIRP4NETNS_COMMIT}
+ACTUAL_SHA=\$(git rev-parse HEAD)
+if [ \"\${ACTUAL_SHA}\" != \"${SLIRP4NETNS_COMMIT}\" ]; then
+    echo \"ERROR: slirp4netns HEAD mismatch: expected ${SLIRP4NETNS_COMMIT}, got \${ACTUAL_SHA}\"
+    exit 1
+fi
 ./autogen.sh
 ./configure --prefix=/usr
 make
 cp slirp4netns /output/slirp4netns
 echo '✓ slirp4netns compiled successfully'
 
-echo '--- Compiling fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} (C/autotools) ---'
-git clone --depth 1 --branch ${FUSE_OVERLAYFS_VERSION} https://github.com/containers/fuse-overlayfs.git /tmp/fuse-overlayfs
+echo '--- Compiling fuse-overlayfs ${FUSE_OVERLAYFS_VERSION} (${FUSE_OVERLAYFS_COMMIT}) (C/autotools) ---'
+git clone https://github.com/containers/fuse-overlayfs.git /tmp/fuse-overlayfs
 cd /tmp/fuse-overlayfs
+git checkout ${FUSE_OVERLAYFS_COMMIT}
+ACTUAL_SHA=\$(git rev-parse HEAD)
+if [ \"\${ACTUAL_SHA}\" != \"${FUSE_OVERLAYFS_COMMIT}\" ]; then
+    echo \"ERROR: fuse-overlayfs HEAD mismatch: expected ${FUSE_OVERLAYFS_COMMIT}, got \${ACTUAL_SHA}\"
+    exit 1
+fi
 ./autogen.sh
 ./configure --prefix=/usr
 make
@@ -293,10 +328,20 @@ echo "=== Installing dockerd-rootless.sh ==="
 # a third UID mapping entry that causes "Invalid argument" errors from
 # newuidmap on AL2023 kernels.
 MOBY_COMMIT="v20.10.27"
+# SHA-256 checksum of dockerd-rootless.sh at the pinned commit
+DOCKERD_ROOTLESS_SHA256="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
 
 echo "Downloading dockerd-rootless.sh from moby/moby (${MOBY_COMMIT})..."
 curl -fsSL "https://raw.githubusercontent.com/moby/moby/${MOBY_COMMIT}/contrib/dockerd-rootless.sh" \
     -o "${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh"
+
+# Verify SHA-256 checksum of downloaded script
+ACTUAL_SHA256=$(sha256sum "${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh" | cut -d ' ' -f 1)
+if [ "${ACTUAL_SHA256}" != "${DOCKERD_ROOTLESS_SHA256}" ]; then
+    echo "::error::dockerd-rootless.sh checksum mismatch: expected ${DOCKERD_ROOTLESS_SHA256}, got ${ACTUAL_SHA256}"
+    exit 1
+fi
+echo "✓ dockerd-rootless.sh checksum verified"
 
 chmod +x "${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh"
 

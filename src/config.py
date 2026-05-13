@@ -9,6 +9,34 @@ class ConfigurationError(Exception):
     pass
 
 
+def parse_strict_bool(value: str, key_name: str) -> bool:
+    """
+    Parse a boolean value from a string with strict validation.
+    
+    Only accepts: true, 1, yes (case-insensitive) → True
+                  false, 0, no (case-insensitive) → False
+    
+    Args:
+        value: The string value to parse
+        key_name: The configuration key name (for error messages)
+    
+    Returns:
+        The parsed boolean value
+    
+    Raises:
+        ValueError: If the value is not in the recognized set
+    """
+    normalized = value.strip().lower()
+    if normalized in ("true", "1", "yes"):
+        return True
+    if normalized in ("false", "0", "no"):
+        return False
+    raise ValueError(
+        f"Invalid boolean value for {key_name}: '{value}'. "
+        f"Accepted values: true, 1, yes, false, 0, no"
+    )
+
+
 @dataclass
 class ServerConfig:
     """Server configuration loaded from environment variables"""
@@ -49,6 +77,11 @@ class ServerConfig:
 
     # Container Image Digest Pinning
     container_image_digest: Optional[str] = None
+
+    # Request Body Size Limits
+    max_request_body_bytes: int = 1_048_576  # 1MB default
+    max_encrypted_payload_bytes: int = 524_288  # 512KB default
+    max_decrypted_payload_bytes: int = 262_144  # 256KB default
 
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
@@ -134,7 +167,7 @@ class ServerConfig:
         
         # Parse optional REQUIRE_PROTECTED_REF (boolean, default False)
         require_protected_ref_raw = os.getenv("REQUIRE_PROTECTED_REF", "false")
-        require_protected_ref = require_protected_ref_raw.lower() in ("true", "1", "yes")
+        require_protected_ref = parse_strict_bool(require_protected_ref_raw, "REQUIRE_PROTECTED_REF")
         
         # Parse optional MAX_OUTPUT_SIZE_BYTES (default 10MB)
         max_output_size_bytes_raw = os.getenv("MAX_OUTPUT_SIZE_BYTES")
@@ -147,6 +180,22 @@ class ServerConfig:
         nonce_cache_ttl_seconds = 300
         if nonce_cache_ttl_seconds_raw is not None:
             nonce_cache_ttl_seconds = int(nonce_cache_ttl_seconds_raw)
+        
+        # Parse optional request body size limits
+        max_request_body_bytes_raw = os.getenv("MAX_REQUEST_BODY_BYTES")
+        max_request_body_bytes = 1_048_576  # 1MB default
+        if max_request_body_bytes_raw is not None:
+            max_request_body_bytes = int(max_request_body_bytes_raw)
+        
+        max_encrypted_payload_bytes_raw = os.getenv("MAX_ENCRYPTED_PAYLOAD_BYTES")
+        max_encrypted_payload_bytes = 524_288  # 512KB default
+        if max_encrypted_payload_bytes_raw is not None:
+            max_encrypted_payload_bytes = int(max_encrypted_payload_bytes_raw)
+        
+        max_decrypted_payload_bytes_raw = os.getenv("MAX_DECRYPTED_PAYLOAD_BYTES")
+        max_decrypted_payload_bytes = 262_144  # 256KB default
+        if max_decrypted_payload_bytes_raw is not None:
+            max_decrypted_payload_bytes = int(max_decrypted_payload_bytes_raw)
         
         return cls(
             port=int(port),
@@ -168,6 +217,9 @@ class ServerConfig:
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,
             nonce_cache_ttl_seconds=nonce_cache_ttl_seconds,
+            max_request_body_bytes=max_request_body_bytes,
+            max_encrypted_payload_bytes=max_encrypted_payload_bytes,
+            max_decrypted_payload_bytes=max_decrypted_payload_bytes,
         )
     
     def validate(self) -> None:

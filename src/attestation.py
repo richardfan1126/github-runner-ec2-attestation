@@ -76,6 +76,7 @@ class AttestationGenerator:
         nonce: Optional[str] = None,
         public_key: Optional[bytes] = None,
         script_env: Optional[Dict[str, str]] = None,
+        execution_id: Optional[str] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
         """
         Generate an attestation document using NitroTPM attestation.
@@ -100,6 +101,8 @@ class AttestationGenerator:
                         Only provided when generating for the /attest endpoint.
             script_env: Optional dictionary of environment variables passed to the script.
                         Used to compute script_env_hash for inclusion in user_data.
+            execution_id: Optional execution ID (UUID v4) to include in user_data.
+                          Provided when generating attestation for /execute responses.
         
         Returns:
             Tuple of (AttestationDocument, None) on success or (None, AttestationError) on failure
@@ -135,6 +138,8 @@ class AttestationGenerator:
                     "script_env_hash": self._compute_script_env_hash(script_env),
                     "timestamp": timestamp.isoformat(),
                 }
+                if execution_id is not None:
+                    user_data["execution_id"] = execution_id
                 user_data_json = json.dumps(user_data)
                 
                 # Write user_data to temporary file
@@ -275,16 +280,18 @@ class AttestationGenerator:
         self,
         script_output: str,
         nonce: Optional[str] = None,
+        execution_id: Optional[str] = None,
     ) -> tuple[Optional[bytes], Optional[str]]:
         """
         Generate an output attestation document for a completed script execution.
 
-        Computes the SHA-256 digest of the Script_Output and passes the hex-encoded
-        digest as user_data to nitro-tpm-attest.
+        Computes the SHA-256 digest of the Script_Output and passes a JSON
+        user_data containing the digest and execution_id to nitro-tpm-attest.
 
         Args:
             script_output: The canonical Script_Output string (stdout + stderr + exit_code)
             nonce: Optional client-provided nonce for inclusion in attestation
+            execution_id: Optional execution ID to include in user_data
 
         Returns:
             Tuple of (attestation_bytes, None) on success or (None, error_message) on failure
@@ -300,11 +307,17 @@ class AttestationGenerator:
 
             logger.info(f"Generating output attestation document (digest={digest[:16]}...)")
 
-            # Write hex digest as user_data to temporary file
+            # Build user_data JSON with digest and optional execution_id
+            user_data = {"output_digest": digest}
+            if execution_id is not None:
+                user_data["execution_id"] = execution_id
+            user_data_content = json.dumps(user_data)
+
+            # Write user_data to temporary file
             user_data_fd, user_data_path = tempfile.mkstemp(
-                prefix="output_attestation_user_data_", suffix=".txt"
+                prefix="output_attestation_user_data_", suffix=".json"
             )
-            os.write(user_data_fd, digest.encode("utf-8"))
+            os.write(user_data_fd, user_data_content.encode("utf-8"))
             os.close(user_data_fd)
             user_data_fd = None  # Mark as closed
 
