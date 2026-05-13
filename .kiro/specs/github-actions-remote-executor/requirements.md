@@ -22,7 +22,7 @@ This specification covers three major aspects:
 
 7. **Streaming Output Requirements (Requirement 44)**: How the Script_Executor streams output from Execution_Containers incrementally during execution, so that clients can observe partial output while scripts are still running rather than waiting for the container to exit.
 
-8. **Security Hardening Requirements (Requirements 45-50)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection, debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, and IAM permission scoping.
+8. **Security Hardening Requirements (Requirements 45-51)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection (including mandatory nonces), debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, IAM permission scoping, and host login access hardening.
 
 Note: Security hardening acceptance criteria from the security review are integrated throughout the existing requirements where they naturally belong. Only genuinely new requirement areas appear in the Security Hardening Requirements section.
 
@@ -153,6 +153,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Build_Instance**: Temporary EC2 instance used to convert KIWI image to AMI
 - **Docker_Daemon**: The Docker Engine service (dockerd) that must be installed and enabled in the KIWI image to support creation and management of Execution_Containers at runtime
 - **Git_Package**: The git version control system binary that must be installed in the KIWI image to support repository cloning operations by the Repository_Client at runtime
+- **Encrypted_Error_Envelope**: An encrypted JSON response returned after successful request decryption when an application-level error occurs, containing an `error` description and `error_code` field, ensuring all post-decryption communication remains within the encrypted channel
+- **Request_Body_Limit**: Maximum allowed size in bytes for incoming HTTP request bodies on encrypted endpoints, enforced before JSON parsing or base64 decoding to prevent resource exhaustion from oversized requests
 
 ## Requirements
 
@@ -229,6 +231,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 10. WHEN the Repository_Client completes a successful clone, THE Repository_Client SHALL strip the GitHub token from the cloned repository's .git/config by running `git remote set-url origin https://github.com/{owner}/{repo}.git` (without the token)
 11. THE Repository_Client SHALL perform the token stripping before the cloned repository is mounted into the Execution_Container
 12. AFTER token stripping, THE Repository_Client SHALL remove the .git directory entirely from the cloned repository before the repository is mounted into the Execution_Container
+13. THE GHA_Server SHALL wrap all post-clone processing (script size validation, attestation generation, execution record creation, and async execution handoff) in a `finally` block or equivalent error-handling construct that ensures the clone directory is removed if an unexpected exception occurs after cloning but before the Script_Executor takes ownership
+14. THE cleanup in the `finally` block SHALL only remove the clone directory if ownership has NOT been successfully handed to the Script_Executor for async execution; IF the clone directory has been handed to the Script_Executor, THEN THE `finally` block SHALL NOT remove it (the Script_Executor is responsible for cleanup after execution completes)
+15. THE `finally` block SHALL use `shutil.rmtree` with `ignore_errors=True` to ensure cleanup does not raise secondary exceptions
+16. THE test suite SHALL include a regression test that simulates an unexpected exception after successful cloning but before execution handoff, and verifies the clone directory is removed
 
 ### Requirement 4: Attestation Document Generation and Execution Initiation
 
@@ -243,7 +249,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 5. THE Attestation_Generator SHALL store the Attestation_Document associated with the Execution_ID
 6. WHEN the Attestation_Document is generated, THE Script_Executor SHALL initiate script execution
 7. IF attestation generation fails, THEN THE GHA_Server SHALL record an attestation error for the Execution_ID
-8. THE codebase SHALL include a documented schema definition for the NitroTPM attestation user_data structure, specifying all fields, their types, and their purpose (currently: repository_url, commit_hash, script_path, timestamp, script_env_hash)
+8. THE codebase SHALL include a documented schema definition for the NitroTPM attestation user_data structure, specifying all fields, their types, and their purpose (currently: repository_url, commit_hash, script_path, timestamp, script_env_hash, execution_id)
 9. THE Attestation_Generator SHALL include a `script_env_hash` field in the attestation user_data containing a SHA-256 hex digest of the canonicalized script_env dictionary (keys sorted lexicographically, serialized as JSON with no whitespace)
 10. WHEN script_env is empty or not provided, THE Attestation_Generator SHALL set `script_env_hash` to the SHA-256 hex digest of an empty JSON object (`{}`)
 11. THE schema documentation SHALL state that `script_path` is a security-critical field that consumers MUST compare against the expected/requested script path to verify execution intent
@@ -251,6 +257,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 13. THE schema documentation SHALL specify the canonical serialization format for script_env_hash computation so that consumers can independently verify the digest
 14. THE test suite SHALL include regression tests that assert `script_path` and `script_env_hash` are present in the attestation user_data for all successful attestation generation paths
 15. IF `script_path` or `script_env_hash` is removed or renamed in the attestation user_data, THEN THE regression tests SHALL fail
+16. THE Attestation_Generator SHALL include the `execution_id` field in the NitroTPM attestation user_data when generating execution attestation documents for /execute responses, so that consumers can cryptographically bind the attestation to the specific server execution record
+17. THE Attestation_Generator SHALL include the `execution_id` field in the NitroTPM attestation user_data when generating output attestation documents for /execution/{id}/output responses
+18. THE attestation user_data schema documentation SHALL include `execution_id` as a required field with its type (string, UUID v4) and purpose (binding the attestation to a specific server execution record)
+19. THE test suite SHALL include a regression test that verifies the `execution_id` in the /execute response attestation user_data matches the `execution_id` returned in the response body
+20. THE test suite SHALL include a regression test that verifies the `execution_id` in the /execution/{id}/output response attestation user_data matches the execution ID in the URL path
+21. IF `execution_id` is removed or renamed in the attestation user_data, THEN THE regression tests SHALL fail
 
 ### Requirement 5: Asynchronous Script Execution in Ephemeral Docker Containers
 
@@ -274,6 +286,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 14. See Requirement 44 for streaming output capture details during container execution
 15. THE Output_Collector SHALL enforce a maximum output buffer size configurable via MAX_OUTPUT_SIZE_BYTES
 16. WHEN the combined stdout and stderr output exceeds MAX_OUTPUT_SIZE_BYTES, THE Output_Collector SHALL truncate the output and mark the output record as truncated
+17. THE GHA_Server SHALL pass `config.max_output_size_bytes` to the Output_Collector constructor at initialization time so that the configured limit is enforced rather than a hardcoded default
+18. THE test suite SHALL include a regression test that configures a lower MAX_OUTPUT_SIZE_BYTES value and verifies the Output_Collector enforces that configured limit
 
 ### Requirement 6: Output Polling Endpoint
 
@@ -294,6 +308,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. IF Output_Attestation_Document generation fails, THEN THE GHA_Server SHALL return the Script_Output and Attestation_Document with an error field indicating attestation failure
 12. THE GHA_Server SHALL retain execution results for at least 1 hour after completion
 13. WHEN the GHA_Server creates an execution record via /execute, THE Execution_Manager SHALL store the `repository` claim from the validated OIDC_Token in the execution record
+14. THE Output_Attestation_Document user_data SHALL include the `execution_id` so that consumers can cryptographically bind the output attestation to the specific execution record (see Requirement 4 criteria 16-21 for full details)
 
 ### Requirement 7: Error Handling and Logging
 
@@ -346,6 +361,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
     - `CAP_KILL`: Required for scripts that manage child processes and need to send signals (e.g., stopping background services during tests)
 19. THE Script_Executor SHALL NOT add back any capabilities beyond those listed in 8.18; any future additions require documented justification and a spec update
 20. THE GHA_Server rate limiter SHALL periodically evict source IP entries whose most recent request timestamp is outside the current rate-limit window, so that the per-IP tracking dictionary does not grow without bound under distributed or spoofed-source traffic
+21. THE GHA_Server SHALL enforce a maximum HTTP request body size limit (configurable via MAX_REQUEST_BODY_BYTES, default 1 MB) at the application level before parsing JSON or decoding base64 on the /execute and /execution/{id}/output endpoints
+22. IF the raw request body exceeds MAX_REQUEST_BODY_BYTES, THEN THE GHA_Server SHALL reject the request with HTTP 413 Payload Too Large without performing JSON parsing, base64 decoding, or decryption
+23. THE GHA_Server SHALL enforce a maximum size for the `encrypted_payload` field (configurable via MAX_ENCRYPTED_PAYLOAD_BYTES, default 512 KB) after JSON parsing but before base64 decoding; IF exceeded, THEN reject with HTTP 400 Bad Request
+24. THE GHA_Server SHALL enforce a maximum size for the `client_public_key` field (maximum 2048 bytes, sufficient for X25519 public key + ML-KEM-768 ciphertext with length prefixes); IF exceeded, THEN reject with HTTP 400 Bad Request
+25. THE GHA_Server SHALL enforce a maximum size for the decrypted JSON payload (configurable via MAX_DECRYPTED_PAYLOAD_BYTES, default 256 KB) after decryption; IF exceeded, THEN reject with HTTP 400 Bad Request
+26. THE GHA_Server SHALL read MAX_REQUEST_BODY_BYTES, MAX_ENCRYPTED_PAYLOAD_BYTES, and MAX_DECRYPTED_PAYLOAD_BYTES from configuration at startup
 
 ### Requirement 9: Configuration Management
 
@@ -365,6 +386,9 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 10. IF required configuration is missing, THEN THE GHA_Server SHALL fail to start with a descriptive error
 11. THE Script_Executor SHALL verify that the Docker daemon is accessible at startup
 12. IF the Docker daemon is not accessible, THEN THE GHA_Server SHALL fail to start with a descriptive error
+13. THE GHA_Server configuration parser SHALL accept only the following string values as valid booleans: `true`, `1`, `yes` (case-insensitive) for true, and `false`, `0`, `no` (case-insensitive) for false; this strict parsing SHALL apply to all boolean configuration values (including REQUIRE_PROTECTED_REF)
+14. IF any boolean configuration environment variable contains a value that is not in the recognized boolean set (e.g., `treu`, `enabled`, `on`, `TRUE1`), THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating the configuration key name, the invalid value received, and the list of accepted values
+15. THE test suite SHALL include regression tests that verify typo values such as `treu`, `enabled`, `on`, and `yess` cause a startup failure rather than being interpreted as false
 
 ### Requirement 10: Health and Monitoring
 
@@ -425,10 +449,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 16. WHEN executing build scripts, THE Build_Workflow SHALL use dependencies from scripts/pyproject.toml
 17. THE scripts configuration and remote executor configuration SHALL be managed independently using uv
 18. THE KIWI_Builder SHALL copy pyproject.toml and uv.lock files into the KIWI image build context
-19. THE Build_Workflow SHALL extract the dependency list from pyproject.toml and pre-download Python dependency wheels using pip3 download in the build script (which has network access)
-20. THE Build_Workflow SHALL copy the pre-downloaded wheels into the KIWI image build context at /tmp/kiwi-build/wheels/
-21. THE KIWI_Builder SHALL install Python dependencies from pre-downloaded wheels using pip3 install --no-index --find-links (fully offline, no network required)
-22. THE KIWI_Builder SHALL install dependencies to the system Python environment in the KIWI image
+19. THE Build_Workflow SHALL install Python dependencies into the KIWI image using a lockfile-enforced installation path: either `uv sync --frozen` (which installs exactly the versions in `uv.lock`), a hash-checked export from `uv.lock` (via `uv export --frozen --format requirements-txt` with `--generate-hashes`), or `pip install --require-hashes` against the exported requirements; the installation SHALL NOT use version ranges from `pyproject.toml` directly
+20. THE Build_Workflow SHALL NOT use `pip3 download` against version ranges from `pyproject.toml` for dependencies embedded in the AMI; version-range-based downloads are only acceptable for development/CI environments
+21. THE KIWI_Builder SHALL copy the `uv.lock` file into the KIWI image build context and use it as the authoritative source for dependency versions
+22. THE Build_Workflow SHALL install Python dependencies from the lockfile-enforced export using pip3 install --no-index --find-links (fully offline, no network required) or `uv sync --frozen`
 23. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
 
 ### Requirement 13: Artifact Publishing with PCR Annotations
@@ -566,23 +590,27 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 #### Acceptance Criteria
 
-1. WHEN artifacts are validated, THE AMI_Converter SHALL find the raw disk image filename in ~/artifacts/build-output directory
-2. THE AMI_Converter SHALL upload the raw disk image using /home/ec2-user/.cargo/bin/coldsnap upload command
-3. THE AMI_Converter SHALL stream coldsnap output to logs during upload
-4. THE AMI_Converter SHALL parse the snapshot ID starting with snap- from coldsnap stdout
-5. THE AMI_Converter SHALL wait for the snapshot to complete using EC2 snapshot_completed waiter
-6. THE AMI_Converter SHALL configure the waiter with 15 second delay and 40 max attempts
-7. THE AMI_Converter SHALL register the AMI with VirtualizationType set to hvm
-8. THE AMI_Converter SHALL register the AMI with BootMode set to uefi
-9. THE AMI_Converter SHALL register the AMI with Architecture set to x86_64
-10. THE AMI_Converter SHALL register the AMI with TpmSupport set to v2.0
-11. THE AMI_Converter SHALL register the AMI with EnaSupport set to True
-12. THE AMI_Converter SHALL register the AMI with RootDeviceName set to /dev/xvda
-13. THE AMI_Converter SHALL configure BlockDeviceMappings with the snapshot ID for /dev/xvda
-14. THE AMI_Converter SHALL generate an AMI name with format attestable-ami-imported-{architecture}-{timestamp} where timestamp uses strftime('%Y-%m-%dT%H-%M-%S') to ensure only AWS-allowed characters (letters, numbers, '(', ')', '.', '-', '/', '_')
-15. IF snapshot upload fails, THEN THE AMI_Converter SHALL fail with upload error
-16. IF snapshot waiter times out, THEN THE AMI_Converter SHALL fail with waiter error
-17. IF AMI registration fails, THEN THE AMI_Converter SHALL fail with ClientError
+1. WHEN artifacts are validated, THE AMI_Converter SHALL enumerate `.raw` files in ~/artifacts/build-output using a programmatic directory listing (e.g., Python's `glob` or `os.listdir`) rather than shell globbing via `ls *.raw`
+2. THE AMI_Converter SHALL validate that exactly one `.raw` file exists in ~/artifacts/build-output; IF zero or more than one `.raw` file is found, THEN THE AMI_Converter SHALL terminate with an error indicating an unexpected artifact count
+3. THE AMI_Converter SHALL validate that the raw image filename matches a strict basename allowlist pattern `^[a-zA-Z0-9][a-zA-Z0-9._-]*\.raw$` containing only alphanumeric characters, dots, hyphens, and underscores, and requiring the filename to start with an alphanumeric character; IF the filename does not match, THEN THE AMI_Converter SHALL terminate with an error indicating the filename contains disallowed characters and SHALL NOT execute any shell command referencing the filename
+4. THE AMI_Converter SHALL use `shlex.quote()` on the validated raw image path when interpolating it into shell commands, or SHALL avoid shell interpolation entirely by using subprocess list arguments
+5. THE test suite SHALL include regression tests that verify filenames containing shell metacharacters (e.g., `; rm -rf /`, `$(cmd)`, backticks, pipes, ampersands) are rejected before any shell command is constructed
+6. THE AMI_Converter SHALL upload the raw disk image using /home/ec2-user/.cargo/bin/coldsnap upload command
+7. THE AMI_Converter SHALL stream coldsnap output to logs during upload
+8. THE AMI_Converter SHALL parse the snapshot ID starting with snap- from coldsnap stdout
+9. THE AMI_Converter SHALL wait for the snapshot to complete using EC2 snapshot_completed waiter
+10. THE AMI_Converter SHALL configure the waiter with 15 second delay and 40 max attempts
+11. THE AMI_Converter SHALL register the AMI with VirtualizationType set to hvm
+12. THE AMI_Converter SHALL register the AMI with BootMode set to uefi
+13. THE AMI_Converter SHALL register the AMI with Architecture set to x86_64
+14. THE AMI_Converter SHALL register the AMI with TpmSupport set to v2.0
+15. THE AMI_Converter SHALL register the AMI with EnaSupport set to True
+16. THE AMI_Converter SHALL register the AMI with RootDeviceName set to /dev/xvda
+17. THE AMI_Converter SHALL configure BlockDeviceMappings with the snapshot ID for /dev/xvda
+18. THE AMI_Converter SHALL generate an AMI name with format attestable-ami-imported-{architecture}-{timestamp} where timestamp uses strftime('%Y-%m-%dT%H-%M-%S') to ensure only AWS-allowed characters (letters, numbers, '(', ')', '.', '-', '/', '_')
+19. IF snapshot upload fails, THEN THE AMI_Converter SHALL fail with upload error
+20. IF snapshot waiter times out, THEN THE AMI_Converter SHALL fail with waiter error
+21. IF AMI registration fails, THEN THE AMI_Converter SHALL fail with ClientError
 
 ### Requirement 21: Build Result Output and Infrastructure Cleanup
 
@@ -615,7 +643,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 1. THE appliance.kiwi package definition SHALL include the docker package in the image packages list
 2. THE appliance.kiwi package definition SHALL NOT list `uidmap` as a separate package because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection; THE appliance.kiwi SHALL NOT list `rootlesskit`, `slirp4netns`, or `fuse-overlayfs` as DNF packages because they are not available in the AL2023 core repository
-3. THE config.sh script SHALL create a dedicated non-root service user (e.g., `gha-executor`) with a persistent home directory at a writable path (e.g., `/var/lib/gha-executor`) and create runtime directories needed by rootless Docker (`/var/lib/gha-executor/docker` for the data-root, `/home/gha-executor/.local/share` for XDG data)
+3. THE config.sh script SHALL create a dedicated non-root service user (e.g., `gha-executor`) with a persistent home directory at a writable path (e.g., `/var/lib/gha-executor`), explicitly pinning the UID to 1000 using `useradd --uid 1000`, and create runtime directories needed by rootless Docker (`/var/lib/gha-executor/docker` for the data-root, `/home/gha-executor/.local/share` for XDG data)
 4. THE config.sh script SHALL configure `/etc/subuid` and `/etc/subgid` with two non-overlapping 65,536-ID ranges for the service user (e.g., `100000:65536` and `200000:65536`) to avoid "Invalid argument" errors from `newuidmap` when rootlesskit generates a third UID/GID mapping entry
 5. THE config.sh script SHALL configure rootless Docker for the service user using a user-scoped systemd unit that invokes `dockerd-rootless.sh` (downloaded from the Moby repository at a pinned version), with the Docker data-root set to `/var/lib/gha-executor/docker`
 6. THE config.sh script SHALL run `loginctl enable-linger` for the service user so the rootless Docker daemon persists without an active login session
@@ -779,6 +807,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 6. IF no Encryption_Context exists for the requested execution_id, THEN THE GHA_Server SHALL return HTTP 400 Bad Request with an error message indicating no encryption context is available
 7. IF decryption of the /execution/{execution_id}/output request payload fails, THEN THE GHA_Server SHALL return HTTP 400 Bad Request with an error message indicating decryption failure
 8. THE client SHALL decrypt response payloads using the same Shared_Key derived during the PQ_Hybrid_KEM key exchange
+9. ONCE request decryption succeeds on /execute, THE GHA_Server SHALL return all subsequent application-level errors (validation failures, authentication errors, repository fetch failures, attestation failures, capacity rejections) as encrypted error envelopes using the derived Shared_Key, rather than as plaintext HTTP error responses
+10. ONCE request decryption succeeds on /execution/{execution_id}/output, THE GHA_Server SHALL return all subsequent application-level errors as encrypted error envelopes using the execution-bound Shared_Key
+11. THE encrypted error envelope SHALL contain a JSON payload with an `error` field describing the failure and an `error_code` field containing the HTTP status code that would have been returned
+12. THE test suite SHALL include regression tests that verify post-decryption application errors are returned as encrypted envelopes rather than plaintext HTTP errors
 
 ### Requirement 43: Attestation Document Encryption Exemption
 
@@ -1009,6 +1041,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 3. IF the nonce has been previously seen in the cache, THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request and an error message indicating a duplicate nonce
 4. THE nonce cache entries SHALL expire after a configurable TTL that matches the OIDC_Token lifetime
 5. THE GHA_Server SHALL apply the same nonce validation to /execution/{execution_id}/output requests
+6. THE GHA_Server SHALL require a non-empty `nonce` field in the decrypted payload of every /execute request; IF the `nonce` field is missing or empty, THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request and an error message indicating that a nonce is required
+7. THE GHA_Server SHALL require a non-empty `nonce` field in the decrypted payload of every /execution/{execution_id}/output request; IF the `nonce` field is missing or empty, THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request and an error message indicating that a nonce is required
+8. THE test suite SHALL include regression tests that verify requests without a nonce are rejected with HTTP 400
+9. THE test suite SHALL include regression tests that verify requests with an empty string nonce are rejected with HTTP 400
 
 ### Requirement 46: Debug Image Annotation and Production Gate
 
@@ -1023,6 +1059,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 3. WHEN the AMI_Converter downloads an artifact, THE AMI_Converter SHALL check for the `debug` annotation on the artifact
 4. IF the artifact has `debug=true` annotation, THEN THE AMI_Converter SHALL refuse to build the AMI and terminate with an error unless an explicit `--allow-debug` CLI flag is provided
 5. IF --allow-debug is provided and the artifact has `debug=true`, THEN THE AMI_Converter SHALL log a prominent warning that a debug image is being converted to an AMI
+6. IF the `oras manifest fetch` command fails or returns a non-zero exit code, THEN THE AMI_Converter SHALL terminate with an error indicating the debug annotation could not be verified, unless `--allow-debug` is explicitly provided
+7. IF JSON parsing of the manifest response fails, THEN THE AMI_Converter SHALL terminate with an error indicating the debug annotation could not be verified, unless `--allow-debug` is explicitly provided
+8. THE AMI_Converter SHALL NOT proceed with AMI creation when the debug annotation status is indeterminate (fetch failure or parse failure) unless `--allow-debug` is explicitly provided
+9. THE test suite SHALL include regression tests that verify the debug-image gate fails closed when manifest fetch fails or JSON parsing fails
 
 ### Requirement 47: Artifact Provenance Workflow Verification
 
@@ -1079,6 +1119,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 11. THE systemd service unit SHALL declare `After=user@1000.service` and `Requires=user@1000.service` to ensure the gha-executor user's systemd instance (and therefore the rootless Docker daemon) is started before the executor service
 12. THE systemd service unit SHALL include an `ExecStartPre` command that waits (with a timeout) for the rootless Docker socket at `/run/user/1000/docker.sock` to appear before starting the main process
 13. THE systemd service unit SHALL set `DeviceAllow=/dev/tpm0 rw` to grant access to the NitroTPM device, because `ProtectSystem=strict` implies `DevicePolicy=closed` which would otherwise block TPM access
+14. THE config.sh script SHALL create the `gha-executor` user with an explicitly pinned UID (1000) using `useradd --uid 1000`, so that the rootless Docker socket path `/run/user/1000/docker.sock` in the systemd unit is guaranteed to match the actual user UID
+15. THE systemd service unit SHALL set `LimitCORE=0` to prevent core dumps from the executor process, reducing the risk of secret exposure after a crash
+16. THE test suite SHALL include regression checks that verify the `gha-executor` user UID matches the UID used in the systemd unit's Docker socket path
+17. THE test suite SHALL include regression checks that verify `LimitCORE=0` is present in the systemd unit file
 
 ### Requirement 51: Host Login Access Hardening
 
@@ -1156,6 +1200,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 18. THE fuse-overlayfs version SHALL be pinned to a specific release tag (e.g., `v1.14`) rather than building from HEAD
 19. THE libslirp version SHALL be pinned to a specific release tag (e.g., `v4.8.0`) rather than building from HEAD
 20. IF any source compilation fails, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message indicating which tool failed to compile
+21. THE build-kiwi-image.sh script SHALL pin rootlesskit, slirp4netns, fuse-overlayfs, and libslirp to immutable commit SHAs rather than mutable release tags, so that tag rewriting cannot alter the compiled source
+22. THE build-kiwi-image.sh script SHALL verify GPG-signed tags or SHA-256 checksums of the cloned source trees before compilation; IF verification fails, THEN the script SHALL exit with a non-zero exit code and a descriptive error message
+23. THE `dockerd-rootless.sh` download SHALL be verified against a known SHA-256 checksum before installation; IF the checksum does not match, THEN the script SHALL exit with a non-zero exit code
+24. THE test suite SHALL include regression tests that verify all rootless Docker helper sources are pinned to immutable commits and verified by signature or checksum
 
 ##### appliance.kiwi Package Changes
 

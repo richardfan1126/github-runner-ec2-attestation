@@ -36,7 +36,7 @@ This design document covers five major aspects of the system:
 
 The project maintains separate Python dependency configurations:
 
-- **Remote Executor (pyproject.toml)**: Contains dependencies for the HTTP service (fastapi, uvicorn, requests, docker) that runs in the KIWI image. The remote executor does NOT use boto3.
+- **Remote Executor (pyproject.toml)**: Contains dependencies for the HTTP service (fastapi, uvicorn, requests, docker) that runs in the KIWI image. The remote executor does NOT use boto3. Dependencies are installed into the KIWI image using a lockfile-enforced path: `uv.lock` is the authoritative source, exported via `uv export --frozen --format requirements-txt --generate-hashes` and installed with `pip install --require-hashes` (or `uv sync --frozen`). Version ranges from `pyproject.toml` are NOT used directly for AMI-embedded dependencies.
 - **Build Scripts (scripts/pyproject.toml)**: Contains dependencies for build and deployment scripts (boto3, paramiko) used during AMI creation. These are NOT installed in the KIWI image.
 
 This separation ensures the KIWI image only contains libraries needed for the remote executor service, keeping it minimal and focused.
@@ -133,31 +133,35 @@ The system consists of the following major components:
 - Returns HTTP 500 if attestation generation fails
 
 **Request Handler**
+- Enforces request body size limits before any JSON parsing or base64 decoding: rejects requests exceeding MAX_REQUEST_BODY_BYTES (default 1 MB) with HTTP 413; validates `encrypted_payload` field size against MAX_ENCRYPTED_PAYLOAD_BYTES (default 512 KB) and `client_public_key` field size (max 2048 bytes) after JSON parsing; validates decrypted payload size against MAX_DECRYPTED_PAYLOAD_BYTES (default 256 KB) after decryption
 - Receives encrypted /execute request payloads and delegates decryption to the Encryption Manager (see Encryption Manager for PQ_Hybrid_KEM key derivation details)
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
-- Extracts the optional `nonce` from the decrypted request body for inclusion in the attestation document
+- Extracts the mandatory `nonce` from the decrypted request body; rejects with HTTP 400 if nonce is missing or empty (replay protection is mandatory, not optional)
 - Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), and passes it to the Script Executor for injection into the Execution_Container as environment variables
 - Validates the decrypted request using the Request Validator
 - After OIDC validation, verifies the `repository` claim matches the `repository_url` in the request; rejects with HTTP 403 if mismatch
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
-- Coordinates repository file retrieval
-- Generates attestation documents (without Server_Public_Key; nonce included if provided)
+- Coordinates repository file retrieval; wraps all post-clone processing in a `finally` block to ensure clone directory cleanup on unexpected errors
+- Generates attestation documents with execution_id in user_data (without Server_Public_Key; nonce included if provided)
 - Creates execution records (stores `repository` claim in the record)
 - Stores the Shared_Key in the Encryption_Context for the new Execution_ID
 - Initiates asynchronous script execution with optional script_env
+- Once decryption succeeds, returns ALL subsequent errors (validation, auth, clone, attestation, capacity) as encrypted error envelopes using the Shared_Key, rather than plaintext HTTP errors
 - Encrypts the response payload using the Shared_Key before returning
 
 **Output Handler**
+- Enforces request body size limits before JSON parsing (same MAX_REQUEST_BODY_BYTES limit as /execute)
 - Receives encrypted /execution/{id}/output request payloads; decrypts via the Encryption Manager using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists)
 - Authentication is provided by possession of the execution-bound Shared_Key itself — only the original caller who performed the PQ_Hybrid_KEM exchange during /execute possesses this key, so no separate OIDC token validation is required
-- Extracts the optional `nonce` from the decrypted request body
+- Extracts the mandatory `nonce` from the decrypted request body; rejects with HTTP 400 if nonce is missing or empty (replay protection is mandatory, not optional)
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
 - Returns completion status and exit codes
-- On every poll response, generates an Output_Attestation_Document containing a SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) in the user_data field (without Server_Public_Key; nonce included if provided), regardless of whether execution is running, completed, failed, or timed_out
+- On every poll response, generates an Output_Attestation_Document containing a SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) in the user_data field, with execution_id included (without Server_Public_Key; nonce included if provided), regardless of whether execution is running, completed, failed, or timed_out
 - Returns Output_Attestation_Document in base64 encoding alongside Script_Output and Attestation_Document on every poll response
 - If Output_Attestation_Document generation fails, still returns Script_Output and Attestation_Document with an error field
+- Once decryption succeeds, returns ALL subsequent errors (nonce duplicate, execution not found, attestation failure) as encrypted error envelopes using the Shared_Key
 - Encrypts the response payload using the Shared_Key before returning
 
 **Request Validator**
@@ -181,12 +185,13 @@ The system consists of the following major components:
 - Returns the path to the cloned repository directory and the relative script path
 - Handles clone failures (authentication errors, repository not found, network errors)
 - Cleans up cloned repository directories after execution
+- The server wraps all post-clone processing in a `finally` block that removes the clone directory on unexpected exceptions (unless ownership has been handed to the Script_Executor); uses `shutil.rmtree` with `ignore_errors=True` to avoid secondary exceptions
 
 **Attestation Generator**
 - Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
 - When generating for the /attest endpoint: computes a SHA-256 fingerprint of the Server_Public_Key (composite key) and includes the fingerprint in the `public_key` field of the attestation document (because the composite key exceeds the 1024-byte field limit), but does NOT include user_data (no `--user-data` flag is passed to nitro-tpm-attest)
-- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata (repository_url, commit_hash, script_path, script_env_hash, timestamp)
+- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, timestamp)
 - Accepts an optional nonce parameter; when provided, passes it to nitro-tpm-attest for inclusion in the attestation document
 - Signs documents using NitroTPM cryptographic capabilities
 - Encodes attestation in standard format (CBOR)
@@ -260,39 +265,44 @@ The system consists of the following major components:
 **Execution Request Flow:**
 
 1. Client sends POST request to `/execute` with encrypted payload and unencrypted Client_Public_Key
-2. Encryption Manager derives Shared_Key via PQ_Hybrid_KEM (see Encryption Manager component) and decrypts the request payload
-3. Request Handler extracts OIDC_Token from decrypted body `oidc_token` field
-5. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
-6. Request Validator verifies `repository` claim matches `repository_url` in the request; rejects with HTTP 403 if mismatch
-7. Request Validator validates optional branch/ref restrictions (Allowed_Branches, REQUIRE_PROTECTED_REF)
-8. Request Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
-9. Request Handler validates request structure from decrypted body
-10. Request Validator validates all request body fields (repository_url, commit_hash, script_path, github_token)
-11. Request Validator checks script file size against MAX_SCRIPT_SIZE_BYTES; rejects with HTTP 413 if exceeded
-12. Execution Manager checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically; rejects with HTTP 503 if at capacity
-13. Repository Client authenticates and clones the repository at the specified commit into a temporary directory
-14. Repository Client strips token from .git/config and removes .git directory
-15. Attestation Generator creates attestation document with execution metadata (repository_url, commit_hash, script_path, script_env_hash, timestamp) and optional nonce (no Server_Public_Key)
-16. Execution Manager creates execution record with unique ID (stores `repository` claim)
-17. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
-18. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned
-19. Request Handler extracts optional `script_env` dictionary from the decrypted body, sanitizes it (string keys and values only), and passes it to the Script Executor
-20. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL and cap_add for the minimal build-script capability set), injects `script_env` as container environment variables, and begins asynchronous execution inside it
-21. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
-22. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
+2. Server enforces MAX_REQUEST_BODY_BYTES limit; rejects with HTTP 413 if exceeded (before JSON parsing)
+3. Server validates `encrypted_payload` size against MAX_ENCRYPTED_PAYLOAD_BYTES and `client_public_key` size (max 2048 bytes); rejects with HTTP 400 if exceeded
+4. Encryption Manager derives Shared_Key via PQ_Hybrid_KEM (see Encryption Manager component) and decrypts the request payload
+5. Server validates decrypted payload size against MAX_DECRYPTED_PAYLOAD_BYTES; rejects with HTTP 400 if exceeded
+6. Request Handler validates mandatory `nonce` field is present and non-empty; rejects with HTTP 400 if missing or empty
+7. Request Handler extracts OIDC_Token from decrypted body `oidc_token` field
+8. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
+9. Request Validator verifies `repository` claim matches `repository_url` in the request; rejects with HTTP 403 if mismatch
+10. Request Validator validates optional branch/ref restrictions (Allowed_Branches, REQUIRE_PROTECTED_REF)
+11. Request Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
+12. Request Handler validates request structure from decrypted body
+13. Request Validator validates all request body fields (repository_url, commit_hash, script_path, github_token)
+14. Request Validator checks script file size against MAX_SCRIPT_SIZE_BYTES; rejects with HTTP 413 if exceeded
+15. Execution Manager checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically; rejects with HTTP 503 if at capacity
+16. Repository Client authenticates and clones the repository at the specified commit into a temporary directory (wrapped in `finally` block for cleanup on unexpected errors)
+17. Repository Client strips token from .git/config and removes .git directory
+18. Attestation Generator creates attestation document with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, timestamp) and nonce (no Server_Public_Key)
+19. Execution Manager creates execution record with unique ID (stores `repository` claim)
+20. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
+21. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned (all post-decryption errors from steps 6-18 are also returned as encrypted error envelopes)
+22. Request Handler extracts optional `script_env` dictionary from the decrypted body, sanitizes it (string keys and values only), and passes it to the Script Executor
+23. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL and cap_add for the minimal build-script capability set), injects `script_env` as container environment variables, and begins asynchronous execution inside it
+24. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
+25. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
 
 **Output Polling Flow:**
 
-1. Client sends POST request to `/execution/{id}/output` with encrypted payload containing optional `nonce` and `offset`
-2. Encryption Manager decrypts the request payload using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists); successful decryption proves the caller possesses the Shared_Key, which serves as authentication
-3. Output Handler extracts the optional `nonce` from the decrypted request body
+1. Client sends POST request to `/execution/{id}/output` with encrypted payload containing mandatory `nonce` and `offset`
+2. Server enforces MAX_REQUEST_BODY_BYTES limit; rejects with HTTP 413 if exceeded
+3. Encryption Manager decrypts the request payload using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists); successful decryption proves the caller possesses the Shared_Key, which serves as authentication
+4. Output Handler validates mandatory `nonce` field is present and non-empty; rejects with HTTP 400 if missing or empty
 5. Output Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
 6. Output Handler retrieves execution record by ID
 7. Output Collector returns current status, output from offset, and completion flag
-8. Output Handler computes SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) and generates an Output_Attestation_Document with the digest in user_data and optional nonce (no Server_Public_Key)
+8. Output Handler computes SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) and generates an Output_Attestation_Document with the digest and execution_id in user_data, plus nonce (no Server_Public_Key)
 9. Response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code (if available) on every poll response regardless of execution status
 10. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
-11. Response payload encrypted with Shared_Key and returned
+11. Response payload encrypted with Shared_Key and returned (all post-decryption errors from steps 4-6 are also returned as encrypted error envelopes)
 12. Client decrypts response using the same Shared_Key derived during PQ_Hybrid_KEM key exchange
 13. Client repeats polling until execution completes
 14. Client can verify output integrity on every poll by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
@@ -353,7 +363,7 @@ Initiates script execution. Request and response payloads are encrypted using PQ
   "script_path": "scripts/build.sh",
   "github_token": "ghp_...",
   "oidc_token": "eyJhbGciOiJSUzI1NiIs...",
-  "nonce": "optional-client-nonce",
+  "nonce": "unique-client-nonce-required",
   "script_env": {
     "GITHUB_RUN_ID": "123456",
     "GITHUB_REPOSITORY": "owner/repo",
@@ -375,14 +385,19 @@ The response body is an encrypted payload. After decryption by the client:
 
 The attestation document in the /execute response does NOT include the Server_Public_Key in the `public_key` field.
 
-**Error Responses:**
-- 400 Bad Request: Decryption failure, malformed request, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), validation failure, or duplicate nonce
+**Error Responses (pre-decryption, plaintext HTTP):**
+- 400 Bad Request: Decryption failure, malformed request, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), encrypted_payload or client_public_key field size exceeded
+- 413 Payload Too Large: Request body exceeds MAX_REQUEST_BODY_BYTES
+- 429 Too Many Requests: Rate limit exceeded
+- 500 Internal Server Error: Attestation or system failure
+
+**Error Responses (post-decryption, returned as encrypted error envelopes with HTTP 200):**
+- 400 Bad Request: Missing/empty nonce, duplicate nonce, validation failure, decrypted payload size exceeded
 - 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
 - 403 Forbidden: Valid OIDC token from an unauthorized repository, repository claim does not match repository_url, branch/ref restriction violation
 - 404 Not Found: Repository, commit, or file not found
 - 413 Payload Too Large: Script file exceeds size limit
-- 429 Too Many Requests: Rate limit exceeded
-- 500 Internal Server Error: Attestation or system failure
+- 503 Service Unavailable: Maximum concurrent executions reached
 
 #### POST /execution/{execution_id}/output
 
@@ -392,7 +407,7 @@ Retrieves execution status and output. Request and response payloads are encrypt
 After decryption:
 ```json
 {
-  "nonce": "optional-client-nonce",
+  "nonce": "unique-client-nonce-required",
   "offset": 0
 }
 ```
@@ -446,8 +461,12 @@ When Output_Attestation_Document generation fails (after decryption, any status)
 }
 ```
 
-**Error Responses:**
-- 400 Bad Request: No Encryption_Context for execution_id, decryption failure, duplicate nonce
+**Error Responses (pre-decryption, plaintext HTTP):**
+- 400 Bad Request: No Encryption_Context for execution_id, decryption failure
+- 413 Payload Too Large: Request body exceeds MAX_REQUEST_BODY_BYTES
+
+**Error Responses (post-decryption, returned as encrypted error envelopes with HTTP 200):**
+- 400 Bad Request: Missing/empty nonce, duplicate nonce
 - 404 Not Found: Execution ID does not exist
 
 #### GET /health
@@ -619,11 +638,13 @@ class AttestationGenerator:
         
         Args:
             metadata: Execution metadata to include in user_data (repository_url,
-                      commit_hash, script_path, script_env_hash, timestamp).
+                      commit_hash, script_path, script_env_hash, execution_id, timestamp).
                       When None (e.g., for /attest), user_data is omitted entirely
                       from the attestation document. script_env_hash is the SHA-256
                       hex digest of canonicalized script_env (keys sorted, JSON no
                       whitespace); SHA-256("{}") when script_env is empty or not provided.
+                      execution_id binds the attestation to the specific server execution
+                      record so consumers can verify which execution produced the attestation.
             nonce: Optional client-provided nonce for freshness verification
             public_key: Optional SHA-256 fingerprint of the Server_Public_Key to include
                         in the public_key field. Only provided when generating for the
@@ -731,8 +752,13 @@ class ScriptExecutor:
 
 ```python
 class OutputCollector:
+    def __init__(self, max_output_size_bytes: int):
+        """Initialize with the configured maximum output buffer size.
+        The server MUST pass config.max_output_size_bytes here at init time."""
+        pass
+
     def capture_output(self, execution_id: str, stream: str, data: bytes) -> None:
-        """Captures output data from execution. Enforces MAX_OUTPUT_SIZE_BYTES limit;
+        """Captures output data from execution. Enforces max_output_size_bytes limit;
         truncates and marks as truncated when exceeded."""
         pass
     
@@ -796,6 +822,7 @@ class AttestationDocument:
     commit_hash: str
     script_path: str
     script_env_hash: str  # SHA-256 hex digest of canonicalized script_env (keys sorted, JSON no whitespace); SHA-256("{}") when empty
+    execution_id: str  # UUID v4 binding the attestation to the specific server execution record
     timestamp: datetime
     signature: bytes  # CBOR-encoded NitroTPM attestation
 ```
@@ -823,7 +850,10 @@ class ServerConfig:
     max_concurrent_executions: int
     execution_timeout_seconds: int
     max_script_size_bytes: int
-    max_output_size_bytes: int  # Maximum combined stdout/stderr buffer size
+    max_output_size_bytes: int  # Maximum combined stdout/stderr buffer size; passed to OutputCollector at init
+    max_request_body_bytes: int  # Maximum HTTP request body size before JSON parsing (default 1 MB)
+    max_encrypted_payload_bytes: int  # Maximum encrypted_payload field size after JSON parsing (default 512 KB)
+    max_decrypted_payload_bytes: int  # Maximum decrypted JSON payload size (default 256 KB)
     rate_limit_per_ip: int
     rate_limit_window_seconds: int
     temp_storage_path: str
@@ -837,7 +867,7 @@ class ServerConfig:
     container_cpu_limit: float  # Docker CPU constraint (e.g., 1.0)
     nonce_cache_ttl_seconds: int  # TTL for nonce cache entries, matching OIDC token lifetime
     allowed_branches: list[str] | None  # Optional branch patterns for OIDC ref claim validation
-    require_protected_ref: bool  # When true, require ref_protected claim to be "true"
+    require_protected_ref: bool  # When true, require ref_protected claim to be "true"; parsed with strict boolean validation (only true/1/yes/false/0/no accepted; unrecognized values fail startup)
 ```
 
 ### OIDCValidationResult
@@ -894,7 +924,7 @@ class DecryptedExecuteRequest:
     script_path: str
     github_token: str
     oidc_token: str
-    nonce: Optional[str] = None
+    nonce: str  # Mandatory; server rejects requests with missing or empty nonce for replay protection
     script_env: Optional[dict[str, str]] = None  # Environment variables to inject into the Execution_Container
 ```
 
@@ -903,7 +933,7 @@ class DecryptedExecuteRequest:
 ```python
 @dataclass
 class DecryptedOutputRequest:
-    nonce: Optional[str] = None
+    nonce: str  # Mandatory; server rejects requests with missing or empty nonce for replay protection
     offset: int = 0
 ```
 
@@ -1535,9 +1565,9 @@ class EncryptionContext:
 
 ### Property 154: Anti-Replay Nonce Validation
 
-*For any* encrypted /execute or /execution/{id}/output request whose nonce has been previously seen in the Nonce_Cache, the server should reject the request with HTTP 400 Bad Request. Nonce cache entries should expire after a configurable TTL.
+*For any* encrypted /execute or /execution/{id}/output request with a missing or empty nonce field, the server should reject the request with HTTP 400 Bad Request. *For any* encrypted request whose nonce has been previously seen in the Nonce_Cache, the server should reject the request with HTTP 400 Bad Request. Nonce cache entries should expire after a configurable TTL.
 
-**Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5**
+**Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5, 45.6, 45.7, 45.8, 45.9**
 
 ### Property 155: Attest Endpoint Rate Limiting
 
@@ -1583,9 +1613,9 @@ class EncryptionContext:
 
 ### Property 162: Debug Image Production Gate
 
-*For any* artifact with `debug=true` annotation, the AMI_Converter should refuse to build the AMI unless an explicit `--allow-debug` CLI flag is provided.
+*For any* artifact with `debug=true` annotation, the AMI_Converter should refuse to build the AMI unless an explicit `--allow-debug` CLI flag is provided. *For any* artifact where the debug annotation cannot be determined (manifest fetch failure or JSON parsing failure), the AMI_Converter should refuse to build the AMI unless `--allow-debug` is explicitly provided (fail closed).
 
-**Validates: Requirements 46.3, 46.4, 46.5**
+**Validates: Requirements 46.3, 46.4, 46.5, 46.6, 46.7, 46.8, 46.9**
 
 ### Property 163: Artifact Provenance Workflow Verification
 
@@ -1601,9 +1631,9 @@ class EncryptionContext:
 
 ### Property 165: Systemd Service Hardening
 
-*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set User=gha-executor, Group=gha-executor, NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=read-only, RestrictAddressFamilies, StateDirectory=gha-executor, LogsDirectory=github-actions-executor, ReadWritePaths including /var/lib/gha-executor, /var/log/github-actions-executor, and /tmp, DeviceAllow=/dev/tpm0 rw, After=user@1000.service, Requires=user@1000.service, and an ExecStartPre that waits for the rootless Docker socket. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp). The Script_Executor should connect to the rootless Docker socket at /run/user/{uid}/docker.sock.
+*For any* KIWI image build, the systemd service unit for github-actions-remote-executor should set User=gha-executor, Group=gha-executor, NoNewPrivileges=true, ProtectSystem=strict, ProtectHome=read-only, RestrictAddressFamilies, StateDirectory=gha-executor, LogsDirectory=github-actions-executor, ReadWritePaths including /var/lib/gha-executor, /var/log/github-actions-executor, and /tmp, DeviceAllow=/dev/tpm0 rw, LimitCORE=0, After=user@1000.service, Requires=user@1000.service, and an ExecStartPre that waits for the rootless Docker socket. PrivateTmp should NOT be set to true because the service bind-mounts temporary directories into Docker containers and PrivateTmp would make those paths invisible to the Docker daemon. TEMP_STORAGE_PATH should be set to /var/lib/gha-executor (outside /tmp). The Script_Executor should connect to the rootless Docker socket at /run/user/{uid}/docker.sock. The `gha-executor` user MUST be created with an explicitly pinned UID (1000) so the socket path in the systemd unit is guaranteed to match.
 
-**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10, 49.11, 49.12, 49.13**
+**Validates: Requirements 49.1, 49.2, 49.3, 49.4, 49.5, 49.6, 49.7, 49.8, 49.9, 49.10, 49.11, 49.12, 49.13, 49.14, 49.15, 49.16, 49.17**
 
 ### Property 168: Host Login Access Hardening
 
@@ -1633,16 +1663,20 @@ class EncryptionContext:
 
 The system handles errors in the following categories:
 
-1. **Client Errors (4xx)**
-   - 400 Bad Request: Malformed requests, validation failures, PQ_Hybrid_KEM decryption failures, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), missing Encryption_Context for execution_id, duplicate nonce
-   - 401 Unauthorized: Missing/invalid/expired OIDC tokens (from decrypted body), JWT signature verification failures, invalid iss or aud claims
-   - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories), repository claim does not match repository_url, repository claim does not match execution record, branch/ref restriction violation
-   - 404 Not Found: Repository, commit, file, or execution ID not found
-   - 413 Payload Too Large: Script file exceeds size limit
+1. **Pre-Decryption Client Errors (returned as plaintext HTTP responses)**
+   - 400 Bad Request: Malformed JSON, PQ_Hybrid_KEM decryption failures, invalid Client_Public_Key (invalid X25519 or ML-KEM-768 components), missing Encryption_Context for execution_id, encrypted_payload or client_public_key field size exceeded
+   - 413 Payload Too Large: Request body exceeds MAX_REQUEST_BODY_BYTES
    - 429 Too Many Requests: Rate limit exceeded
+
+2. **Post-Decryption Application Errors (returned as encrypted error envelopes with HTTP 200)**
+   - 400 Bad Request: Missing/empty nonce, duplicate nonce, validation failures
+   - 401 Unauthorized: Missing/invalid/expired OIDC tokens (from decrypted body), JWT signature verification failures, invalid iss or aud claims
+   - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories), repository claim does not match repository_url, branch/ref restriction violation
+   - 404 Not Found: Repository, commit, file, or execution ID not found
+   - 413 Payload Too Large: Script file exceeds size limit, decrypted payload exceeds MAX_DECRYPTED_PAYLOAD_BYTES
    - 503 Service Unavailable: Maximum concurrent executions reached
 
-2. **Server Errors (5xx)**
+3. **Server Errors (5xx)**
    - 500 Internal Server Error: Attestation failures, encryption system failures, unexpected errors
 
 ### Error Response Format
@@ -1678,6 +1712,7 @@ All error responses follow a consistent JSON structure:
 - Authentication failures logged with claim details (excluding the token itself)
 
 **Anti-Replay Errors**
+- Return 400 for missing or empty nonces on /execute and /execution/{id}/output (nonce is mandatory)
 - Return 400 for duplicate nonces on /execute and /execution/{id}/output
 - Nonce cache entries expire after configurable TTL matching OIDC token lifetime
 - Log duplicate nonce rejections with request context
@@ -1689,6 +1724,15 @@ All error responses follow a consistent JSON structure:
 - Log decryption failures with execution_id context (excluding key material)
 - Server_Keypair generation failure at startup: fail to start with descriptive error
 - Encryption_Context cleanup: remove context when execution record is cleaned up; log cleanup events
+- Pre-decryption errors (malformed JSON, invalid client_public_key, decryption failure, missing encryption context, body size exceeded) are returned as plaintext HTTP errors since no shared key is available
+- Post-decryption errors (all application failures after successful decryption) are returned as encrypted error envelopes using the derived Shared_Key, with HTTP 200 at the transport layer and the actual error code inside the encrypted payload
+
+**Encrypted Error Envelope Format**
+- Once request decryption succeeds, ALL subsequent application-level errors are encrypted with the Shared_Key before returning
+- The encrypted error envelope is a JSON payload: `{"error": "description", "error_code": 403, "error_details": {...}}`
+- The envelope is returned with HTTP 200 OK at the transport layer so observers cannot distinguish errors from successes
+- On /execute: covers OIDC failures (401/403), repository mismatch (403), nonce duplicate (400), validation errors (400), script size exceeded (413), capacity exceeded (503), clone failures, attestation failures
+- On /execution/{id}/output: covers nonce duplicate (400), execution not found (404), attestation failures
 
 **Attestation Errors**
 - Verify NitroTPM device availability at startup
@@ -1746,14 +1790,14 @@ All error responses follow a consistent JSON structure:
 
 ## Security Hardening Components
 
-### Anti-Replay Nonce Cache (Requirement 44)
+### Anti-Replay Nonce Cache (Requirement 45)
 
-The server maintains an in-memory Nonce_Cache to prevent replay attacks on encrypted requests.
+The server maintains an in-memory Nonce_Cache to prevent replay attacks on encrypted requests. Nonces are **mandatory** — requests without a nonce or with an empty nonce are rejected before the cache check.
 
 **Design:**
 - The Nonce_Cache is a dictionary mapping nonce strings to their insertion timestamps
-- When an encrypted /execute or /execution/{id}/output request is received, the nonce is extracted from the decrypted payload
-- If the nonce is already in the cache, the request is rejected with HTTP 400 Bad Request
+- When an encrypted /execute or /execution/{id}/output request is received, the server first validates that the `nonce` field is present and non-empty (rejects with HTTP 400 if missing or empty)
+- The nonce is then checked against the cache; if already present, the request is rejected with HTTP 400 Bad Request
 - If the nonce is new, it is added to the cache with the current timestamp
 - Cache entries expire after a configurable TTL matching the OIDC_Token lifetime
 - A background task periodically purges expired entries
@@ -1766,7 +1810,8 @@ class NonceCache:
         pass
 
     def check_and_store(self, nonce: str) -> bool:
-        """Returns True if nonce is new (accepted), False if duplicate (rejected)."""
+        """Returns True if nonce is new (accepted), False if duplicate (rejected).
+        Caller must validate nonce is non-empty before calling this method."""
         pass
 
     def cleanup_expired(self) -> None:
@@ -1781,7 +1826,7 @@ The KIWI image provisions rootless Docker under a dedicated `gha-executor` servi
 **Required Packages:** docker (from AL2023 repos); rootlesskit, slirp4netns, fuse-overlayfs, libslirp, dockerd-rootless.sh (compiled/downloaded from source — see Requirement 53)
 
 **User Configuration:**
-- Dedicated service user: `gha-executor`
+- Dedicated service user: `gha-executor` with explicitly pinned UID 1000 (via `useradd --uid 1000`) to guarantee the rootless Docker socket path `/run/user/1000/docker.sock` matches the systemd unit's `ExecStartPre` and `After=user@1000.service` directives
 - `/etc/subuid` and `/etc/subgid` configured with two non-overlapping 65536-ID ranges for `gha-executor` (e.g., `100000:65536` and `200000:65536`) to avoid "Invalid argument" errors from `newuidmap` when rootlesskit generates a third UID/GID mapping entry
 - `loginctl enable-linger` enabled for `gha-executor` so the rootless daemon persists without an active login session
 - Rootless Docker data-root explicitly set to `/var/lib/gha-executor/docker` via daemon.json
@@ -1835,6 +1880,7 @@ StateDirectory=gha-executor
 LogsDirectory=github-actions-executor
 ReadWritePaths=/var/lib/gha-executor /var/log/github-actions-executor /tmp
 DeviceAllow=/dev/tpm0 rw
+LimitCORE=0
 ```
 
 **Design Rationale:**
@@ -1850,6 +1896,7 @@ DeviceAllow=/dev/tpm0 rw
 - `LogsDirectory=github-actions-executor`: Instructs systemd to create and manage `/var/log/github-actions-executor` for service log files
 - `ReadWritePaths`: Allows write access to `/var/lib/gha-executor` (temporary storage for repo clones and attestation temp files), `/var/log/github-actions-executor` (log files), and `/tmp` (needed for Python's `tempfile` module and other transient operations). `/var/run/docker.sock` is no longer needed because the Script_Executor connects to the rootless Docker socket at `/run/user/{uid}/docker.sock` which is owned by the `gha-executor` user
 - `DeviceAllow=/dev/tpm0 rw`: Grants access to the NitroTPM device. `ProtectSystem=strict` implies `DevicePolicy=closed`, which blocks all device access by default. This explicit allowance is required for attestation generation.
+- `LimitCORE=0`: Prevents core dumps from the executor process, reducing the risk of secret exposure (e.g., Shared_Keys, OIDC tokens in memory) after a crash or service compromise.
 
 **TEMP_STORAGE_PATH Change:**
 - The `TEMP_STORAGE_PATH` environment variable is changed from `/tmp/gha-executor` to `/var/lib/gha-executor`
@@ -2133,7 +2180,7 @@ The following implementation details are documented in the source files:
 - **Tool Installation**: git, gcc (dnf), Rust (GPG-verified standalone tarball), ORAS 1.3.0 (SHA-256 verified), GitHub CLI (dnf), coldsnap (pinned git tag, cargo). See `scripts/build-ami.py`.
 - **Signature Verification**: ORAS manifest fetch → SHA-256 digest → GitHub attestation bundle → `gh attestation verify` offline with bundle.json. Optional `--expected-workflow` verifies SAN in certificate. See `scripts/build-ami.py`.
 - **Artifact Download**: ORAS pull to ~/artifacts/build-output, validate .raw image and pcr_measurements.json. See `scripts/build-ami.py`.
-- **Snapshot Upload & AMI Registration**: coldsnap upload → snapshot waiter (15s/40 attempts) → register_image with hvm/uefi/x86_64/TPM 2.0/ENA. See `scripts/build-ami.py`.
+- **Snapshot Upload & AMI Registration**: Enumerate .raw files programmatically (not shell globbing), enforce exactly one file, validate basename against strict allowlist regex `^[a-zA-Z0-9][a-zA-Z0-9._-]*\.raw$`, use `shlex.quote()` or subprocess list arguments to avoid shell injection → coldsnap upload → snapshot waiter (15s/40 attempts) → register_image with hvm/uefi/x86_64/TPM 2.0/ENA. See `scripts/build-ami.py`.
 - **Cleanup**: SSH close → terraform destroy → secure SSH key deletion (overwrite + unlink). Guaranteed via finally block. See `scripts/build-ami.py`.
 - **SSH Command Execution**: Non-blocking paramiko channels, concurrent stdout/stderr reading, real-time streaming. See `scripts/build-ami.py`.
 
