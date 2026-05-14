@@ -141,7 +141,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
   - [x] 182.9 Implement lockfile-enforced Python dependency installation
     - In `.github/scripts/build-kiwi-image.sh`, replace the `pip3 download` from `pyproject.toml` version ranges with a lockfile-enforced path:
-      - Export from `uv.lock` using `uv export --frozen --format requirements-txt --no-dev --generate-hashes`
+      - Export from `uv.lock` using `uv export --frozen --format requirements-txt --no-dev` (hashes are included by default)
       - Install using `pip install --require-hashes -r <exported-requirements> --no-index --find-links <wheels-dir>`
     - Alternatively use `uv sync --frozen` if uv is available in the build context
     - Fail the build if `uv.lock` is missing or the `--frozen` export fails

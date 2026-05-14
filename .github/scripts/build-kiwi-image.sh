@@ -100,7 +100,8 @@ echo "Target Python version inside builder image: ${TARGET_PYTHON_VERSION}"
 
 echo "Exporting locked dependencies from uv.lock..."
 # Export requirements with hashes from the frozen lockfile
-if ! uv export --frozen --format requirements-txt --no-dev --generate-hashes \
+# Note: uv export includes hashes by default (use --no-hashes to suppress)
+if ! uv export --frozen --format requirements-txt --no-dev \
     --project "${GITHUB_WORKSPACE}" \
     -o "${TEMP_IMAGE_DIR}/root/tmp/kiwi-build/requirements.txt"; then
     echo "::error::Failed to export dependencies from uv.lock (is uv.lock present and valid?)"
