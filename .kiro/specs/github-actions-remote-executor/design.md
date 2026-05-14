@@ -1625,7 +1625,7 @@ class EncryptionContext:
 
 ### Property 164: Docker Daemon Security Configuration
 
-*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true, `live-restore` set to false, and `data-root` set to `/var/lib/gha-executor/docker`. The rootless Docker daemon should run under the `gha-executor` service user with rootlesskit, slirp4netns, fuse-overlayfs, libslirp, and dockerd-rootless.sh compiled/downloaded from source and installed at `/usr/local/bin/` (binaries) and `/usr/local/lib64/` (libslirp shared library), `/etc/subuid` and `/etc/subgid` configured with two non-overlapping 65536-ID ranges, `loginctl enable-linger` enabled, a udev rule granting TPM device ownership to gha-executor, and `/etc/ld.so.conf.d/usr-local-lib64.conf` ensuring libslirp is discoverable at runtime.
+*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true, `live-restore` set to false, and `data-root` set to `/var/lib/gha-executor/docker`. The rootless Docker daemon should run under the `gha-executor` service user with rootlesskit, slirp4netns, fuse-overlayfs compiled from source by build-kiwi-image.sh, libslirp compiled from a release tarball in the Dockerfile, and dockerd-rootless.sh downloaded from the Moby repository, all installed at `/usr/local/bin/` (binaries) and `/usr/local/lib64/` (libslirp shared library), `/etc/subuid` and `/etc/subgid` configured with two non-overlapping 65536-ID ranges, `loginctl enable-linger` enabled, a udev rule granting TPM device ownership to gha-executor, and `/etc/ld.so.conf.d/usr-local-lib64.conf` ensuring libslirp is discoverable at runtime.
 
 **Validates: Requirements 48.1, 48.2, 48.3, 48.4, 48.5**
 
@@ -1823,7 +1823,7 @@ class NonceCache:
 
 The KIWI image provisions rootless Docker under a dedicated `gha-executor` service user. The rootless Docker daemon configuration is placed at `~gha-executor/.config/docker/daemon.json`.
 
-**Required Packages:** docker (from AL2023 repos); rootlesskit, slirp4netns, fuse-overlayfs, libslirp, dockerd-rootless.sh (compiled/downloaded from source — see Requirement 53)
+**Required Packages:** docker (from AL2023 repos); rootlesskit, slirp4netns, fuse-overlayfs (compiled from source by build-kiwi-image.sh); libslirp (compiled from release tarball in Dockerfile with curl retry for CI resilience); dockerd-rootless.sh (downloaded from Moby repository — see Requirement 53)
 
 **User Configuration:**
 - Dedicated service user: `gha-executor` with explicitly pinned UID 1000 (via `useradd --uid 1000`) to guarantee the rootless Docker socket path `/run/user/1000/docker.sock` matches the systemd unit's `ExecStartPre` and `After=user@1000.service` directives
@@ -1972,7 +1972,7 @@ Testing uses `hypothesis` for property-based tests (minimum 100 iterations each,
 
 The build process creates an attestable AMI containing the GitHub Actions Remote Executor. The build is performed in two distinct phases:
 
-1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes rootless Docker provisioned under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, and fuse-overlayfs compiled from source inside the builder container). The Container_Image used for Execution_Containers is pulled by the GHA_Server at startup time, not baked into the KIWI image.
+1. **KIWI Image Build Phase**: A GitHub Actions workflow builds a KIWI image inside a Docker container, generates PCR measurements, attests the artifacts using GitHub's attestation service, and publishes them to GitHub Container Registry (GHCR). The KIWI image includes rootless Docker provisioned under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, and fuse-overlayfs compiled from source inside the builder container; libslirp compiled from a release tarball in the Dockerfile). The Container_Image used for Execution_Containers is pulled by the GHA_Server at startup time, not baked into the KIWI image.
 
 2. **AMI Conversion Phase**: A Python script provisions a temporary EC2 instance using Terraform, installs required tools, verifies artifact signatures, downloads the KIWI image, uploads it as an EBS snapshot using coldsnap, and registers it as an AMI with TPM 2.0 support.
 
@@ -2170,7 +2170,7 @@ See Implementation Details section below. The flow is: provision EC2 via Terrafo
 
 Python dependencies are split between `pyproject.toml` (remote executor: fastapi, uvicorn, requests, docker, cryptography, wolfcrypt-py, PyJWT) and `scripts/pyproject.toml` (build scripts: boto3, paramiko). Only remote executor deps are installed in the KIWI image via a two-phase process: pre-download wheels with network (build-kiwi-image.sh) → offline install from wheels (config.sh). See Requirement 12 and the Overview section for details.
 
-The KIWI image also includes: rootless Docker under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, fuse-overlayfs compiled from source by the build script, hardened daemon.json at `~gha-executor/.config/docker/daemon.json` — Requirements 33, 48, 53), git package (for repository cloning — Requirement 35). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
+The KIWI image also includes: rootless Docker under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, fuse-overlayfs compiled from source by the build script; libslirp compiled from a release tarball in the Dockerfile with curl retry for CI resilience; hardened daemon.json at `~gha-executor/.config/docker/daemon.json` — Requirements 33, 48, 53), git package (for repository cloning — Requirement 35). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
 
 ## Implementation Details
 

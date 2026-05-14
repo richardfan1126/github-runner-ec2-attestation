@@ -1175,7 +1175,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 2. THE Dockerfile for the KIWI builder SHALL install C compilation tools (gcc, make, autoconf, automake, libtool) and the Rust toolchain (cargo) required for compiling slirp4netns (C/autotools) and fuse-overlayfs (Rust) from source
 3. THE Dockerfile for the KIWI builder SHALL install library development headers required for compilation: `glib2-devel`, `libcap-devel`, `libseccomp-devel` (for slirp4netns), and `fuse3-devel` (for fuse-overlayfs); `libslirp-devel` is NOT installed as a package because libslirp is not available in AL2023 and is instead built from source within the Dockerfile
 4. THE Dockerfile SHALL install `meson` and `ninja-build` required for building libslirp from source
-5. THE Dockerfile SHALL build and install libslirp from source (cloned from https://gitlab.freedesktop.org/slirp/libslirp at a pinned release tag) using `meson setup build && ninja -C build && ninja -C build install`, making the shared library and development headers available for the subsequent slirp4netns compilation
+5. THE Dockerfile SHALL build and install libslirp from source (downloaded as a release tarball from https://gitlab.freedesktop.org/slirp/libslirp at a pinned release tag, using `curl --retry 3 --retry-delay 5` for resilience against transient GitLab server errors) using `meson setup build && ninja -C build && ninja -C build install`, making the shared library and development headers available for the subsequent slirp4netns compilation
 
 ##### Build Script Compilation Steps
 
@@ -1200,7 +1200,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 18. THE fuse-overlayfs version SHALL be pinned to a specific release tag (e.g., `v1.14`) rather than building from HEAD
 19. THE libslirp version SHALL be pinned to a specific release tag (e.g., `v4.8.0`) rather than building from HEAD
 20. IF any source compilation fails, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message indicating which tool failed to compile
-21. THE build-kiwi-image.sh script SHALL pin rootlesskit, slirp4netns, fuse-overlayfs, and libslirp to immutable commit SHAs rather than mutable release tags, so that tag rewriting cannot alter the compiled source
+21. THE build-kiwi-image.sh script SHALL pin rootlesskit, slirp4netns, and fuse-overlayfs to immutable commit SHAs rather than mutable release tags, so that tag rewriting cannot alter the compiled source; libslirp is pinned by release tag in the Dockerfile tarball URL (not a commit SHA) because it is downloaded as a release tarball rather than git-cloned
 22. THE build-kiwi-image.sh script SHALL verify GPG-signed tags or SHA-256 checksums of the cloned source trees before compilation; IF verification fails, THEN the script SHALL exit with a non-zero exit code and a descriptive error message
 23. THE `dockerd-rootless.sh` download SHALL be verified against a known SHA-256 checksum before installation; IF the checksum does not match, THEN the script SHALL exit with a non-zero exit code
 24. THE test suite SHALL include regression tests that verify all rootless Docker helper sources are pinned to immutable commits and verified by signature or checksum

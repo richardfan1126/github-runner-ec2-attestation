@@ -200,16 +200,16 @@ echo "=== Compiling Rootless Docker Dependencies from Source ==="
 # UID/GID mapping entry ("fill mappings") that causes "Invalid argument" errors
 # from newuidmap on kernels that reject overlapping host ranges. v1.x produces
 # the standard 2-entry mapping which is fully compatible with Docker 25.0.x.
-# Tag: v1.1.1, Date: 2023-08-01
-ROOTLESSKIT_COMMIT="f98a0e7e5e79e3e7e5e79e3e7e5e79e3e7e5e79e"
+# Tag: v1.1.1, Date: 2023-05-30
+ROOTLESSKIT_COMMIT="a2c596ff9b3fddc0c2becb38f2ef4004f15765b5"
 ROOTLESSKIT_VERSION="v1.1.1"
 # slirp4netns: https://github.com/rootless-containers/slirp4netns/releases
-# Tag: v1.3.3, Date: 2024-11-01
-SLIRP4NETNS_COMMIT="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+# Tag: v1.3.3, Date: 2025-06-02
+SLIRP4NETNS_COMMIT="944fa94090e1fd1312232cbc0e6b43585553d824"
 SLIRP4NETNS_VERSION="v1.3.3"
 # fuse-overlayfs: https://github.com/containers/fuse-overlayfs/releases
-# Tag: v1.14, Date: 2024-06-01
-FUSE_OVERLAYFS_COMMIT="b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4"
+# Tag: v1.14, Date: 2024-06-28
+FUSE_OVERLAYFS_COMMIT="33cb788edc05f5e3cbb8a7a241f5a04bee264730"
 FUSE_OVERLAYFS_VERSION="v1.14"
 
 echo "Versions:"
@@ -330,7 +330,7 @@ echo "=== Installing dockerd-rootless.sh ==="
 # newuidmap on AL2023 kernels.
 MOBY_COMMIT="v20.10.27"
 # SHA-256 checksum of dockerd-rootless.sh at the pinned commit
-DOCKERD_ROOTLESS_SHA256="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+DOCKERD_ROOTLESS_SHA256="07fd43a5adad652bb9d15d5cec851c0f563fe1cf8c5f0d5123b45b0e118404dd"
 
 echo "Downloading dockerd-rootless.sh from moby/moby (${MOBY_COMMIT})..."
 curl -fsSL "https://raw.githubusercontent.com/moby/moby/${MOBY_COMMIT}/contrib/dockerd-rootless.sh" \

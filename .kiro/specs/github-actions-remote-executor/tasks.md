@@ -148,11 +148,12 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - _Requirements: 12.19, 12.20, 12.21, 12.22, 12.23_
 
   - [x] 182.10 Add rootless Docker helper source integrity verification
-    - In `.github/scripts/build-kiwi-image.sh`, replace mutable release tags with immutable full commit SHAs (40-character hex) for rootlesskit, slirp4netns, fuse-overlayfs, and libslirp
+    - In `.github/scripts/build-kiwi-image.sh`, replace mutable release tags with immutable full commit SHAs (40-character hex) for rootlesskit, slirp4netns, and fuse-overlayfs
     - After each `git clone`, verify `git rev-parse HEAD` matches the expected SHA; exit with error if mismatch
+    - In `.github/docker/Dockerfile.kiwi-builder`, use a release tarball download (via `curl --retry 3 --retry-delay 5`) for libslirp instead of `git clone` to improve resilience against transient GitLab server errors; pin by release tag in the tarball URL
     - Add SHA-256 checksum verification for the `dockerd-rootless.sh` download; exit with error if mismatch
     - Document each pinned commit SHA with a comment indicating the corresponding release tag and date
-    - _Requirements: 53.21, 53.22, 53.23, 53.24_
+    - _Requirements: 53.5, 53.21, 53.22, 53.23, 53.24_
 
   - [x] 182.11 Pin gha-executor UID to 1000 and add LimitCORE=0
     - In `kiwi-descriptions/config.sh`, update the `useradd` command for `gha-executor` to include `--uid 1000` explicitly
@@ -174,7 +175,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Raw filename tests**: Verify filenames with shell metacharacters (`; rm -rf /`, `$(cmd)`, backticks) are rejected; verify exactly-one-file enforcement
     - **Debug gate fail-closed tests**: Verify manifest fetch failure terminates without `--allow-debug`; verify JSON parse failure terminates without `--allow-debug`
     - **Lockfile tests**: Verify build script uses `uv export --frozen` or equivalent rather than `pip3 download` from version ranges
-    - **Source integrity tests**: Verify all rootless Docker helpers are pinned to immutable commit SHAs; verify dockerd-rootless.sh has checksum verification
+    - **Source integrity tests**: Verify rootlesskit, slirp4netns, and fuse-overlayfs are pinned to immutable commit SHAs; verify libslirp uses a release tarball download with curl retry in Dockerfile; verify dockerd-rootless.sh has checksum verification
     - **OutputCollector config test**: Verify a configured lower MAX_OUTPUT_SIZE_BYTES is enforced
     - **UID pinning test**: Verify config.sh creates gha-executor with --uid 1000; verify systemd unit has LimitCORE=0
     - _Requirements: 3.16, 4.19, 4.20, 4.21, 5.18, 8.21-8.26, 9.15, 12.19-12.23, 20.1-20.5, 42.12, 45.8, 45.9, 46.9, 49.16, 49.17, 53.21-53.24_
@@ -268,7 +269,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - Raw filename sanitization (task 182.7): The AMI build script enumerates .raw files programmatically, enforces exactly one file, validates the basename against a strict regex, and uses shlex.quote() or subprocess list arguments
 - Debug gate fail-closed (task 182.8): If the debug annotation cannot be determined (manifest fetch or JSON parse failure), the AMI build terminates unless --allow-debug is explicitly provided
 - Lockfile-enforced deps (task 182.9): Python dependencies in the AMI are installed from uv.lock via hash-checked export, not from pyproject.toml version ranges
-- Helper source integrity (task 182.10): Rootless Docker helpers are pinned to immutable commit SHAs with post-clone verification; dockerd-rootless.sh is checksum-verified
+- Helper source integrity (task 182.10): Rootless Docker helpers (rootlesskit, slirp4netns, fuse-overlayfs) are pinned to immutable commit SHAs with post-clone verification; libslirp uses a release tarball download with curl retry logic for CI resilience; dockerd-rootless.sh is checksum-verified
 
 ## Task Dependency Graph
 

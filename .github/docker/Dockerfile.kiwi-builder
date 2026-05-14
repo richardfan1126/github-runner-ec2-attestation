@@ -52,14 +52,19 @@ RUN dnf install -y \
 # Build and install libslirp from source.
 # libslirp-devel is not available in AL2023 repositories, so we compile it.
 # Required by slirp4netns for rootless networking.
+# Uses a release tarball instead of git clone for resilience against transient
+# GitLab server errors (HTTP 500) that can break CI builds.
 RUN cd /tmp \
-    && git clone --depth 1 --branch v4.8.0 https://gitlab.freedesktop.org/slirp/libslirp.git \
-    && cd libslirp \
+    && curl --retry 3 --retry-delay 5 -fsSL \
+       "https://gitlab.freedesktop.org/slirp/libslirp/-/archive/v4.8.0/libslirp-v4.8.0.tar.gz" \
+       -o libslirp.tar.gz \
+    && tar -xzf libslirp.tar.gz \
+    && cd libslirp-v4.8.0 \
     && meson setup build \
     && ninja -C build \
     && ninja -C build install \
     && ldconfig \
-    && rm -rf /tmp/libslirp
+    && rm -rf /tmp/libslirp-v4.8.0 /tmp/libslirp.tar.gz
 
 # Create output directory for build artifacts
 RUN mkdir -p /output
