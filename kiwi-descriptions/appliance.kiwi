@@ -83,6 +83,15 @@
         <!-- git: required by Repository_Client (src/repository.py) for cloning
              GitHub repositories containing scripts to execute -->
         <package name="git"/>
+        <!-- binutils: required by dracut -uefi during the KIWI create step for UKI
+             assembly (objcopy). Cannot be removed because pre_disk_sync.sh runs before
+             dracut/UKI generation (not after), and there is no KIWI hook that runs
+             after UKI assembly but before the root tree is written to disk. -->
+        <package name="binutils"/>
+        <!-- python3.11-pip: build-time dependency required by config.sh for
+             'pip3.11 install'. Removed from the final runtime image by the
+             <packages type="uninstall"> section below. -->
+        <package name="python3.11-pip"/>
         <!-- Don't install these packages -->
         <ignore name="ec2-hibinit-agent"/>
         <ignore name="grubby"/>
@@ -105,6 +114,14 @@
         <ignore name="update-motd" />
         <ignore name="ec2-instance-connect"/>
     </packages>
+    <!-- Build-time-only packages: KIWI processes the uninstall section after
+         config.sh runs, so these packages are available during image configuration
+         but absent from the final runtime image. This ensures build tools like pip
+         do not increase the post-compromise attack surface. -->
+    <packages type="uninstall">
+        <package name="python3.11-pip"/>
+    </packages>
+
     <packages type="bootstrap">
         <package name="system-release"/>
         <package name="dnf"/>

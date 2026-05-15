@@ -681,42 +681,102 @@ class TestScriptEnvDenyList:
 
 
 # ===========================================================================
-# 184.11 – Package Minimization Tests
+# 184.11 / 186.4 – Package Minimization Tests
 # ===========================================================================
 
 class TestPackageMinimization:
-    """Verify removed packages are NOT in appliance.kiwi."""
+    """Verify package policy in appliance.kiwi.
+
+    Policy:
+    - awscli, pciutils: completely absent (no operational justification)
+    - python3.11-pip: present in <packages type="image"> (build-time dep for config.sh)
+      AND present in <packages type="uninstall"> (removed from final runtime image)
+    - binutils: present in <packages type="image"> with justification comment
+      (required by dracut --uefi for UKI assembly); must NOT be in uninstall section
+    - git: present (required by Repository_Client)
+    """
 
     APPLIANCE_PATH = Path(__file__).parent.parent / "kiwi-descriptions" / "appliance.kiwi"
 
     def test_awscli_not_in_packages(self):
-        """awscli must not be in appliance.kiwi packages."""
+        """awscli must not be in any packages section."""
         content = self.APPLIANCE_PATH.read_text()
-        # Look for <package name="awscli"/> or similar
         assert not re.search(r'<package\s+name="awscli"', content), (
             "awscli should be removed from appliance.kiwi"
         )
 
-    def test_binutils_not_in_packages(self):
-        """binutils must not be in appliance.kiwi packages."""
-        content = self.APPLIANCE_PATH.read_text()
-        assert not re.search(r'<package\s+name="binutils"', content), (
-            "binutils should be removed from appliance.kiwi"
-        )
-
-    def test_python3_pip_not_in_packages(self):
-        """python3.11-pip must not be in appliance.kiwi packages."""
-        content = self.APPLIANCE_PATH.read_text()
-        assert not re.search(r'<package\s+name="python3\.11-pip"', content), (
-            "python3.11-pip should be removed from appliance.kiwi"
-        )
-
     def test_pciutils_not_in_packages(self):
-        """pciutils must not be in appliance.kiwi packages."""
+        """pciutils must not be in any packages section."""
         content = self.APPLIANCE_PATH.read_text()
         assert not re.search(r'<package\s+name="pciutils"', content), (
             "pciutils should be removed from appliance.kiwi"
         )
+
+    def test_python3_pip_in_image_packages(self):
+        """python3.11-pip must be in <packages type="image"> for build-time use."""
+        content = self.APPLIANCE_PATH.read_text()
+        # Extract the <packages type="image"> section
+        image_section = re.search(
+            r'<packages\s+type="image">(.*?)</packages>',
+            content,
+            re.DOTALL,
+        )
+        assert image_section is not None, "No <packages type=\"image\"> section found"
+        assert re.search(r'<package\s+name="python3\.11-pip"', image_section.group(1)), (
+            "python3.11-pip must be in <packages type=\"image\"> (build-time dep for config.sh)"
+        )
+
+    def test_python3_pip_in_uninstall_packages(self):
+        """python3.11-pip must be in <packages type="uninstall"> for runtime removal."""
+        content = self.APPLIANCE_PATH.read_text()
+        # Extract the <packages type="uninstall"> section
+        uninstall_section = re.search(
+            r'<packages\s+type="uninstall">(.*?)</packages>',
+            content,
+            re.DOTALL,
+        )
+        assert uninstall_section is not None, "No <packages type=\"uninstall\"> section found"
+        assert re.search(r'<package\s+name="python3\.11-pip"', uninstall_section.group(1)), (
+            "python3.11-pip must be in <packages type=\"uninstall\"> (removed from final image)"
+        )
+
+    def test_binutils_in_image_packages(self):
+        """binutils must be in <packages type="image"> (required by dracut --uefi)."""
+        content = self.APPLIANCE_PATH.read_text()
+        image_section = re.search(
+            r'<packages\s+type="image">(.*?)</packages>',
+            content,
+            re.DOTALL,
+        )
+        assert image_section is not None, "No <packages type=\"image\"> section found"
+        assert re.search(r'<package\s+name="binutils"', image_section.group(1)), (
+            "binutils must be in <packages type=\"image\"> (required by dracut --uefi for UKI assembly)"
+        )
+
+    def test_binutils_has_justification_comment(self):
+        """binutils entry must have a comment documenting its justification."""
+        content = self.APPLIANCE_PATH.read_text()
+        # The comment should appear before the binutils package entry
+        assert re.search(
+            r'<!--[^>]*dracut[^>]*uefi[^>]*-->.*?<package\s+name="binutils"',
+            content,
+            re.DOTALL,
+        ), (
+            "binutils must have a justification comment mentioning dracut --uefi"
+        )
+
+    def test_binutils_not_in_uninstall(self):
+        """binutils must NOT be in <packages type="uninstall">."""
+        content = self.APPLIANCE_PATH.read_text()
+        uninstall_section = re.search(
+            r'<packages\s+type="uninstall">(.*?)</packages>',
+            content,
+            re.DOTALL,
+        )
+        if uninstall_section:
+            assert not re.search(r'<package\s+name="binutils"', uninstall_section.group(1)), (
+                "binutils must NOT be in <packages type=\"uninstall\"> — dracut needs it at create time"
+            )
 
     def test_git_still_present(self):
         """git must still be present (required by Repository_Client)."""
@@ -728,6 +788,9 @@ class TestPackageMinimization:
     def test_allow_list_policy_comment_present(self):
         """Package allow-list policy comment must be present."""
         content = self.APPLIANCE_PATH.read_text()
+        assert "allow-list" in content.lower() or "allowlist" in content.lower(), (
+            "Package allow-list policy comment not found in appliance.kiwi"
+        )
         assert "allow-list" in content.lower() or "allowlist" in content.lower(), (
             "Package allow-list policy comment not found in appliance.kiwi"
         )

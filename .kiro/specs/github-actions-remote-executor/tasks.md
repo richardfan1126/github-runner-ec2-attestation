@@ -98,31 +98,31 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Run the full test suite and verify all new tests from 184.13 pass
   - Verify no regressions in existing tests
 
-- [ ] 186. Add build-time-only packages via KIWI `<packages type="uninstall">` and retain `binutils` for KIWI create step
-  - [ ] 186.1 Add `python3.11-pip` to `<packages type="image">` in `kiwi-descriptions/appliance.kiwi`
+- [x] 186. Add build-time-only packages via KIWI `<packages type="uninstall">` and retain `binutils` for KIWI create step
+  - [x] 186.1 Add `python3.11-pip` to `<packages type="image">` in `kiwi-descriptions/appliance.kiwi`
     - Add `<package name="python3.11-pip"/>` to the `<packages type="image">` section with a comment explaining it is a build-time dependency required by `config.sh` for `pip3.11 install` and will be removed by the uninstall section
     - _Requirements: 54.1, 54.2_
 
-  - [ ] 186.2 Add `<packages type="uninstall">` section to `kiwi-descriptions/appliance.kiwi`
+  - [x] 186.2 Add `<packages type="uninstall">` section to `kiwi-descriptions/appliance.kiwi`
     - Add a new `<packages type="uninstall">` element after the `<packages type="image">` section
     - Include `<package name="python3.11-pip"/>` in the uninstall section
     - Add a comment block explaining that KIWI processes the uninstall section after `config.sh` runs, so these packages are available during image configuration but absent from the final runtime image
     - _Requirements: 54.1, 54.2, 54.3_
 
-  - [ ] 186.3 Retain `binutils` in `<packages type="image">` with documented justification
+  - [x] 186.3 Retain `binutils` in `<packages type="image">` with documented justification
     - Ensure `<package name="binutils"/>` is present in the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
     - Add a justification comment: required by `dracut --uefi` during the KIWI create step for UKI assembly (`objcopy`); cannot be removed because `pre_disk_sync.sh` runs before dracut/UKI generation (not after), and there is no KIWI hook that runs after UKI assembly but before the root tree is written to disk
     - Do NOT create a `pre_disk_sync.sh` script to remove `binutils` — the KIWI execution order is: `pre_disk_sync.sh` → sync → dracut UKI → final image, so removing `binutils` at any hook point breaks the build
     - _Requirements: 54.1, 54.2_
 
-  - [ ] 186.4 Update package minimization test to reflect new package policy
+  - [x] 186.4 Update package minimization test to reflect new package policy
     - In the existing test that verifies removed packages are NOT in `appliance.kiwi` (from task 184.13), update assertions:
       - `python3.11-pip`: verify it is present in `<packages type="image">` AND present in `<packages type="uninstall">` (installed for build-time use, removed from final image)
       - `binutils`: verify it is present in `<packages type="image">` with a comment documenting its justification (required by dracut --uefi for UKI assembly); it must NOT be in `<packages type="uninstall">` or removed by any script
       - `awscli` and `pciutils`: verify they remain completely absent (not in any packages section)
     - _Requirements: 54.1, 54.2, 54.9_
 
-- [ ] 187. Checkpoint - Ensure all tests pass after build-time package changes
+- [x] 187. Checkpoint - Ensure all tests pass after build-time package changes
   - Run the full test suite and verify the updated package minimization tests pass
   - Verify no regressions in existing tests
 
