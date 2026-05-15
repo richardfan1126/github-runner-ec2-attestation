@@ -57,7 +57,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add a comment documenting the tag corresponding to the pinned digest
     - _Requirements: 11.16_
 
-  - [ ] 184.9 Add libslirp tarball SHA-256 checksum verification
+  - [x] 184.9 Add libslirp tarball SHA-256 checksum verification
     - In `.github/docker/Dockerfile.kiwi-builder`, after downloading the libslirp release tarball, verify its SHA-256 checksum against a known expected value before extraction
     - If checksum does not match, fail the build with an integrity error
     - _Requirements: 53.6_
