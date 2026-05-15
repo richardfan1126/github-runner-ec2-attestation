@@ -49,15 +49,16 @@
             <source path="https://cdn.amazonlinux.com/al2023/core/mirrors/2023.10.20260302/$basearch/mirror.list"/>
     </repository>
 
+    <!-- Package allow-list policy: Only packages with an explicit operational
+         justification are permitted. Each package must have a comment documenting
+         why it is required. Do not add packages for debugging, development, or
+         operator convenience — the runtime image must remain minimal to reduce
+         post-compromise attack surface. -->
     <packages type="image">
         <namedCollection name="core"/>
         <namedCollection name="ami-minimal"/>
-        <package name="pciutils"/>
-        <package name="gzip"/>
-        <package name="awscli"/>
         <package name="veritysetup"/>
         <package name="systemd-boot"/>
-        <package name="tar"/>
         <package name="zram-generator"/>
         <package name="zram-generator-defaults"/>
         <package name="cryptsetup"/>
@@ -66,9 +67,7 @@
         <package name="aws-nitro-tpm-tools"/>
         <package name="systemd-resolved"/>
         <package name="amazon-chrony-config"/>
-        <package name="binutils"/>
         <package name="python3.11"/>
-        <package name="python3.11-pip"/>
         <package name="docker"/>
         <!-- Runtime library dependencies for source-compiled rootless Docker binaries
              (rootlesskit, slirp4netns, fuse-overlayfs are compiled from source in
@@ -81,6 +80,8 @@
         <package name="libseccomp"/>
         <package name="glib2"/>
         <package name="libcap"/>
+        <!-- git: required by Repository_Client (src/repository.py) for cloning
+             GitHub repositories containing scripts to execute -->
         <package name="git"/>
         <!-- Don't install these packages -->
         <ignore name="ec2-hibinit-agent"/>

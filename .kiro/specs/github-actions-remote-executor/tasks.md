@@ -67,7 +67,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - In `src/server.py`, after sanitizing `script_env` (string keys/values), check each key against the deny-list (exact match + prefix match for `*` entries); reject with encrypted error if any key matches
     - _Requirements: 52.7, 52.8, 52.9_
 
-  - [ ] 184.11 Remove unjustified packages from appliance.kiwi
+  - [x] 184.11 Remove unjustified packages from appliance.kiwi
     - Remove `awscli`, `binutils`, `python3.11-pip`, and `pciutils` from `<packages type="image">` in `kiwi-descriptions/appliance.kiwi`
     - Add a comment block at the top of the packages section documenting the allow-list policy
     - Add explicit justification comment next to `git` (required by Repository_Client)
