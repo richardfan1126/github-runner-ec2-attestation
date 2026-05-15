@@ -134,10 +134,11 @@ The system consists of the following major components:
 
 **Request Handler**
 - Enforces request body size limits before any JSON parsing or base64 decoding: rejects requests exceeding MAX_REQUEST_BODY_BYTES (default 1 MB) with HTTP 413; validates `encrypted_payload` field size against MAX_ENCRYPTED_PAYLOAD_BYTES (default 512 KB) and `client_public_key` field size (max 2048 bytes) after JSON parsing; validates decrypted payload size against MAX_DECRYPTED_PAYLOAD_BYTES (default 256 KB) after decryption
+- Decodes all base64-encoded fields (`encrypted_payload`, `client_public_key`) using `base64.b64decode()` with `validate=True` to reject malformed base64 encodings (padding errors, illegal characters) before processing
 - Receives encrypted /execute request payloads and delegates decryption to the Encryption Manager (see Encryption Manager for PQ_Hybrid_KEM key derivation details)
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
-- Extracts the mandatory `nonce` from the decrypted request body; rejects with HTTP 400 if nonce is missing or empty (replay protection is mandatory, not optional)
-- Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), and passes it to the Script Executor for injection into the Execution_Container as environment variables
+- Extracts the mandatory `nonce` from the decrypted request body; validates that the nonce is a string type, between 16-256 characters, and contains only URL-safe characters (alphanumeric, hyphen, underscore, period, tilde); rejects with HTTP 400 if nonce is missing, empty, wrong type, out of bounds, or contains invalid characters
+- Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), checks keys against the Script_Env_Deny_List (rejects dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`), and passes permitted entries to the Script Executor for injection into the Execution_Container as environment variables
 - Validates the decrypted request using the Request Validator
 - After OIDC validation, verifies the `repository` claim matches the `repository_url` in the request; rejects with HTTP 403 if mismatch
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
@@ -153,7 +154,7 @@ The system consists of the following major components:
 - Enforces request body size limits before JSON parsing (same MAX_REQUEST_BODY_BYTES limit as /execute)
 - Receives encrypted /execution/{id}/output request payloads; decrypts via the Encryption Manager using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists)
 - Authentication is provided by possession of the execution-bound Shared_Key itself — only the original caller who performed the PQ_Hybrid_KEM exchange during /execute possesses this key, so no separate OIDC token validation is required
-- Extracts the mandatory `nonce` from the decrypted request body; rejects with HTTP 400 if nonce is missing or empty (replay protection is mandatory, not optional)
+- Extracts the mandatory `nonce` from the decrypted request body; validates type (string), length (16-256 chars), and format (URL-safe characters only); rejects with HTTP 400 if nonce is missing, empty, wrong type, or invalid format
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
@@ -177,14 +178,16 @@ The system consists of the following major components:
 
 **Repository Client**
 - Clones the entire repository at the specified commit into a temporary directory under `temp_storage_path` using `git clone --depth 1`
-- Authenticates using the GitHub token embedded in the clone URL (`https://{token}@github.com/owner/repo.git`)
+- Authenticates using a credential isolation mechanism (e.g., `GIT_ASKPASS` helper script or `http.extraHeader` via environment-scoped git config) that does NOT expose the GitHub token in subprocess command-line arguments; the token never appears in `/proc/<pid>/cmdline`
 - Checks out the exact commit after cloning
-- After successful clone, strips the GitHub token from `.git/config` by running `git remote set-url origin https://github.com/{owner}/{repo}.git` (without the token)
+- After successful clone, strips the GitHub token from `.git/config` by running `git remote set-url origin https://github.com/{owner}/{repo}.git` (without the token) as a defense-in-depth measure
 - After token stripping, removes the `.git` directory entirely from the cloned repository before mounting into the Execution_Container
-- Validates the script file exists within the cloned repository
+- Validates the script file exists within the cloned repository as a regular file (not a symlink); rejects symlink script paths
+- Resolves the full script path using `os.path.realpath()` and verifies the resolved path remains within the clone directory; rejects paths that escape the clone directory via symlinks
 - Returns the path to the cloned repository directory and the relative script path
 - Handles clone failures (authentication errors, repository not found, network errors)
 - Cleans up cloned repository directories after execution
+- Cleans up credential helper scripts or temporary config after clone completes (regardless of success or failure)
 - The server wraps all post-clone processing in a `finally` block that removes the clone directory on unexpected exceptions (unless ownership has been handed to the Script_Executor); uses `shutil.rmtree` with `ignore_errors=True` to avoid secondary exceptions
 
 **Attestation Generator**
@@ -225,7 +228,7 @@ The system consists of the following major components:
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
 - Ensures the cloned repository directory is readable before mounting into the container
-- Accepts an optional `script_env` dictionary of string key-value pairs and passes it as the `environment` parameter to the Docker container, allowing the caller to forward environment variables (e.g., `GITHUB_TOKEN`, `GITHUB_RUN_ID`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_RUNTIME_URL`) into the Execution_Container so that build scripts can interact with external services
+- Accepts an optional `script_env` dictionary of string key-value pairs (already filtered through the Script_Env_Deny_List by the Request Handler) and passes it as the `environment` parameter to the Docker container, allowing the caller to forward environment variables (e.g., `GITHUB_TOKEN`, `GITHUB_RUN_ID`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_RUNTIME_URL`) into the Execution_Container so that build scripts can interact with external services
 - Executes the script via `command=["bash", "/workspace/{script_path}"]` where `script_path` is the relative path within the repo
 - Streams stdout and stderr incrementally from the container during execution using a Log_Streaming_Thread that calls `container.logs(stream=True, follow=True)` and feeds chunks to the Output_Collector in real time, so that polling clients observe partial output while the script is still running
 - Monitors execution progress and enforces timeout
@@ -269,7 +272,7 @@ The system consists of the following major components:
 3. Server validates `encrypted_payload` size against MAX_ENCRYPTED_PAYLOAD_BYTES and `client_public_key` size (max 2048 bytes); rejects with HTTP 400 if exceeded
 4. Encryption Manager derives Shared_Key via PQ_Hybrid_KEM (see Encryption Manager component) and decrypts the request payload
 5. Server validates decrypted payload size against MAX_DECRYPTED_PAYLOAD_BYTES; rejects with HTTP 400 if exceeded
-6. Request Handler validates mandatory `nonce` field is present and non-empty; rejects with HTTP 400 if missing or empty
+6. Request Handler validates mandatory `nonce` field: must be string type, 16-256 characters, URL-safe characters only; rejects with HTTP 400 if missing, empty, wrong type, or invalid format
 7. Request Handler extracts OIDC_Token from decrypted body `oidc_token` field
 8. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
 9. Request Validator verifies `repository` claim matches `repository_url` in the request; rejects with HTTP 403 if mismatch
@@ -295,7 +298,7 @@ The system consists of the following major components:
 1. Client sends POST request to `/execution/{id}/output` with encrypted payload containing mandatory `nonce` and `offset`
 2. Server enforces MAX_REQUEST_BODY_BYTES limit; rejects with HTTP 413 if exceeded
 3. Encryption Manager decrypts the request payload using the execution-bound Shared_Key (returns HTTP 400 if no Encryption_Context exists); successful decryption proves the caller possesses the Shared_Key, which serves as authentication
-4. Output Handler validates mandatory `nonce` field is present and non-empty; rejects with HTTP 400 if missing or empty
+4. Output Handler validates mandatory `nonce` field: must be string type, 16-256 characters, URL-safe characters only; rejects with HTTP 400 if missing, empty, wrong type, or invalid format
 5. Output Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
 6. Output Handler retrieves execution record by ID
 7. Output Collector returns current status, output from offset, and completion flag
@@ -611,11 +614,15 @@ class RepositoryClient:
     
     def clone_repo(self, repo_url: str, commit: str, token: str) -> CloneResult:
         """Clones repository at specific commit into temp directory.
-        After cloning, strips token from .git/config and removes .git directory."""
+        Uses credential isolation (GIT_ASKPASS or http.extraHeader) so the token
+        never appears in subprocess argv. After cloning, strips token from
+        .git/config as defense-in-depth and removes .git directory."""
         pass
     
     def validate_script_exists(self, clone_path: str, script_path: str) -> bool:
-        """Validates script file exists within cloned repo"""
+        """Validates script file exists within cloned repo as a regular file.
+        Rejects symlinks. Resolves path with realpath() and verifies it
+        remains within clone_path."""
         pass
     
     def cleanup_clone(self, clone_path: str) -> None:
@@ -868,6 +875,7 @@ class ServerConfig:
     nonce_cache_ttl_seconds: int  # TTL for nonce cache entries, matching OIDC token lifetime
     allowed_branches: list[str] | None  # Optional branch patterns for OIDC ref claim validation
     require_protected_ref: bool  # When true, require ref_protected claim to be "true"; parsed with strict boolean validation (only true/1/yes/false/0/no accepted; unrecognized values fail startup)
+    script_env_deny_list: list[str]  # Environment variable key names/prefixes rejected from script_env (default: BASH_ENV, PATH, LD_PRELOAD, etc.)
 ```
 
 ### OIDCValidationResult
@@ -1509,11 +1517,11 @@ class EncryptionContext:
 
 **Validates: Requirements 2.28, 2.29, 2.30, 2.32**
 
-### Property 145: Token Stripping and .git Removal
+### Property 145: Credential Isolation, Token Stripping, and .git Removal
 
-*For any* successfully cloned repository, the Repository_Client should strip the GitHub token from .git/config and then remove the .git directory entirely before the repository is mounted into the Execution_Container.
+*For any* repository clone operation, the Repository_Client should authenticate using a credential isolation mechanism (e.g., GIT_ASKPASS) that does not expose the token in subprocess command-line arguments. *For any* successfully cloned repository, the Repository_Client should strip the GitHub token from .git/config (as defense-in-depth) and then remove the .git directory entirely before the repository is mounted into the Execution_Container. The credential helper or temporary config should be cleaned up after clone completes.
 
-**Validates: Requirements 3.10, 3.11, 3.12**
+**Validates: Requirements 3.10, 3.11, 3.12, 3.17**
 
 ### Property 146: Output Buffer Size Enforcement
 
@@ -1565,9 +1573,9 @@ class EncryptionContext:
 
 ### Property 154: Anti-Replay Nonce Validation
 
-*For any* encrypted /execute or /execution/{id}/output request with a missing or empty nonce field, the server should reject the request with HTTP 400 Bad Request. *For any* encrypted request whose nonce has been previously seen in the Nonce_Cache, the server should reject the request with HTTP 400 Bad Request. Nonce cache entries should expire after a configurable TTL.
+*For any* encrypted /execute or /execution/{id}/output request with a missing, empty, non-string, too-short (<16 chars), too-long (>256 chars), or improperly-formatted (non-URL-safe characters) nonce field, the server should reject the request with HTTP 400 Bad Request. *For any* encrypted request whose nonce has been previously seen in the Nonce_Cache, the server should reject the request with HTTP 400 Bad Request. Nonce cache entries should expire after a configurable TTL. *For any* base64-encoded field (`encrypted_payload`, `client_public_key`), the server should decode with strict validation (`validate=True`) and reject malformed encodings with HTTP 400.
 
-**Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5, 45.6, 45.7, 45.8, 45.9**
+**Validates: Requirements 45.1, 45.2, 45.3, 45.4, 45.5, 45.6, 45.7, 45.8, 45.9, 45.10, 45.11, 45.12, 45.13, 45.14**
 
 ### Property 155: Attest Endpoint Rate Limiting
 
@@ -1583,9 +1591,9 @@ class EncryptionContext:
 
 ### Property 157: Artifact Ref Validation
 
-*For any* artifact_ref argument, the AMI_Converter should validate it against a strict regex allowlist before any shell interpolation. If the artifact_ref contains characters outside the allowlist, the converter should reject and terminate.
+*For any* artifact_ref argument, the AMI_Converter should validate it against a strict regex allowlist before any shell interpolation. If the artifact_ref contains characters outside the allowlist, the converter should reject and terminate. *For any* production AMI build, the artifact_ref must include an `@sha256:` digest component; the same digest must be used for both signature verification and artifact pull to ensure cryptographic binding.
 
-**Validates: Requirements 15.15, 15.16**
+**Validates: Requirements 15.15, 15.16, 15.17, 15.18, 15.19, 15.20, 15.21, 15.22, 15.23**
 
 ### Property 158: ORAS Checksum Verification
 
@@ -1625,7 +1633,7 @@ class EncryptionContext:
 
 ### Property 164: Docker Daemon Security Configuration
 
-*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true, `live-restore` set to false, and `data-root` set to `/var/lib/gha-executor/docker`. The rootless Docker daemon should run under the `gha-executor` service user with rootlesskit, slirp4netns, fuse-overlayfs compiled from source by build-kiwi-image.sh, libslirp compiled from a release tarball in the Dockerfile, and dockerd-rootless.sh downloaded from the Moby repository, all installed at `/usr/local/bin/` (binaries) and `/usr/local/lib64/` (libslirp shared library), `/etc/subuid` and `/etc/subgid` configured with two non-overlapping 65536-ID ranges, `loginctl enable-linger` enabled, a udev rule granting TPM device ownership to gha-executor, and `/etc/ld.so.conf.d/usr-local-lib64.conf` ensuring libslirp is discoverable at runtime.
+*For any* KIWI image build, the image should include a daemon.json at `~gha-executor/.config/docker/daemon.json` with `no-new-privileges` set to true, `live-restore` set to false, and `data-root` set to `/var/lib/gha-executor/docker`. The rootless Docker daemon should run under the `gha-executor` service user with rootlesskit, slirp4netns, fuse-overlayfs compiled from source by build-kiwi-image.sh (pinned to immutable commit SHAs with post-clone verification), libslirp compiled from a checksum-verified release tarball in the Dockerfile, and dockerd-rootless.sh downloaded from the Moby repository (checksum-verified), all installed at `/usr/local/bin/` (binaries) and `/usr/local/lib64/` (libslirp shared library), `/etc/subuid` and `/etc/subgid` configured with two non-overlapping 65536-ID ranges, `loginctl enable-linger` enabled, a udev rule granting TPM device ownership to gha-executor, and `/etc/ld.so.conf.d/usr-local-lib64.conf` ensuring libslirp is discoverable at runtime.
 
 **Validates: Requirements 48.1, 48.2, 48.3, 48.4, 48.5**
 
@@ -1649,15 +1657,15 @@ class EncryptionContext:
 
 ### Property 167: Build Environment Pinning
 
-*For any* GitHub Actions workflow, the runner should be pinned to a specific Ubuntu version (not ubuntu-latest). The Build_Instance AMI data source should use a specific AMI ID or name filter with a specific version instead of most_recent=true. The KIWI image description (`appliance.kiwi`) should pin the AL2023 package repository URL to a specific release version instead of the floating `latest` mirrorlist path.
+*For any* GitHub Actions workflow, the runner should be pinned to a specific Ubuntu version (not ubuntu-latest). All third-party GitHub Actions should be pinned to full 40-character commit SHAs (not mutable version tags). The Dockerfile base image should be pinned to an immutable `@sha256:` digest. The Build_Instance AMI data source should use a specific AMI ID or name filter with a specific version instead of most_recent=true. The KIWI image description (`appliance.kiwi`) should pin the AL2023 package repository URL to a specific release version instead of the floating `latest` mirrorlist path.
 
-**Validates: Requirements 11.9, 11.10, 11.13**
+**Validates: Requirements 11.9, 11.10, 11.13, 11.15, 11.16, 11.17**
 
 ### Property 169: Script Environment Variable Forwarding
 
-*For any* /execute request containing a `script_env` dictionary with string key-value pairs in the decrypted payload, the GHA_Server should extract and sanitize the dictionary (accepting only string keys and string values), pass it to the Script_Executor, and the resulting Execution_Container should have those key-value pairs set as environment variables. When `script_env` is absent or empty, the container should be created with no additional environment variables. Non-string keys or values in `script_env` should be silently coerced to strings or dropped.
+*For any* /execute request containing a `script_env` dictionary with string key-value pairs in the decrypted payload, the GHA_Server should extract and sanitize the dictionary (accepting only string keys and string values), check keys against the configurable Script_Env_Deny_List (rejecting dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`, `SHELLOPTS`, `IFS`, and `BASH_FUNC_*` prefix matches), pass permitted entries to the Script_Executor, and the resulting Execution_Container should have those key-value pairs set as environment variables. When `script_env` is absent or empty, the container should be created with no additional environment variables. Non-string keys or values in `script_env` should be silently coerced to strings or dropped. If any key matches the deny-list, the request should be rejected with an error.
 
-**Validates: Requirements 52.1, 52.2, 52.3, 52.4, 52.5, 52.6**
+**Validates: Requirements 52.1, 52.2, 52.3, 52.4, 52.5, 52.6, 52.7, 52.8, 52.9, 52.10, 52.11**
 
 ### Error Categories
 
@@ -1712,10 +1720,11 @@ All error responses follow a consistent JSON structure:
 - Authentication failures logged with claim details (excluding the token itself)
 
 **Anti-Replay Errors**
-- Return 400 for missing or empty nonces on /execute and /execution/{id}/output (nonce is mandatory)
+- Return 400 for missing, empty, non-string, too-short (<16 chars), too-long (>256 chars), or improperly-formatted (non-URL-safe characters) nonces on /execute and /execution/{id}/output
 - Return 400 for duplicate nonces on /execute and /execution/{id}/output
+- Return 400 for malformed base64 in `encrypted_payload` or `client_public_key` fields (strict `validate=True` decoding)
 - Nonce cache entries expire after configurable TTL matching OIDC token lifetime
-- Log duplicate nonce rejections with request context
+- Log duplicate nonce rejections with request context (nonce value truncated to first 8 chars)
 
 **PQ Hybrid Encryption Errors**
 - Return 400 for /execute requests where PQ_Hybrid_KEM decryption fails (invalid Client_Public_Key with invalid X25519 or ML-KEM-768 components, corrupted ciphertext, wrong key)
@@ -1783,6 +1792,15 @@ All error responses follow a consistent JSON structure:
 - Include timestamp in ISO 8601 format
 - Exclude sensitive data (tokens, credentials)
 
+**Log Sanitization**
+- All subprocess stderr output, exception messages, and external tool output are passed through the Log_Sanitizer before logging or inclusion in error responses; raw subprocess stderr is never logged or returned to callers
+- The Log_Sanitizer redacts patterns matching: GitHub tokens (ghp_*, ghs_*, github_pat_*), credentialed URLs (https://*@*), Authorization header values, absolute file paths (/home/*, /tmp/*, /var/*), environment variable assignments (KEY=VALUE patterns containing tokens), and ASCII control characters (except newline and tab)
+- All user-controlled fields (repository_url, script_path, nonce values, validation error details) are logged using structured JSON escaping or `repr()` to prevent log injection via multi-line strings or control characters
+- User-controlled values are truncated to a maximum of 256 characters before logging; values exceeding the cap are suffixed with `[truncated]`
+- Raw nonce values are not logged; instead, a truncated hash or prefix (first 8 characters) is logged for correlation
+- High-frequency log paths (e.g., per-poll output retrieval) prefer request/execution IDs over user-supplied identifiers
+- Encrypted error envelopes returned to callers contain only categorized error descriptions (e.g., "clone_failed", "attestation_failed") without raw subprocess stderr, absolute paths, or internal configuration details
+
 **Log Retention**
 - Rotate logs daily
 - Retain logs for configurable period (default 30 days)
@@ -1792,11 +1810,11 @@ All error responses follow a consistent JSON structure:
 
 ### Anti-Replay Nonce Cache (Requirement 45)
 
-The server maintains an in-memory Nonce_Cache to prevent replay attacks on encrypted requests. Nonces are **mandatory** — requests without a nonce or with an empty nonce are rejected before the cache check.
+The server maintains an in-memory Nonce_Cache to prevent replay attacks on encrypted requests. Nonces are **mandatory** and subject to strict validation — requests with missing, empty, non-string, too-short, too-long, or improperly-formatted nonces are rejected before the cache check.
 
 **Design:**
 - The Nonce_Cache is a dictionary mapping nonce strings to their insertion timestamps
-- When an encrypted /execute or /execution/{id}/output request is received, the server first validates that the `nonce` field is present and non-empty (rejects with HTTP 400 if missing or empty)
+- When an encrypted /execute or /execution/{id}/output request is received, the server first validates the `nonce` field: must be a string type, between 16-256 characters, containing only URL-safe characters (alphanumeric, hyphen, underscore, period, tilde); rejects with HTTP 400 if any validation fails
 - The nonce is then checked against the cache; if already present, the request is rejected with HTTP 400 Bad Request
 - If the nonce is new, it is added to the cache with the current timestamp
 - Cache entries expire after a configurable TTL matching the OIDC_Token lifetime
@@ -2046,20 +2064,25 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 
 **Build_Workflow (GitHub Actions)**
 - Orchestrates the entire KIWI image build process
+- Pins all third-party GitHub Actions to full 40-character commit SHAs (not mutable version tags) with comments indicating the corresponding version tag and date
 - Checks out repository with submodules
-- Builds KIWI builder Docker image
+- Builds KIWI builder Docker image (base image pinned to `@sha256:` digest in Dockerfile)
 - Configures loop devices for KIWI image building
 - Executes KIWI NG build script inside container (optionally with `--enable-ssh` flag — see [PART 5: DEBUG DESIGN](#part-5-debug-design))
 - Extracts PCR measurements from build output
 - Installs ORAS CLI (same version as AMI_Converter) with SHA-256 checksum verification before extraction; fails the workflow if the checksum does not match
 - Publishes artifacts to GHCR with ORAS
+- Outputs the full digest-pinned artifact reference (including `@sha256:`) so downstream consumers use the immutable reference
 - Triggers GitHub attestation service
 - Generates workflow summary with verification instructions (includes SSH warning when debug access is enabled)
 
 **KIWI_Builder (Docker Container)**
 - Provides reproducible build environment
+- Base image pinned to `@sha256:` digest for immutability
 - Contains KIWI NG and all build dependencies with pinned versions
+- Verifies libslirp release tarball against a known SHA-256 checksum before extraction
 - Executes KIWI image build process
+- Installs Python dependencies using lockfile-enforced path: exports from `uv.lock` via `uv export --frozen --format requirements-txt --no-dev` (hashes included by default) and installs with `pip install --require-hashes`; does NOT use `pip3 download` against version ranges from `pyproject.toml`
 - Generates raw disk image (.raw file)
 - Calculates PCR4 and PCR7 measurements
 - Outputs pcr_measurements.json file
@@ -2080,7 +2103,9 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
 - Provides attestation ID and verification URL
 
 **AMI_Converter (Python Script)**
-- Validates artifact_ref against a strict regex allowlist (`^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*:[a-zA-Z0-9._-]+$`, supporting ghcr.io/owner/repo/package:tag format) before any shell interpolation; rejects and terminates if invalid
+- Validates artifact_ref against a strict regex allowlist that supports both tag-only and digest-pinned references; rejects shell metacharacters before any shell interpolation
+- Requires artifact references to include an `@sha256:` digest component for production AMI builds; terminates with error if digest is missing
+- Uses the exact `sha256:` digest from the artifact reference for both signature verification and artifact pull, ensuring cryptographic binding between the verified and pulled artifact (the same digest is used in both operations; mutable tags are ignored if present alongside a digest)
 - Provisions temporary EC2 build instance using Terraform
 - Detects user's public IP for SSH access configuration (via checkip.amazonaws.com)
 - Manages SSH connectivity with keepalive (30-second intervals) using paramiko
@@ -2090,10 +2115,11 @@ The build process creates an attestable AMI containing the GitHub Actions Remote
   - ORAS CLI 1.3.0 from GitHub releases, verified against a known SHA-256 checksum before installation
   - GitHub CLI via dnf repository (trust assumption documented in code comments)
   - Coldsnap cloned at a specific pinned git tag or commit hash (not HEAD), built from source using cargo
-- Checks for `debug` annotation on downloaded artifact; refuses to build AMI if `debug=true` unless `--allow-debug` CLI flag is provided
+- Checks for `debug` annotation on downloaded artifact; refuses to build AMI if `debug=true` unless `--allow-debug` CLI flag is provided; also refuses if annotation status is indeterminate (fetch/parse failure) unless `--allow-debug` is provided (fail closed)
 - Accepts optional `--expected-workflow` CLI argument; when provided, verifies attestation workflow identity matches
-- Verifies artifact signatures before proceeding
-- Downloads artifacts from GHCR to ~/artifacts/build-output
+- Verifies artifact signatures against the exact digest before proceeding
+- Downloads artifacts from GHCR using the exact digest reference to ~/artifacts/build-output
+- Enumerates `.raw` files programmatically (not via shell globbing), enforces exactly one file, validates basename against strict regex, and uses `shlex.quote()` or subprocess list arguments to avoid shell injection
 - Uploads raw disk image to EBS snapshot using coldsnap
 - Waits for snapshot completion (15s delay, 40 attempts) using boto3
 - Registers AMI with TPM 2.0, UEFI boot mode, and ENA support using boto3
@@ -2378,9 +2404,9 @@ class AttestationBundle:
 
 ### Property 116: Docker Package Inclusion in KIWI Image
 
-*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker` package (available in AL2023 core repos), plus runtime library dependencies (`fuse3`, `libseccomp`, `glib2`, `libcap`). The `uidmap` package should NOT be listed separately because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection. The `libslirp` package should NOT be listed because it is not available in AL2023 and is instead compiled from source and shipped as a shared library in `/usr/local/lib64/`. The `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries should NOT be listed as DNF packages (they are not available in AL2023) but should instead be compiled from source by the build script and placed at `/usr/local/bin/` in the KIWI image overlay.
+*For any* KIWI image build, the `appliance.kiwi` package definition should include the `docker` package (available in AL2023 core repos), plus runtime library dependencies (`fuse3`, `libseccomp`, `glib2`, `libcap`). The `uidmap` package should NOT be listed separately because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection. The `libslirp` package should NOT be listed because it is not available in AL2023 and is instead compiled from source and shipped as a shared library in `/usr/local/lib64/`. The `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` binaries should NOT be listed as DNF packages (they are not available in AL2023) but should instead be compiled from source by the build script and placed at `/usr/local/bin/` in the KIWI image overlay. The runtime image should NOT include packages without documented runtime justification (`awscli`, `binutils`, `python3.11-pip`, `pciutils` must be absent); `git` is retained with explicit justification for Repository_Client operations.
 
-**Validates: Requirements 33.1, 33.2, 33.11, 33.12, 53.21, 53.22, 53.23, 53.24**
+**Validates: Requirements 33.1, 33.2, 33.11, 33.12, 53.26, 53.27, 53.28, 53.29, 54.1, 54.2, 54.3, 54.4, 54.5, 54.6**
 
 ### Property 117: Docker Service Enablement
 

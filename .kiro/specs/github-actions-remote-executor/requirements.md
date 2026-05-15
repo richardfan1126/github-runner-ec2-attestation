@@ -22,7 +22,7 @@ This specification covers three major aspects:
 
 7. **Streaming Output Requirements (Requirement 44)**: How the Script_Executor streams output from Execution_Containers incrementally during execution, so that clients can observe partial output while scripts are still running rather than waiting for the container to exit.
 
-8. **Security Hardening Requirements (Requirements 45-51)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection (including mandatory nonces), debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, IAM permission scoping, and host login access hardening.
+8. **Security Hardening Requirements (Requirements 45-51, 54)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection (including mandatory nonces, strict type/format/length validation, and strict base64 decoding), debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, IAM permission scoping, host login access hardening, and runtime image package minimization.
 
 Note: Security hardening acceptance criteria from the security review are integrated throughout the existing requirements where they naturally belong. Only genuinely new requirement areas appear in the Security Hardening Requirements section.
 
@@ -87,6 +87,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 | 51 | Host Login Access Hardening | Security Hardening |
 | 52 | Script Environment Variable Forwarding | Runtime |
 | 53 | Rootless Docker Dependencies Built from Source | Image Provisioning |
+| 54 | Runtime Image Package Minimization | Security Hardening |
 
 ## Glossary
 
@@ -155,6 +156,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Git_Package**: The git version control system binary that must be installed in the KIWI image to support repository cloning operations by the Repository_Client at runtime
 - **Encrypted_Error_Envelope**: An encrypted JSON response returned after successful request decryption when an application-level error occurs, containing an `error` description and `error_code` field, ensuring all post-decryption communication remains within the encrypted channel
 - **Request_Body_Limit**: Maximum allowed size in bytes for incoming HTTP request bodies on encrypted endpoints, enforced before JSON parsing or base64 decoding to prevent resource exhaustion from oversized requests
+- **Script_Env_Deny_List**: A configurable set of environment variable key names that are rejected when present in the `script_env` dictionary, preventing callers from injecting variables that alter Bash execution semantics (e.g., `BASH_ENV`, `PATH`, `SHELLOPTS`, `ENV`, `BASH_FUNC_*`)
+- **Log_Sanitizer**: A centralized component that redacts sensitive data (tokens, credentialed URLs, absolute paths, environment assignments, control characters) from log messages and error responses before they are persisted or returned to callers
 
 ## Requirements
 
@@ -235,6 +238,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 14. THE cleanup in the `finally` block SHALL only remove the clone directory if ownership has NOT been successfully handed to the Script_Executor for async execution; IF the clone directory has been handed to the Script_Executor, THEN THE `finally` block SHALL NOT remove it (the Script_Executor is responsible for cleanup after execution completes)
 15. THE `finally` block SHALL use `shutil.rmtree` with `ignore_errors=True` to ensure cleanup does not raise secondary exceptions
 16. THE test suite SHALL include a regression test that simulates an unexpected exception after successful cloning but before execution handoff, and verifies the clone directory is removed
+17. THE Repository_Client SHALL authenticate to GitHub using a credential mechanism that does not expose the token in subprocess command-line arguments (e.g., `GIT_ASKPASS` helper script, `GIT_CONFIG_VALUE_0` with `http.extraHeader`, or a temporary credential file); the token SHALL NOT appear in `/proc/<pid>/cmdline` of the `git clone` subprocess
+18. THE Repository_Client SHALL validate that the script file path does not resolve through a symlink by checking `os.path.islink()` on the full script path; IF the script path is a symlink, THEN THE Repository_Client SHALL reject the request with an error indicating symlinks are not permitted
+19. THE Repository_Client SHALL resolve the full script path using `os.path.realpath()` and verify the resolved path remains within the clone directory; IF the resolved path escapes the clone directory, THEN THE Repository_Client SHALL reject the request with an error indicating the path is outside the repository
+20. THE test suite SHALL include regression tests that verify symlink script paths are rejected and that paths resolving outside the clone directory via symlinks are rejected
 
 ### Requirement 4: Attestation Document Generation and Execution Initiation
 
@@ -327,6 +334,14 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 9. THE GHA_Server SHALL use a contextvars.ContextVar-based approach for storing per-request log context instead of a process-global mutable dictionary
 10. THE log context for one request or task SHALL NOT be visible to or modifiable by any other concurrent request or task
 11. THE Execution_Manager SHALL store execution durations in a bounded data structure (e.g., a deque with a fixed maximum length) so that the duration history does not grow without bound in long-running deployments
+12. THE GHA_Server SHALL pass all subprocess stderr output, exception messages, and external tool output through the Log_Sanitizer before logging or including in error responses; raw subprocess stderr SHALL NOT be logged or returned to callers
+13. THE Log_Sanitizer SHALL redact patterns matching: GitHub tokens (ghp_*, ghs_*, github_pat_*), credentialed URLs (https://*@*), Authorization header values, absolute file paths (/home/*, /tmp/*, /var/*), environment variable assignments (KEY=VALUE patterns containing tokens), and ASCII control characters (except newline and tab)
+14. THE GHA_Server SHALL use structured logging with JSON escaping (or `repr()`) for all user-controlled fields (repository_url, script_path, nonce values, validation error details) to prevent log injection via multi-line strings or control characters
+15. THE GHA_Server SHALL apply a maximum length cap (e.g., 256 characters) to user-controlled values before logging; values exceeding the cap SHALL be truncated with a `[truncated]` suffix
+16. THE GHA_Server SHALL NOT log raw nonce values; instead, it SHALL log a truncated hash or prefix (first 8 characters) of the nonce for correlation purposes
+17. THE GHA_Server SHALL prefer logging request IDs and execution IDs over user-supplied identifiers (repository_url, script_path) in high-frequency log paths (e.g., per-poll output retrieval)
+18. THE encrypted error envelopes returned to callers SHALL contain only categorized error descriptions (e.g., "clone_failed", "attestation_failed") without raw subprocess stderr, absolute paths, or internal configuration details
+19. THE test suite SHALL include regression tests that verify: (a) subprocess stderr containing a GitHub token is redacted before logging, (b) error responses do not contain absolute file paths, (c) multi-line user input in log fields is escaped, (d) nonce values are not logged verbatim
 
 ### Requirement 8: Security and Resource Management
 
@@ -424,6 +439,9 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE documentation SHALL suggest using --releasever lock or documenting expected package versions for audit purposes
 13. THE KIWI image description (appliance.kiwi) SHALL pin the AL2023 package repository URL to a specific release version instead of using the floating `latest` mirrorlist path, and SHALL include a comment explaining the pinning rationale and how to update it
 14. THE Dockerfile for the KIWI builder SHALL include the Go toolchain, C compilation tools (gcc, make, autoconf, automake, libtool), and meson/ninja-build required for compiling rootless Docker dependencies from source including libslirp (see Requirement 53)
+15. THE Build_Workflow SHALL pin all third-party GitHub Actions to full 40-character commit SHAs instead of mutable version tags (e.g., `actions/checkout@<full-sha>` instead of `actions/checkout@v4`); each pinned SHA SHALL include a comment indicating the corresponding version tag and date for human readability
+16. THE Dockerfile for the KIWI builder SHALL pin the base image to an immutable `@sha256:` digest (e.g., `public.ecr.aws/amazonlinux/amazonlinux:2023.10.20260302.1@sha256:abc123...`) instead of a tag-only reference; a comment SHALL document the base image tag corresponding to the pinned digest
+17. THE test suite SHALL include a CI lint check or regression test that verifies: (a) no `uses:` directives in the Build_Workflow reference mutable tags (must contain `@` followed by 40 hex characters), (b) the Dockerfile `FROM` directive contains `@sha256:`
 
 ### Requirement 12: Separate Python Dependency Configurations
 
@@ -454,6 +472,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 21. THE KIWI_Builder SHALL copy the `uv.lock` file into the KIWI image build context and use it as the authoritative source for dependency versions
 22. THE Build_Workflow SHALL install Python dependencies from the lockfile-enforced export using pip3 install --no-index --find-links (fully offline, no network required) or `uv sync --frozen`
 23. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
+24. THE test suite SHALL include regression tests that verify: (a) the build script does NOT use `pip3 download` with version ranges from `pyproject.toml` for AMI-embedded dependencies, (b) the build script uses `uv export --frozen` or equivalent to produce a hash-checked requirements file from `uv.lock`, (c) the installation step uses `--require-hashes` or `--frozen` to enforce integrity
 
 ### Requirement 13: Artifact Publishing with PCR Annotations
 
@@ -505,8 +524,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 12. THE AMI_Converter SHALL wait for instance status checks to pass using EC2 waiter
 13. THE AMI_Converter SHALL save the SSH private key to a temporary file with 600 permissions
 14. IF instance provisioning fails, THEN THE AMI_Converter SHALL fail with a descriptive error
-15. THE AMI_Converter SHALL validate the artifact_ref argument against a strict allowlist pattern matching `^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*:[a-zA-Z0-9._-]+$` (supporting ghcr.io/owner/repo/package:tag format with optional additional path segments)
+15. THE AMI_Converter SHALL validate the artifact_ref argument against a strict allowlist pattern that supports both tag-only references (`ghcr.io/owner/repo/package:tag`) and digest-pinned references (`ghcr.io/owner/repo/package@sha256:<hex64>` or `ghcr.io/owner/repo/package:tag@sha256:<hex64>`); the pattern SHALL reject shell metacharacters
 16. IF artifact_ref contains characters outside the allowlist, THEN reject and terminate before executing any remote commands
+17. THE AMI_Converter SHALL require artifact references to include an `@sha256:` digest component; IF the artifact reference does not contain `@sha256:`, THEN THE AMI_Converter SHALL terminate with an error indicating that digest-pinned references are required for production AMI builds
+18. THE Signature_Verifier SHALL verify the attestation against the exact `sha256:` digest from the artifact reference, NOT against a mutable tag
+19. THE AMI_Converter SHALL pull the artifact from GHCR using the exact `sha256:` digest from the artifact reference (e.g., `oras pull ghcr.io/owner/repo/package@sha256:abc123...`), NOT using a mutable tag
+20. THE same digest value SHALL be used for both signature verification (criterion 18) and artifact pull (criterion 19), ensuring cryptographic binding between the verified artifact and the pulled artifact
+21. IF the artifact reference contains both a tag and a digest (e.g., `ghcr.io/owner/repo/package:tag@sha256:abc123...`), THE AMI_Converter SHALL use only the digest for verification and pull, ignoring the tag
+22. THE Build_Workflow SHALL output the full digest-pinned artifact reference (including `@sha256:`) in the workflow outputs so downstream consumers (including the AMI build job) use the immutable reference
+23. THE test suite SHALL include regression tests that verify: (a) artifact references without `@sha256:` are rejected, (b) verification and pull use the same digest value, (c) mutable tag-only references are rejected
 
 ### Requirement 16: SSH Connectivity Verification
 
@@ -685,6 +711,62 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 1. THE appliance.kiwi package definition SHALL include the git package in the image packages list
 2. WHEN the KIWI image boots, THE git binary SHALL be available in the system PATH for the Repository_Client to invoke via subprocess
 3. IF the git package is not present in appliance.kiwi, THEN THE Repository_Client SHALL fail to clone repositories because the git binary is unavailable
+
+### Requirement 53: Rootless Docker Dependencies Built from Source
+
+**User Story:** As a DevOps engineer, I want rootlesskit, slirp4netns, and fuse-overlayfs compiled from source during the KIWI image build, so that rootless Docker functions correctly on AL2023 where these packages are not available in the core repository
+
+#### Acceptance Criteria
+
+##### KIWI Builder Dockerfile Prerequisites
+
+1. THE Dockerfile for the KIWI builder (`.github/docker/Dockerfile.kiwi-builder`) SHALL install the Go toolchain (golang) required for compiling rootlesskit from source
+2. THE Dockerfile for the KIWI builder SHALL install C compilation tools (gcc, make, autoconf, automake, libtool) and the Rust toolchain (cargo) required for compiling slirp4netns (C/autotools) and fuse-overlayfs (Rust) from source
+3. THE Dockerfile for the KIWI builder SHALL install library development headers required for compilation: `glib2-devel`, `libcap-devel`, `libseccomp-devel` (for slirp4netns), and `fuse3-devel` (for fuse-overlayfs); `libslirp-devel` is NOT installed as a package because libslirp is not available in AL2023 and is instead built from source within the Dockerfile
+4. THE Dockerfile SHALL install `meson` and `ninja-build` required for building libslirp from source
+5. THE Dockerfile SHALL build and install libslirp from source (downloaded as a release tarball from https://gitlab.freedesktop.org/slirp/libslirp at a pinned release tag, using `curl --retry 3 --retry-delay 5` for resilience against transient GitLab server errors) using `meson setup build && ninja -C build && ninja -C build install`, making the shared library and development headers available for the subsequent slirp4netns compilation
+6. THE Dockerfile SHALL verify the downloaded libslirp release tarball against a known SHA-256 checksum before extraction; IF the checksum does not match, THEN the build SHALL fail with an integrity verification error indicating the expected and actual checksums
+
+##### Build Script Compilation Steps
+
+7. THE build-kiwi-image.sh script SHALL compile rootlesskit from source by cloning the official repository (https://github.com/rootless-containers/rootlesskit) at a pinned release tag inside the KIWI builder Docker container, and building it using `go build` (rootlesskit is a Go project); the pinned version SHALL be v1.1.1 (the last v1.x release) because v2.x generates a third UID/GID mapping entry that causes "Invalid argument" errors from newuidmap on kernels that reject overlapping host ranges
+8. THE build-kiwi-image.sh script SHALL compile slirp4netns from source by cloning the official repository (https://github.com/rootless-containers/slirp4netns) at a pinned release tag inside the KIWI builder Docker container, and building it using the autotools build system (`./autogen.sh && ./configure && make`); slirp4netns is a C project that links against libslirp (built from source in the Dockerfile), glib2, libcap, and libseccomp
+9. THE build-kiwi-image.sh script SHALL compile fuse-overlayfs from source by cloning the official repository (https://github.com/containers/fuse-overlayfs) at a pinned release tag inside the KIWI builder Docker container, and building it using `cargo build --release` (fuse-overlayfs is a Rust project that depends on libfuse3)
+10. THE compilation of all three tools SHALL occur inside the KIWI builder Docker container (which has the correct target architecture and compilers), NOT on the GitHub Actions runner host
+11. THE compiled binaries SHALL be placed into the KIWI image overlay directory (e.g., `${TEMP_IMAGE_DIR}/root/usr/local/bin/`) so they are available in the final KIWI image at `/usr/local/bin/`
+12. THE libslirp shared library (built from source in the Dockerfile) SHALL be copied from the builder container into the KIWI image overlay at `${TEMP_IMAGE_DIR}/root/usr/local/lib64/` so it is available at runtime
+13. EACH pinned release tag SHALL be documented with a comment explaining the version choice and how to update it
+
+##### dockerd-rootless.sh Installation
+
+14. THE build-kiwi-image.sh script SHALL download `dockerd-rootless.sh` from the official Moby repository (https://github.com/moby/moby) at a pinned version tag (v20.10.27, the last 20.10.x release whose script is compatible with rootlesskit v1.x) and install it to `${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh`
+15. THE pinned Moby version SHALL be documented with a comment explaining that v25.0.x's `dockerd-rootless.sh` passes `--detach-netns` which requires rootlesskit v2.1+, and why v20.10.27 is used instead
+16. IF the download of `dockerd-rootless.sh` fails or produces an empty file, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message
+
+##### Version Pinning and Integrity
+
+17. THE rootlesskit version SHALL be pinned to v1.1.1 (the last v1.x release) rather than building from HEAD or using v2.x
+18. THE slirp4netns version SHALL be pinned to a specific release tag (e.g., `v1.3.3`) rather than building from HEAD
+19. THE fuse-overlayfs version SHALL be pinned to a specific release tag (e.g., `v1.14`) rather than building from HEAD
+20. THE libslirp version SHALL be pinned to a specific release tag (e.g., `v4.8.0`) rather than building from HEAD
+21. IF any source compilation fails, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message indicating which tool failed to compile
+22. THE build-kiwi-image.sh script SHALL pin rootlesskit, slirp4netns, and fuse-overlayfs to immutable commit SHAs rather than mutable release tags, so that tag rewriting cannot alter the compiled source; libslirp is pinned by release tag in the Dockerfile tarball URL (not a commit SHA) because it is downloaded as a release tarball rather than git-cloned
+23. THE build-kiwi-image.sh script SHALL verify GPG-signed tags or SHA-256 checksums of the cloned source trees before compilation; IF verification fails, THEN the script SHALL exit with a non-zero exit code and a descriptive error message
+24. THE `dockerd-rootless.sh` download SHALL be verified against a known SHA-256 checksum before installation; IF the checksum does not match, THEN the script SHALL exit with a non-zero exit code
+25. THE test suite SHALL include regression tests that verify all rootless Docker helper sources are pinned to immutable commits and verified by signature or checksum
+
+##### appliance.kiwi Package Changes
+
+26. THE appliance.kiwi package definition SHALL remove `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` from the `<packages type="image">` section since they are not available in the AL2023 core repository
+27. THE appliance.kiwi package definition SHALL NOT list `uidmap` as a separate package because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection
+28. THE appliance.kiwi package definition SHALL NOT list `libslirp` as a package because it is not available in AL2023; the shared library is compiled from source and copied into the image by build-kiwi-image.sh
+29. THE appliance.kiwi package definition SHALL add runtime library dependencies required by the compiled binaries: `fuse3` (runtime dependency of fuse-overlayfs), `libseccomp` (runtime dependency of slirp4netns), `glib2` (runtime dependency of slirp4netns), `libcap` (runtime dependency of slirp4netns)
+
+##### Verification
+
+30. THE config.sh script SHALL verify that `rootlesskit`, `slirp4netns`, `fuse-overlayfs`, and `dockerd-rootless.sh` are present and executable at `/usr/local/bin/` during image preparation
+31. THE config.sh script SHALL run `ldconfig` to refresh the dynamic linker cache so that `libslirp.so` in `/usr/local/lib64/` is discoverable at runtime
+32. IF any of the required binaries is missing or not executable, THEN config.sh SHALL exit with a non-zero exit code and a descriptive error message
 
 ### Requirement 44: Streaming Output Capture During Container Execution
 
@@ -1032,8 +1114,6 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 **User Story:** As a security engineer, I want encrypted requests protected against replay attacks, so that captured valid requests cannot be replayed to cause duplicate executions
 
-**Security Finding:** #9 (High)
-
 #### Acceptance Criteria
 
 1. THE GHA_Server SHALL maintain a nonce cache that tracks recently seen nonces from encrypted requests
@@ -1045,12 +1125,15 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. THE GHA_Server SHALL require a non-empty `nonce` field in the decrypted payload of every /execution/{execution_id}/output request; IF the `nonce` field is missing or empty, THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request and an error message indicating that a nonce is required
 8. THE test suite SHALL include regression tests that verify requests without a nonce are rejected with HTTP 400
 9. THE test suite SHALL include regression tests that verify requests with an empty string nonce are rejected with HTTP 400
+10. THE GHA_Server SHALL validate that the `nonce` field is of type string; IF the nonce is a non-string type (integer, boolean, list, object, null), THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request
+11. THE GHA_Server SHALL validate that the nonce length is between 16 and 256 characters (inclusive); IF the nonce is shorter than 16 or longer than 256 characters, THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request with an error indicating the nonce length is out of bounds
+12. THE GHA_Server SHALL validate that the nonce contains only URL-safe characters (alphanumeric, hyphen, underscore, period, tilde); IF the nonce contains other characters (including whitespace, control characters, or non-ASCII), THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request
+13. THE GHA_Server SHALL call `base64.b64decode()` with `validate=True` on all base64-encoded fields (`encrypted_payload`, `client_public_key`) to reject malformed base64 encodings (padding errors, illegal characters) before processing; IF strict base64 decoding fails, THEN THE GHA_Server SHALL reject the request with HTTP 400 Bad Request
+14. THE test suite SHALL include regression tests that verify: (a) non-string nonce values are rejected, (b) nonces shorter than 16 characters are rejected, (c) nonces longer than 256 characters are rejected, (d) nonces with control characters or non-URL-safe characters are rejected, (e) malformed base64 in encrypted_payload is rejected with strict validation
 
 ### Requirement 46: Debug Image Annotation and Production Gate
 
 **User Story:** As a security engineer, I want SSH-enabled debug images annotated with a machine-readable marker and production AMI builds gated against debug artifacts, so that debug images cannot be accidentally deployed to production
-
-**Security Finding:** #14 (Medium)
 
 #### Acceptance Criteria
 
@@ -1067,8 +1150,6 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 ### Requirement 47: Artifact Provenance Workflow Verification
 
 **User Story:** As a security engineer, I want the AMI converter to optionally verify the producing workflow identity in the attestation, so that only artifacts from a specific trusted workflow are accepted
-
-**Security Finding:** #17 (Medium)
 
 #### Acceptance Criteria
 
@@ -1101,8 +1182,6 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 ### Requirement 49: Systemd Service Hardening
 
 **User Story:** As a security engineer, I want the host executor systemd service hardened with security directives, so that a container breakout has reduced impact on the host
-
-**Security Finding:** #22 (Medium)
 
 #### Acceptance Criteria
 
@@ -1139,8 +1218,6 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 
 **User Story:** As a security engineer, I want the AMI build instance IAM permissions scoped to the specific region and account, so that compromise of the build instance does not grant account-wide image manipulation capability
 
-**Security Finding:** #24 (High)
-
 #### Acceptance Criteria
 
 1. THE Terraform IAM policy for the Build_Instance SHALL scope EC2 and EBS permissions to the specific AWS region using resource ARN patterns
@@ -1159,61 +1236,26 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 3. THE Script_Executor SHALL accept an optional `script_env` parameter in `execute_async` and `_execute_in_container` and pass it as the `environment` parameter to the Docker container creation call.
 4. WHEN `script_env` is not provided or is empty, THE Execution_Container SHALL be created with an empty environment (no additional environment variables beyond Docker defaults).
 5. THE `script_env` field SHALL NOT be a required field; omitting it SHALL NOT cause request validation to fail.
-6. THE Request_Validator SHALL NOT validate the contents of `script_env` beyond type checking (string keys and string values); the field is opaque to the server.
+6. THE Request_Validator SHALL NOT validate the contents of `script_env` beyond type checking (string keys and string values) and deny-list enforcement (see criteria 7-11).
+7. THE GHA_Server SHALL maintain a configurable Script_Env_Deny_List of environment variable key names that are rejected when present in `script_env`; the default deny-list SHALL include at minimum: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `BASH_FUNC_*` (prefix match), `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PROMPT_COMMAND`, `PS1`, `PS2`, `PS4`, `IFS`, `CDPATH`, `GLOBIGNORE`, `BASH_XTRACEFD`
+8. IF any key in `script_env` matches an entry in the Script_Env_Deny_List (exact match or prefix match for wildcard entries like `BASH_FUNC_*`), THEN THE GHA_Server SHALL reject the request with an error indicating the environment variable key is not permitted
+9. THE Script_Env_Deny_List SHALL be configurable via a SCRIPT_ENV_DENY_LIST environment variable (comma-separated list of key names or key prefixes ending with `*`); IF not configured, THE default deny-list SHALL be used
+10. THE attestation user_data `script_env_hash` field SHALL continue to include all requested keys (including denied ones) in its computation, so that consumers can detect attempts to inject denied variables even if the server rejects them
+11. THE test suite SHALL include regression tests that verify: (a) `BASH_ENV` in script_env is rejected, (b) `PATH` in script_env is rejected, (c) `LD_PRELOAD` in script_env is rejected, (d) keys matching `BASH_FUNC_*` prefix are rejected, (e) non-denied keys like `GITHUB_TOKEN` are accepted
 
-## Image Provisioning Requirements (continued)
 
-### Requirement 53: Rootless Docker Dependencies Built from Source
+### Requirement 54: Runtime Image Package Minimization
 
-**User Story:** As a DevOps engineer, I want rootlesskit, slirp4netns, and fuse-overlayfs compiled from source during the KIWI image build, so that rootless Docker functions correctly on AL2023 where these packages are not available in the core repository
+**User Story:** As a security engineer, I want the runtime AMI to contain only packages justified for executor operation, so that a compromised executor or container escape does not gain extra post-compromise tooling
 
 #### Acceptance Criteria
 
-##### KIWI Builder Dockerfile Prerequisites
-
-1. THE Dockerfile for the KIWI builder (`.github/docker/Dockerfile.kiwi-builder`) SHALL install the Go toolchain (golang) required for compiling rootlesskit from source
-2. THE Dockerfile for the KIWI builder SHALL install C compilation tools (gcc, make, autoconf, automake, libtool) and the Rust toolchain (cargo) required for compiling slirp4netns (C/autotools) and fuse-overlayfs (Rust) from source
-3. THE Dockerfile for the KIWI builder SHALL install library development headers required for compilation: `glib2-devel`, `libcap-devel`, `libseccomp-devel` (for slirp4netns), and `fuse3-devel` (for fuse-overlayfs); `libslirp-devel` is NOT installed as a package because libslirp is not available in AL2023 and is instead built from source within the Dockerfile
-4. THE Dockerfile SHALL install `meson` and `ninja-build` required for building libslirp from source
-5. THE Dockerfile SHALL build and install libslirp from source (downloaded as a release tarball from https://gitlab.freedesktop.org/slirp/libslirp at a pinned release tag, using `curl --retry 3 --retry-delay 5` for resilience against transient GitLab server errors) using `meson setup build && ninja -C build && ninja -C build install`, making the shared library and development headers available for the subsequent slirp4netns compilation
-
-##### Build Script Compilation Steps
-
-6. THE build-kiwi-image.sh script SHALL compile rootlesskit from source by cloning the official repository (https://github.com/rootless-containers/rootlesskit) at a pinned release tag inside the KIWI builder Docker container, and building it using `go build` (rootlesskit is a Go project); the pinned version SHALL be v1.1.1 (the last v1.x release) because v2.x generates a third UID/GID mapping entry that causes "Invalid argument" errors from newuidmap on kernels that reject overlapping host ranges
-7. THE build-kiwi-image.sh script SHALL compile slirp4netns from source by cloning the official repository (https://github.com/rootless-containers/slirp4netns) at a pinned release tag inside the KIWI builder Docker container, and building it using the autotools build system (`./autogen.sh && ./configure && make`); slirp4netns is a C project that links against libslirp (built from source in the Dockerfile), glib2, libcap, and libseccomp
-8. THE build-kiwi-image.sh script SHALL compile fuse-overlayfs from source by cloning the official repository (https://github.com/containers/fuse-overlayfs) at a pinned release tag inside the KIWI builder Docker container, and building it using `cargo build --release` (fuse-overlayfs is a Rust project that depends on libfuse3)
-9. THE compilation of all three tools SHALL occur inside the KIWI builder Docker container (which has the correct target architecture and compilers), NOT on the GitHub Actions runner host
-10. THE compiled binaries SHALL be placed into the KIWI image overlay directory (e.g., `${TEMP_IMAGE_DIR}/root/usr/local/bin/`) so they are available in the final KIWI image at `/usr/local/bin/`
-11. THE libslirp shared library (built from source in the Dockerfile) SHALL be copied from the builder container into the KIWI image overlay at `${TEMP_IMAGE_DIR}/root/usr/local/lib64/` so it is available at runtime
-12. EACH pinned release tag SHALL be documented with a comment explaining the version choice and how to update it
-
-##### dockerd-rootless.sh Installation
-
-13. THE build-kiwi-image.sh script SHALL download `dockerd-rootless.sh` from the official Moby repository (https://github.com/moby/moby) at a pinned version tag (v20.10.27, the last 20.10.x release whose script is compatible with rootlesskit v1.x) and install it to `${TEMP_IMAGE_DIR}/root/usr/local/bin/dockerd-rootless.sh`
-14. THE pinned Moby version SHALL be documented with a comment explaining that v25.0.x's `dockerd-rootless.sh` passes `--detach-netns` which requires rootlesskit v2.1+, and why v20.10.27 is used instead
-15. IF the download of `dockerd-rootless.sh` fails or produces an empty file, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message
-
-##### Version Pinning and Integrity
-
-16. THE rootlesskit version SHALL be pinned to v1.1.1 (the last v1.x release) rather than building from HEAD or using v2.x
-17. THE slirp4netns version SHALL be pinned to a specific release tag (e.g., `v1.3.3`) rather than building from HEAD
-18. THE fuse-overlayfs version SHALL be pinned to a specific release tag (e.g., `v1.14`) rather than building from HEAD
-19. THE libslirp version SHALL be pinned to a specific release tag (e.g., `v4.8.0`) rather than building from HEAD
-20. IF any source compilation fails, THEN THE build-kiwi-image.sh script SHALL exit with a non-zero exit code and a descriptive error message indicating which tool failed to compile
-21. THE build-kiwi-image.sh script SHALL pin rootlesskit, slirp4netns, and fuse-overlayfs to immutable commit SHAs rather than mutable release tags, so that tag rewriting cannot alter the compiled source; libslirp is pinned by release tag in the Dockerfile tarball URL (not a commit SHA) because it is downloaded as a release tarball rather than git-cloned
-22. THE build-kiwi-image.sh script SHALL verify GPG-signed tags or SHA-256 checksums of the cloned source trees before compilation; IF verification fails, THEN the script SHALL exit with a non-zero exit code and a descriptive error message
-23. THE `dockerd-rootless.sh` download SHALL be verified against a known SHA-256 checksum before installation; IF the checksum does not match, THEN the script SHALL exit with a non-zero exit code
-24. THE test suite SHALL include regression tests that verify all rootless Docker helper sources are pinned to immutable commits and verified by signature or checksum
-
-##### appliance.kiwi Package Changes
-
-21. THE appliance.kiwi package definition SHALL remove `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` from the `<packages type="image">` section since they are not available in the AL2023 core repository
-22. THE appliance.kiwi package definition SHALL NOT list `uidmap` as a separate package because `shadow-utils` (which provides `newuidmap`/`newgidmap`) is already included via the AL2023 core collection
-23. THE appliance.kiwi package definition SHALL NOT list `libslirp` as a package because it is not available in AL2023; the shared library is compiled from source and copied into the image by build-kiwi-image.sh
-24. THE appliance.kiwi package definition SHALL add runtime library dependencies required by the compiled binaries: `fuse3` (runtime dependency of fuse-overlayfs), `libseccomp` (runtime dependency of slirp4netns), `glib2` (runtime dependency of slirp4netns), `libcap` (runtime dependency of slirp4netns)
-
-##### Verification
-
-25. THE config.sh script SHALL verify that `rootlesskit`, `slirp4netns`, `fuse-overlayfs`, and `dockerd-rootless.sh` are present and executable at `/usr/local/bin/` during image preparation
-26. THE config.sh script SHALL run `ldconfig` to refresh the dynamic linker cache so that `libslirp.so` in `/usr/local/lib64/` is discoverable at runtime
-27. IF any of the required binaries is missing or not executable, THEN config.sh SHALL exit with a non-zero exit code and a descriptive error message
+1. THE appliance.kiwi package definition SHALL maintain a documented runtime package allow-list with explicit justification for each included package
+2. THE appliance.kiwi package definition SHALL NOT include `awscli` in the runtime image; the Remote Executor does not use AWS CLI at runtime (boto3 is only used by build/deployment scripts that run outside the KIWI image)
+3. THE appliance.kiwi package definition SHALL NOT include `binutils` in the runtime image; binary inspection tools are not required for executor operation
+4. THE appliance.kiwi package definition SHALL NOT include `python3.11-pip` in the runtime image; Python dependencies are pre-installed during the KIWI image build phase and pip is not needed at runtime
+5. THE appliance.kiwi package definition SHALL NOT include `pciutils` in the runtime image; PCI device enumeration is not required for executor operation
+6. THE `git` package SHALL remain in the runtime image with explicit justification: it is required by the Repository_Client for `git clone`, `git checkout`, and `git remote set-url` operations at runtime; the justification SHALL be documented as a comment in appliance.kiwi
+7. THE `tar` and `gzip` packages SHALL be evaluated for runtime necessity; IF they are only required as transitive dependencies of other packages (e.g., Docker), they SHALL remain; IF they are not required by any runtime dependency chain, they SHALL be removed
+8. THE appliance.kiwi file SHALL include a comment block at the top of the `<packages type="image">` section documenting the package allow-list policy: "Only packages with documented runtime justification are included. Build/debug/admin tools must not be present in the production image."
+9. THE test suite SHALL include a regression test that parses appliance.kiwi and verifies that `awscli`, `binutils`, `python3.11-pip`, and `pciutils` are NOT present in the `<packages type="image">` section
