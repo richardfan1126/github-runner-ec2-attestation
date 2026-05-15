@@ -22,7 +22,8 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-24.04
     outputs:
-      artifact_ref: ${{ steps.push.outputs.artifact_ref }}
+      artifact_ref: ${{ steps.push.outputs.artifact_ref_digest }}
+      artifact_ref_tag: ${{ steps.push.outputs.artifact_ref }}
     
     steps:
       - name: Checkout repository
@@ -158,12 +159,16 @@ jobs:
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
           echo "artifact_ref=$ARTIFACT_REF" >> $GITHUB_OUTPUT
           
-          # subject-name for attestation must be the image name without the tag
+          # Output the full digest-pinned reference for downstream consumers
+          # This immutable reference prevents TOCTOU attacks via tag movement
           SUBJECT_NAME="ghcr.io/${REPO_LOWER}/attestable-image"
+          ARTIFACT_REF_DIGEST="${SUBJECT_NAME}@${DIGEST}"
+          echo "artifact_ref_digest=$ARTIFACT_REF_DIGEST" >> $GITHUB_OUTPUT
           echo "subject_name=$SUBJECT_NAME" >> $GITHUB_OUTPUT
           
           echo "### Artifact Published" >> $GITHUB_STEP_SUMMARY
-          echo "- **Reference**: \`$ARTIFACT_REF\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reference (tag)**: \`$ARTIFACT_REF\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reference (digest-pinned)**: \`$ARTIFACT_REF_DIGEST\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Digest**: \`$DIGEST\`" >> $GITHUB_STEP_SUMMARY
       
       - name: Generate build provenance attestation
@@ -179,7 +184,8 @@ jobs:
           echo "## Build Complete ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Artifact Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **Reference**: \`${{ steps.push.outputs.artifact_ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reference (digest-pinned)**: \`${{ steps.push.outputs.artifact_ref_digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reference (tag)**: \`${{ steps.push.outputs.artifact_ref }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Digest**: \`${{ steps.push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Tag**: \`${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -195,13 +201,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "To verify the attestation:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "gh attestation verify oci://${{ steps.push.outputs.artifact_ref }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "gh attestation verify oci://${{ steps.push.outputs.artifact_ref_digest }} \\" >> $GITHUB_STEP_SUMMARY
           echo "  --owner ${{ github.repository_owner }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "To pull the artifact:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "oras pull ${{ steps.push.outputs.artifact_ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "oras pull ${{ steps.push.outputs.artifact_ref_digest }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   build-ami:

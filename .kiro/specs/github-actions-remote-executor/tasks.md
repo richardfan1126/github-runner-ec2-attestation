@@ -18,7 +18,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - If both tag and digest are present, use only the digest for verification and pull
     - _Requirements: 15.17, 15.18, 15.19, 15.20, 15.21_
 
-  - [ ] 184.2 Output digest-pinned artifact reference from Build Workflow
+  - [x] 184.2 Output digest-pinned artifact reference from Build Workflow
     - In `.github/workflows/build-attestable-image.yml`, after ORAS push, capture the full digest-pinned reference (including `@sha256:`) and output it as a workflow output for downstream consumers
     - _Requirements: 15.22_
 
