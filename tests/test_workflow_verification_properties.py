@@ -25,12 +25,13 @@ spec.loader.exec_module(build_ami)
 # --- Strategies ---
 
 def artifact_ref_strategy():
-    """Generate valid GHCR artifact references."""
+    """Generate valid GHCR artifact references with digest pins."""
     return st.builds(
-        lambda owner, repo, tag: f"ghcr.io/{owner}/{repo}:{tag}",
+        lambda owner, repo, tag, digest: f"ghcr.io/{owner}/{repo}:{tag}@sha256:{digest}",
         owner=st.from_regex(r"[a-z][a-z0-9\-]{0,9}", fullmatch=True),
         repo=st.from_regex(r"[a-z][a-z0-9\-]{0,9}", fullmatch=True),
         tag=st.from_regex(r"[a-z0-9][a-z0-9.\-]{0,9}", fullmatch=True),
+        digest=st.from_regex(r"[0-9a-f]{64}", fullmatch=True),
     )
 
 

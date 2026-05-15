@@ -51,28 +51,90 @@ def validate_artifact_reference(artifact_ref: str) -> None:
     """
     Validate artifact reference format against a strict allowlist pattern.
 
-    Expected format: ghcr.io/owner/repo/package:tag where each path segment
-    and the tag contain only alphanumeric characters, dots, hyphens, and
-    underscores. At least two path segments (owner/repo) are required; an
-    optional third segment (package name) is also supported, matching the
-    GHCR package naming convention ghcr.io/<owner>/<repo>/<package>:<tag>.
+    Expected format: ghcr.io/owner/repo/package:tag@sha256:<hex64> or
+    ghcr.io/owner/repo/package@sha256:<hex64>. A digest-pinned reference
+    (@sha256:<64 hex chars>) is REQUIRED. Each path segment and optional tag
+    contain only alphanumeric characters, dots, hyphens, and underscores.
+    At least two path segments (owner/repo) are required; an optional third
+    segment (package name) is also supported.
+
+    If both a tag and digest are present, the digest is authoritative for
+    verification and pull operations.
 
     Args:
         artifact_ref: GitHub Container Registry artifact reference
 
     Raises:
-        ValueError: If artifact reference format is invalid or contains
-                    characters outside the allowlist
+        ValueError: If artifact reference format is invalid, contains
+                    characters outside the allowlist, or is missing a
+                    digest-pinned reference
+
+    Requirements: 15.17, 15.18, 15.19, 15.20, 15.21
     """
-    pattern = r'^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*:[a-zA-Z0-9._-]+$'
+    # Require @sha256:<hex64> digest pin
+    if '@sha256:' not in artifact_ref:
+        raise ValueError(
+            f"Artifact reference must be digest-pinned: {artifact_ref}. "
+            "Expected @sha256:<64 hex chars> in the reference. "
+            "Tag-only references are not accepted — use a digest-pinned reference "
+            "(e.g., ghcr.io/owner/repo/package:tag@sha256:abc123...)."
+        )
+
+    # Pattern: ghcr.io/owner/repo[/package...][:tag]@sha256:<64 hex chars>
+    pattern = (
+        r'^ghcr\.io/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*'
+        r'(?::[a-zA-Z0-9._-]+)?'
+        r'@sha256:[0-9a-fA-F]{64}$'
+    )
     if not re.match(pattern, artifact_ref):
         raise ValueError(
             f"Invalid artifact reference format: {artifact_ref}. "
-            "Expected format: ghcr.io/owner/repo/package:tag "
-            "(only alphanumeric, dots, hyphens, and underscores allowed)"
+            "Expected format: ghcr.io/owner/repo/package[:tag]@sha256:<64 hex chars> "
+            "(only alphanumeric, dots, hyphens, and underscores allowed in path/tag)"
         )
 
     logger.info(f"Artifact reference validated: {artifact_ref}")
+
+
+def extract_digest_from_artifact_ref(artifact_ref: str) -> str:
+    """
+    Extract the sha256 digest from a digest-pinned artifact reference.
+
+    Args:
+        artifact_ref: Validated artifact reference containing @sha256:<hex64>
+
+    Returns:
+        The full digest string including prefix, e.g. "sha256:abcdef..."
+
+    Raises:
+        ValueError: If no digest found in the reference
+    """
+    if '@sha256:' not in artifact_ref:
+        raise ValueError(f"No digest found in artifact reference: {artifact_ref}")
+    digest = artifact_ref.split('@', 1)[1]  # "sha256:<hex64>"
+    return digest
+
+
+def get_digest_pinned_ref(artifact_ref: str) -> str:
+    """
+    Get the digest-only reference (without tag) for pull/verify operations.
+
+    Given ghcr.io/owner/repo/pkg:tag@sha256:abc..., returns
+    ghcr.io/owner/repo/pkg@sha256:abc... (tag stripped, digest retained).
+
+    Args:
+        artifact_ref: Validated artifact reference
+
+    Returns:
+        Reference using only the digest (no tag)
+    """
+    # Split at @sha256: to get the base and digest
+    base, digest = artifact_ref.split('@', 1)
+    # Strip the tag from the base if present
+    if ':' in base.split('/')[-1]:
+        # There's a tag — remove it
+        base = base.rsplit(':', 1)[0]
+    return f"{base}@{digest}"
 
 
 def validate_aws_region(region: str) -> None:
@@ -767,19 +829,22 @@ def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -
     Pull artifact bundle from GitHub Container Registry using ORAS.
     
     Creates ~/artifacts directory on the build instance, executes oras pull
-    to download the artifact bundle, streams output to logger, verifies
-    exit code is 0, and lists downloaded files with sizes.
+    to download the artifact bundle using the exact sha256 digest (ignoring
+    any mutable tag), streams output to logger, verifies exit code is 0,
+    and lists downloaded files with sizes.
     
     Args:
         ssh_client: Connected paramiko SSHClient
-        artifact_ref: GitHub Container Registry artifact reference
+        artifact_ref: GitHub Container Registry artifact reference (digest-pinned)
     
     Raises:
         RuntimeError: If directory creation, ORAS pull, or file listing fails
     
-    Requirements: 18.1, 18.2, 18.3, 18.8, 18.9
+    Requirements: 15.19, 18.1, 18.2, 18.3, 18.8, 18.9
     """
-    logger.info(f"Pulling artifact from GHCR: {artifact_ref}")
+    # Use only the digest for the pull — ignore any mutable tag
+    digest_ref = get_digest_pinned_ref(artifact_ref)
+    logger.info(f"Pulling artifact from GHCR using digest: {digest_ref}")
     
     # Create working directory for artifacts
     exit_code, _, stderr = execute_remote_command(
@@ -791,9 +856,9 @@ def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -
     if exit_code != 0:
         raise RuntimeError(f"Failed to create artifacts directory: {stderr}")
     
-    # Pull artifacts using ORAS (no authentication required for public repos)
+    # Pull artifacts using ORAS with digest-pinned reference (no authentication required for public repos)
     logger.info("Downloading artifacts with ORAS...")
-    pull_cmd = f"cd ~/artifacts && oras pull {artifact_ref}"
+    pull_cmd = f"cd ~/artifacts && oras pull {digest_ref}"
     
     exit_code, stdout, stderr = execute_remote_command(ssh_client, pull_cmd, stream_output=True)
     
@@ -864,9 +929,12 @@ def check_debug_annotation(ssh_client: paramiko.SSHClient, artifact_ref: str, al
     JSON, parses it to find the `debug` annotation, and enforces the production
     gate: debug artifacts are rejected unless --allow-debug is provided.
 
+    Uses the digest-pinned reference to ensure the manifest check targets the
+    exact same immutable content as the pull and verification steps.
+
     Args:
         ssh_client: Connected paramiko SSHClient
-        artifact_ref: GitHub Container Registry artifact reference
+        artifact_ref: GitHub Container Registry artifact reference (digest-pinned)
         allow_debug: Whether --allow-debug CLI flag was provided
 
     Raises:
@@ -876,9 +944,12 @@ def check_debug_annotation(ssh_client: paramiko.SSHClient, artifact_ref: str, al
     """
     logger.info("Checking debug annotation on artifact...")
 
+    # Use digest-pinned reference for manifest fetch
+    digest_ref = get_digest_pinned_ref(artifact_ref)
+
     exit_code, stdout, stderr = execute_remote_command(
         ssh_client,
-        f"oras manifest fetch {artifact_ref}",
+        f"oras manifest fetch {digest_ref}",
         stream_output=False
     )
 
@@ -1003,20 +1074,33 @@ def verify_artifact_signature(
     """
     Verify artifact signature using gh attestation.
     
+    Uses the exact sha256 digest from the artifact reference for verification,
+    ensuring the same immutable content that was referenced is what gets verified
+    (preventing TOCTOU attacks via tag movement).
+    
     Args:
         ssh_client: Connected paramiko SSHClient
-        artifact_ref: GitHub Container Registry artifact reference
+        artifact_ref: GitHub Container Registry artifact reference (digest-pinned)
         expected_workflow: Optional expected workflow file path for provenance verification.
             When provided, the attestation's workflow identity is verified against this path.
     
     Returns:
         True if verification succeeds, False otherwise
+    
+    Requirements: 15.20, 15.21
     """
     logger.info("Verifying artifact signature with gh attestation ...")
     
+    # Extract the digest directly from the artifact reference — do NOT recompute
+    # from a manifest fetch, which would be vulnerable to TOCTOU if the tag moved.
+    digest = extract_digest_from_artifact_ref(artifact_ref)
+    digest_ref = get_digest_pinned_ref(artifact_ref)
+    logger.info(f"Using pinned digest for verification: {digest}")
+    
     # Extract repository information from artifact reference
-    # Format: ghcr.io/owner/repo:tag or ghcr.io/owner/repo:tag@sha256:digest
-    parts = artifact_ref.replace('ghcr.io/', '').split(':')[0].split('/')
+    # Format: ghcr.io/owner/repo/package[:tag]@sha256:digest
+    base_path = artifact_ref.replace('ghcr.io/', '').split('@')[0].split(':')[0]
+    parts = base_path.split('/')
     if len(parts) >= 2:
         owner = parts[0]
         repo = parts[1]
@@ -1029,23 +1113,23 @@ def verify_artifact_signature(
     logger.info(f"Using attestation identity: {identity}")
 
     verify_cmd = f"""
-    # Extract the image digest using oras manifest
-    DIGEST=$(oras manifest fetch {artifact_ref} | sha256sum | cut -d ' ' -f 1)
+    # Use the exact digest from the artifact reference (no manifest fetch needed)
+    DIGEST="{digest}"
 
-    # Download GitHub attestation bundle
-    curl -sL "https://api.github.com/repos/{owner}/{repo}/attestations/sha256:${{DIGEST}}" \
+    # Download GitHub attestation bundle using the pinned digest
+    curl -sL "https://api.github.com/repos/{owner}/{repo}/attestations/${{DIGEST}}" \
         | jq -cr '.attestations[0].bundle' > bundle.json
 
     # Offline attestation verify with JSON output for policy enforcement
     # Do NOT set GH_FORCE_TTY here — it injects ANSI escape codes that break jq parsing
-    gh attestation verify oci://{artifact_ref} \
+    gh attestation verify oci://{digest_ref} \
         -R {identity} \
         -b bundle.json \
         --format json > attestation_result.json
 
     # Also print human-readable output for logging
     # Set GH_FORCE_TTY=1 to force gh outputting result
-    GH_FORCE_TTY=1 gh attestation verify oci://{artifact_ref} \
+    GH_FORCE_TTY=1 gh attestation verify oci://{digest_ref} \
         -R {identity} \
         -b bundle.json
     """
@@ -1399,7 +1483,10 @@ def parse_arguments() -> argparse.Namespace:
         '--artifact-ref',
         type=str,
         required=True,
-        help='GitHub Container Registry artifact reference (e.g., ghcr.io/owner/repo:tag@sha256:digest)'
+        help='GitHub Container Registry artifact reference with digest pin '
+             '(e.g., ghcr.io/owner/repo/package:tag@sha256:<64 hex chars> or '
+             'ghcr.io/owner/repo/package@sha256:<64 hex chars>). '
+             'A @sha256: digest is REQUIRED; tag-only references are rejected.'
     )
     
     parser.add_argument(

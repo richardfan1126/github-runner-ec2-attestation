@@ -159,13 +159,13 @@ def test_property_162_debug_image_production_gate(debug_value, allow_debug):
         if debug_value == "true" and not allow_debug:
             # Should refuse to build
             with pytest.raises(RuntimeError, match="REFUSING TO BUILD"):
-                build_ami.check_debug_annotation(mock_client, "ghcr.io/owner/repo:tag", allow_debug)
+                build_ami.check_debug_annotation(mock_client, f"ghcr.io/owner/repo:tag@sha256:{'a' * 64}", allow_debug)
         elif debug_value == "true" and allow_debug:
             # Should proceed with warning (no exception)
-            build_ami.check_debug_annotation(mock_client, "ghcr.io/owner/repo:tag", allow_debug)
+            build_ami.check_debug_annotation(mock_client, f"ghcr.io/owner/repo:tag@sha256:{'a' * 64}", allow_debug)
         else:
             # debug=false → should always proceed
-            build_ami.check_debug_annotation(mock_client, "ghcr.io/owner/repo:tag", allow_debug)
+            build_ami.check_debug_annotation(mock_client, f"ghcr.io/owner/repo:tag@sha256:{'a' * 64}", allow_debug)
 
 
 @settings(max_examples=100)
@@ -184,7 +184,7 @@ def test_property_162_no_debug_annotation_proceeds(allow_debug):
 
     with patch.object(build_ami, "execute_remote_command", mock_execute):
         # Should not raise
-        build_ami.check_debug_annotation(mock_client, "ghcr.io/owner/repo:tag", allow_debug)
+        build_ami.check_debug_annotation(mock_client, f"ghcr.io/owner/repo:tag@sha256:{'a' * 64}", allow_debug)
 
 
 @settings(max_examples=100)
@@ -208,7 +208,7 @@ def test_property_162_only_exact_true_blocks(annotation_value, allow_debug):
     with patch.object(build_ami, "execute_remote_command", mock_execute):
         if annotation_value == "true" and not allow_debug:
             with pytest.raises(RuntimeError, match="REFUSING TO BUILD"):
-                build_ami.check_debug_annotation(mock_client, "ghcr.io/owner/repo:tag", allow_debug)
+                build_ami.check_debug_annotation(mock_client, f"ghcr.io/owner/repo:tag@sha256:{'a' * 64}", allow_debug)
         else:
             # All other values should proceed without error
-            build_ami.check_debug_annotation(mock_client, "ghcr.io/owner/repo:tag", allow_debug)
+            build_ami.check_debug_annotation(mock_client, f"ghcr.io/owner/repo:tag@sha256:{'a' * 64}", allow_debug)

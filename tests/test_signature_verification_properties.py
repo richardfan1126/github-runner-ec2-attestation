@@ -23,14 +23,15 @@ build_ami = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_ami)
 
 
-# Strategy for generating valid artifact references in ghcr.io/owner/repo:tag format
+# Strategy for generating valid artifact references in ghcr.io/owner/repo:tag@sha256:<hex64> format
 def artifact_ref_strategy():
-    """Generate valid GHCR artifact references."""
+    """Generate valid GHCR artifact references with digest pins."""
     return st.builds(
-        lambda owner, repo, tag: f"ghcr.io/{owner}/{repo}:{tag}",
+        lambda owner, repo, tag, digest: f"ghcr.io/{owner}/{repo}:{tag}@sha256:{digest}",
         owner=st.from_regex(r"[a-z][a-z0-9\-]{0,19}", fullmatch=True),
         repo=st.from_regex(r"[a-z][a-z0-9\-]{0,19}", fullmatch=True),
         tag=st.from_regex(r"[a-z0-9][a-z0-9.\-]{0,19}", fullmatch=True),
+        digest=st.from_regex(r"[0-9a-f]{64}", fullmatch=True),
     )
 
 
@@ -117,18 +118,21 @@ def test_verify_signature_extracts_owner_repo_and_constructs_commands(artifact_r
     """
     Property 67: Signature Verification Requirement
 
-    For any valid artifact reference, the verification function should extract
-    owner/repo correctly and construct the right commands (oras manifest fetch,
-    curl for attestation bundle, gh attestation verify).
+    For any valid digest-pinned artifact reference, the verification function
+    should extract owner/repo correctly and construct the right commands using
+    the pinned digest (not a mutable tag).
 
-    **Validates: Requirements 17.9, 17.10, 17.12**
+    **Validates: Requirements 17.9, 17.10, 17.12, 15.20, 15.21**
     """
     mock_ssh_client = Mock()
 
     # Parse expected owner/repo from artifact_ref
-    parts = artifact_ref.replace("ghcr.io/", "").split(":")[0].split("/")
+    parts = artifact_ref.replace("ghcr.io/", "").split("@")[0].split(":")[0].split("/")
     expected_owner = parts[0]
     expected_repo = parts[1]
+
+    # Extract expected digest
+    expected_digest = artifact_ref.split("@")[1]  # sha256:<hex64>
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
         mock_execute.return_value = (0, "verification output", "")
@@ -143,11 +147,9 @@ def test_verify_signature_extracts_owner_repo_and_constructs_commands(artifact_r
         # Get the command that was executed
         cmd = mock_execute.call_args[0][1]
 
-        # Verify the command contains key verification steps
-        assert "oras manifest fetch" in cmd, \
-            "Command should include oras manifest fetch"
-        assert "sha256sum" in cmd, \
-            "Command should calculate sha256 digest"
+        # Verify the command uses the pinned digest directly (no oras manifest fetch)
+        assert expected_digest in cmd, \
+            "Command should use the pinned digest from the artifact reference"
         assert f"api.github.com/repos/{expected_owner}/{expected_repo}/attestations" in cmd, \
             "Command should download attestation from correct GitHub API endpoint"
         assert "gh attestation verify" in cmd, \
@@ -174,7 +176,7 @@ def test_verify_signature_returns_true_on_success(exit_code: int):
         mock_execute.return_value = (exit_code, "verified", "")
 
         result = build_ami.verify_artifact_signature(
-            mock_ssh_client, "ghcr.io/myowner/myrepo:latest"
+            mock_ssh_client, f"ghcr.io/myowner/myrepo:latest@sha256:{'a' * 64}"
         )
 
         assert result is True, \
@@ -197,7 +199,7 @@ def test_verify_signature_returns_false_on_failure(exit_code: int):
         mock_execute.return_value = (exit_code, "", "verification failed")
 
         result = build_ami.verify_artifact_signature(
-            mock_ssh_client, "ghcr.io/myowner/myrepo:latest"
+            mock_ssh_client, f"ghcr.io/myowner/myrepo:latest@sha256:{'a' * 64}"
         )
 
         assert result is False, \
@@ -284,7 +286,7 @@ def test_untrusted_artifact_with_various_failure_codes(exit_code: int):
         mock_execute.return_value = (exit_code, "", "attestation not found")
 
         result = build_ami.verify_artifact_signature(
-            mock_ssh_client, "ghcr.io/testowner/testrepo:v1.0"
+            mock_ssh_client, f"ghcr.io/testowner/testrepo:v1.0@sha256:{'b' * 64}"
         )
 
         assert result is False, \
@@ -303,9 +305,10 @@ def test_unparseable_artifact_ref_returns_false():
     mock_ssh_client = Mock()
 
     with patch.object(build_ami, 'execute_remote_command') as mock_execute:
-        # Artifact ref with no owner/repo structure
+        # Artifact ref with no owner/repo structure but has a digest
+        # (so extract_digest_from_artifact_ref won't raise)
         result = build_ami.verify_artifact_signature(
-            mock_ssh_client, "invalid-ref"
+            mock_ssh_client, f"invalid-ref@sha256:{'c' * 64}"
         )
 
         assert result is False, \

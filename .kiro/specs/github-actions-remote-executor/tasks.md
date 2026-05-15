@@ -10,7 +10,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [ ] 184. Security hardening: Immutable artifact digest pinning, credential isolation, strict nonce/base64 validation, CI action pinning, script_env deny-list, symlink-safe script validation, runtime image minimization, log sanitization
 
-  - [ ] 184.1 Require digest-pinned artifact references in build-ami.py
+  - [x] 184.1 Require digest-pinned artifact references in build-ami.py
     - Update `validate_artifact_reference()` regex in `scripts/build-ami.py` to accept and require `@sha256:<hex64>` in the artifact reference (in addition to or instead of `:tag`)
     - If artifact_ref does not contain `@sha256:`, terminate with error indicating digest-pinned references are required
     - Update `verify_artifact_signature()` to verify against the exact `sha256:` digest from the artifact reference, not a mutable tag
