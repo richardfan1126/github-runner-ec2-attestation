@@ -8,7 +8,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [x] 1. Tasks 1–183 (completed): Project structure, configuration, data models, request validation, repository client, attestation generator, execution management, output collection, script executor, HTTP server, OIDC authentication, PQ Hybrid KEM encryption, anti-replay nonce cache, concurrency enforcement, contextvars logging, Docker container security, rootless Docker migration, KIWI image build infrastructure, GitHub Actions workflow, AMI converter, deployment, cleanup, debug SSH, security hardening (mandatory nonces, request body limits, encrypted error envelopes, execution_id binding, post-clone cleanup, strict boolean parsing, raw filename sanitization, debug gate fail-closed, lockfile-enforced deps, helper source integrity, UID pinning, LimitCORE=0, OutputCollector config passthrough), script environment variable forwarding, health endpoint hardening, container image digest pinning, rootless Docker dependencies built from source, and comprehensive property/unit/integration tests
 
-- [ ] 184. Security hardening: Immutable artifact digest pinning, credential isolation, strict nonce/base64 validation, CI action pinning, script_env deny-list, symlink-safe script validation, runtime image minimization, log sanitization
+- [x] 184. Security hardening: Immutable artifact digest pinning, credential isolation, strict nonce/base64 validation, CI action pinning, script_env deny-list, symlink-safe script validation, runtime image minimization, log sanitization
 
   - [x] 184.1 Require digest-pinned artifact references in build-ami.py
     - Update `validate_artifact_reference()` regex in `scripts/build-ami.py` to accept and require `@sha256:<hex64>` in the artifact reference (in addition to or instead of `:tag`)
@@ -82,7 +82,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Ensure encrypted error envelopes contain only categorized descriptions (e.g., "clone_failed") without raw stderr or paths
     - _Requirements: 7.12, 7.13, 7.14, 7.15, 7.16, 7.17, 7.18_
 
-  - [ ] 184.13 Write tests for all new security hardening changes
+  - [x] 184.13 Write tests for all new security hardening changes
     - **Digest pinning tests**: Verify artifact refs without `@sha256:` are rejected; verify verification and pull use same digest; verify tag-only refs are rejected
     - **Credential isolation tests**: Verify git clone subprocess args do not contain the token; verify helper is cleaned up after clone; verify clone succeeds with new mechanism
     - **Symlink tests**: Verify symlink script paths are rejected; verify paths escaping clone dir via symlinks are rejected
