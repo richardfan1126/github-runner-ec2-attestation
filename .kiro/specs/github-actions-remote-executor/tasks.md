@@ -47,7 +47,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - If decoding fails due to malformed base64, return HTTP 400 with error indicating invalid base64 encoding
     - _Requirements: 45.13_
 
-  - [ ] 184.7 Pin GitHub Actions to commit SHAs
+  - [x] 184.7 Pin GitHub Actions to commit SHAs
     - In `.github/workflows/build-attestable-image.yml`, replace all `uses: action@vN` references with `uses: action@<full-40-char-sha>`
     - Add a comment next to each pinned SHA indicating the version tag and date (e.g., `# v4.2.0 - 2024-10-15`)
     - _Requirements: 11.15_
