@@ -121,7 +121,10 @@ def test_nonce_passthrough_attest_endpoint(nonce):
 
 # Feature: github-actions-remote-executor, Property 126: Nonce Passthrough in Attestation – /execute
 @settings(max_examples=100, deadline=None)
-@given(nonce=st.text(min_size=1, max_size=64).filter(lambda s: s.strip()))
+@given(nonce=st.text(
+    alphabet=st.sampled_from("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._~-"),
+    min_size=16, max_size=64,
+))
 def test_nonce_passthrough_execute_endpoint(nonce):
     """
     **Validates: Requirements 38.2, 38.4**
@@ -190,7 +193,10 @@ def test_nonce_passthrough_execute_endpoint(nonce):
 
 # Feature: github-actions-remote-executor, Property 126: Nonce Passthrough in Attestation – /output
 @settings(max_examples=100, deadline=None)
-@given(nonce=st.text(min_size=1, max_size=64).filter(lambda s: s.strip()))
+@given(nonce=st.text(
+    alphabet=st.sampled_from("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._~-"),
+    min_size=16, max_size=64,
+))
 def test_nonce_passthrough_output_endpoint(nonce):
     """
     **Validates: Requirements 38.3, 38.4**

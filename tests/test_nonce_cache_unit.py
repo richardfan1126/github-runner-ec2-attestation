@@ -219,16 +219,16 @@ class TestExecuteEndpointNonceValidation:
     def test_first_nonce_accepted(self):
         """First request with a nonce should succeed."""
         app, client, ctx = _create_app_and_client()
-        resp = _send_execute_with_nonce(app, client, ctx, "unique-nonce-1")
+        resp = _send_execute_with_nonce(app, client, ctx, "unique-nonce-1234")
         assert resp.status_code == 200
 
     def test_duplicate_nonce_rejected_with_400(self):
         """Second request with the same nonce should return 400."""
         app, client, ctx = _create_app_and_client()
-        resp1 = _send_execute_with_nonce(app, client, ctx, "replay-nonce")
+        resp1 = _send_execute_with_nonce(app, client, ctx, "replay-nonce-1234")
         assert resp1.status_code == 200
 
-        resp2 = _send_execute_with_nonce(app, client, ctx, "replay-nonce")
+        resp2 = _send_execute_with_nonce(app, client, ctx, "replay-nonce-1234")
         # Post-decryption errors return encrypted error envelopes with HTTP 200
         assert_encrypted_error(resp2, ctx.shared_key, "duplicate_nonce", 400)
 
@@ -292,7 +292,7 @@ class TestOutputEndpointNonceValidation:
         app, client, ctx = _create_app_and_client()
 
         # First, create an execution via /execute
-        resp = _send_execute_with_nonce(app, client, ctx, "setup-nonce")
+        resp = _send_execute_with_nonce(app, client, ctx, "setup-nonce-12345")
         assert resp.status_code == 200
         data = decrypt_execute_response(resp.json(), ctx.shared_key)
         execution_id = data["execution_id"]
@@ -304,7 +304,7 @@ class TestOutputEndpointNonceValidation:
 
         output_payload = {
             "oidc_token": "valid.oidc.token",
-            "nonce": "output-nonce-1",
+            "nonce": "output-nonce-12345",
             "offset": 0,
         }
 
@@ -339,12 +339,12 @@ class TestOutputEndpointNonceValidation:
             "generate_output_attestation",
             return_value=(b"attestation-bytes", None),
         ):
-            payload1 = {"oidc_token": "valid.oidc.token", "nonce": "out-nonce-a", "offset": 0}
+            payload1 = {"oidc_token": "valid.oidc.token", "nonce": "out-nonce-a-123456", "offset": 0}
             body1 = make_encrypted_output_request(payload1, ctx.shared_key)
             resp1 = client.post(f"/execution/{execution_id}/output", json=body1)
             assert resp1.status_code == 200
 
-            payload2 = {"oidc_token": "valid.oidc.token", "nonce": "out-nonce-b", "offset": 0}
+            payload2 = {"oidc_token": "valid.oidc.token", "nonce": "out-nonce-b-123456", "offset": 0}
             body2 = make_encrypted_output_request(payload2, ctx.shared_key)
             resp2 = client.post(f"/execution/{execution_id}/output", json=body2)
             assert resp2.status_code == 200
@@ -354,7 +354,7 @@ class TestOutputEndpointNonceValidation:
         app, client, ctx = _create_app_and_client()
 
         # Use a nonce on /execute
-        resp = _send_execute_with_nonce(app, client, ctx, "shared-nonce-x")
+        resp = _send_execute_with_nonce(app, client, ctx, "shared-nonce-x-1234")
         assert resp.status_code == 200
         data = decrypt_execute_response(resp.json(), ctx.shared_key)
         execution_id = data["execution_id"]
@@ -362,7 +362,7 @@ class TestOutputEndpointNonceValidation:
         # Try the same nonce on /output — should be rejected
         output_payload = {
             "oidc_token": "valid.oidc.token",
-            "nonce": "shared-nonce-x",
+            "nonce": "shared-nonce-x-1234",
             "offset": 0,
         }
         with patch.object(

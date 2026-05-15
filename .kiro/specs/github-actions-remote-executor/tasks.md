@@ -34,7 +34,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Resolve the full script path using `os.path.realpath()` and verify the resolved path starts with the clone directory path; reject if it escapes
     - _Requirements: 3.18, 3.19_
 
-  - [ ] 184.5 Add strict nonce type, length, and format validation
+  - [x] 184.5 Add strict nonce type, length, and format validation
     - In `src/server.py`, after extracting the nonce from the decrypted payload (on both /execute and /output), validate:
       - Type is `str` (reject int, bool, list, object, null with HTTP 400)
       - Length is between 16 and 256 characters inclusive (reject with HTTP 400)

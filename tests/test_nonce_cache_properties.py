@@ -117,10 +117,13 @@ def _send_execute_with_nonce(app, client, ctx, nonce: str):
         return client.post("/execute", json=body)
 
 
-# Nonce strategy: printable strings of reasonable length
+# Nonce strategy: URL-safe strings of valid length (16-256 chars)
+# per strict nonce validation requirements (45.10, 45.11, 45.12)
 _nonce_strategy = st.text(
-    alphabet=st.characters(whitelist_categories=("L", "N", "P")),
-    min_size=1,
+    alphabet=st.sampled_from(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._~-"
+    ),
+    min_size=16,
     max_size=64,
 )
 

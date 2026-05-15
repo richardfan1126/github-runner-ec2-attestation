@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
@@ -84,6 +85,58 @@ def _encrypted_error_response(encryption_manager, shared_key, error_code, error_
             "encrypted_response": base64.b64encode(encrypted_response).decode('utf-8')
         }
     )
+
+
+# Compiled regex for URL-safe nonce characters
+_NONCE_PATTERN = re.compile(r'^[a-zA-Z0-9._~-]+$')
+
+
+def _validate_nonce_strict(nonce_value, encryption_manager, shared_key, endpoint_name: str):
+    """
+    Validate nonce type, length, and format.
+
+    Returns None if valid, or an encrypted error JSONResponse if invalid.
+    Checks (in order):
+      1. Type must be str (reject int, bool, list, dict, None)
+      2. Length must be 16–256 characters inclusive
+      3. Must contain only URL-safe characters: [a-zA-Z0-9._~-]
+
+    Requirements: 45.10, 45.11, 45.12
+    """
+    # Type check
+    if not isinstance(nonce_value, str):
+        logger.warning(
+            f"Non-string nonce type on {endpoint_name}: {type(nonce_value).__name__}"
+        )
+        return _encrypted_error_response(
+            encryption_manager, shared_key,
+            "invalid_nonce", 400,
+            "Nonce must be a string"
+        )
+
+    # Length check
+    if len(nonce_value) < 16 or len(nonce_value) > 256:
+        logger.warning(
+            f"Nonce length out of range on {endpoint_name}: {len(nonce_value)} chars"
+        )
+        return _encrypted_error_response(
+            encryption_manager, shared_key,
+            "invalid_nonce", 400,
+            "Nonce must be between 16 and 256 characters"
+        )
+
+    # Format check: URL-safe characters only
+    if not _NONCE_PATTERN.match(nonce_value):
+        logger.warning(
+            f"Nonce contains invalid characters on {endpoint_name}"
+        )
+        return _encrypted_error_response(
+            encryption_manager, shared_key,
+            "invalid_nonce", 400,
+            "Nonce must contain only URL-safe characters: letters, digits, '.', '_', '~', '-'"
+        )
+
+    return None
 
 
 class RateLimiter:
@@ -515,6 +568,11 @@ def add_routes(app: FastAPI) -> None:
                     "Nonce is required and must be a non-empty string"
                 )
 
+            # Strict nonce type, length, and format validation (Requirements: 45.10, 45.11, 45.12)
+            nonce_error = _validate_nonce_strict(request_nonce, encryption_manager, shared_key, "/execute")
+            if nonce_error is not None:
+                return nonce_error
+
             # OIDC authentication from decrypted body
             oidc_start = time.time()
             validator = request.app.state.request_validator
@@ -890,6 +948,11 @@ def add_routes(app: FastAPI) -> None:
                     "missing_nonce", 400,
                     "Nonce is required and must be a non-empty string"
                 )
+
+            # Strict nonce type, length, and format validation (Requirements: 45.10, 45.11, 45.12)
+            nonce_error = _validate_nonce_strict(nonce, encryption_manager, shared_key, "/output")
+            if nonce_error is not None:
+                return nonce_error
 
             # Anti-replay nonce cache duplicate check
             nonce_cache = request.app.state.nonce_cache
