@@ -98,6 +98,34 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Run the full test suite and verify all new tests from 184.13 pass
   - Verify no regressions in existing tests
 
+- [ ] 186. Add build-time-only packages via KIWI `<packages type="uninstall">` and retain `binutils` for KIWI create step
+  - [ ] 186.1 Add `python3.11-pip` to `<packages type="image">` in `kiwi-descriptions/appliance.kiwi`
+    - Add `<package name="python3.11-pip"/>` to the `<packages type="image">` section with a comment explaining it is a build-time dependency required by `config.sh` for `pip3.11 install` and will be removed by the uninstall section
+    - _Requirements: 54.1, 54.2_
+
+  - [ ] 186.2 Add `<packages type="uninstall">` section to `kiwi-descriptions/appliance.kiwi`
+    - Add a new `<packages type="uninstall">` element after the `<packages type="image">` section
+    - Include `<package name="python3.11-pip"/>` in the uninstall section
+    - Add a comment block explaining that KIWI processes the uninstall section after `config.sh` runs, so these packages are available during image configuration but absent from the final runtime image
+    - _Requirements: 54.1, 54.2, 54.3_
+
+  - [ ] 186.3 Retain `binutils` in `<packages type="image">` with documented justification
+    - Ensure `<package name="binutils"/>` is present in the `<packages type="image">` section in `kiwi-descriptions/appliance.kiwi`
+    - Add a justification comment: required by `dracut --uefi` during the KIWI create step for UKI assembly (`objcopy`); cannot be removed because `pre_disk_sync.sh` runs before dracut/UKI generation (not after), and there is no KIWI hook that runs after UKI assembly but before the root tree is written to disk
+    - Do NOT create a `pre_disk_sync.sh` script to remove `binutils` — the KIWI execution order is: `pre_disk_sync.sh` → sync → dracut UKI → final image, so removing `binutils` at any hook point breaks the build
+    - _Requirements: 54.1, 54.2_
+
+  - [ ] 186.4 Update package minimization test to reflect new package policy
+    - In the existing test that verifies removed packages are NOT in `appliance.kiwi` (from task 184.13), update assertions:
+      - `python3.11-pip`: verify it is present in `<packages type="image">` AND present in `<packages type="uninstall">` (installed for build-time use, removed from final image)
+      - `binutils`: verify it is present in `<packages type="image">` with a comment documenting its justification (required by dracut --uefi for UKI assembly); it must NOT be in `<packages type="uninstall">` or removed by any script
+      - `awscli` and `pciutils`: verify they remain completely absent (not in any packages section)
+    - _Requirements: 54.1, 54.2, 54.9_
+
+- [ ] 187. Checkpoint - Ensure all tests pass after build-time package changes
+  - Run the full test suite and verify the updated package minimization tests pass
+  - Verify no regressions in existing tests
+
 ## Task Dependency Graph
 
 ```json
@@ -106,7 +134,10 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     { "id": 0, "tasks": ["184.1", "184.3", "184.4", "184.5", "184.6", "184.7", "184.8", "184.9", "184.10", "184.11", "184.12"] },
     { "id": 1, "tasks": ["184.2"] },
     { "id": 2, "tasks": ["184.13"] },
-    { "id": 3, "tasks": ["185"] }
+    { "id": 3, "tasks": ["185"] },
+    { "id": 4, "tasks": ["186.1", "186.2", "186.3"] },
+    { "id": 5, "tasks": ["186.4"] },
+    { "id": 6, "tasks": ["187"] }
   ]
 }
 ```
@@ -122,6 +153,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 - The CI action pinning (184.7) and base image digest pinning (184.8) prevent tag-movement attacks on the build environment
 - The libslirp checksum (184.9) closes the last unsigned source input in the Dockerfile
 - The script_env deny-list (184.10) prevents callers from injecting BASH_ENV, PATH, LD_PRELOAD and other execution-altering variables
-- The package minimization (184.11) removes awscli, binutils, python3.11-pip, pciutils from the runtime image to reduce post-compromise tooling
+- The package minimization (184.11) removes awscli, python3.11-pip, pciutils from the runtime image to reduce post-compromise tooling
 - The log sanitization (184.12) prevents GitHub tokens, credentialed URLs, absolute paths, and raw subprocess stderr from appearing in logs or error responses
 - The digest pinning (184.1, 184.2) ensures the AMI build verifies and pulls the exact same immutable artifact, preventing TOCTOU attacks via tag movement
+- The build-time package uninstall (186) re-adds `python3.11-pip` to `<packages type="image">` (needed by `config.sh` for `pip3.11 install`) while also listing it in `<packages type="uninstall">` so KIWI removes it after `config.sh` completes; `binutils` is retained in `<packages type="image">` permanently because `dracut --uefi` needs `objcopy` for UKI assembly during the KIWI create step, and there is no hook that runs after UKI generation but before the root tree is written to disk (`pre_disk_sync.sh` runs before dracut, not after)
