@@ -237,19 +237,45 @@ class RepositoryClient:
         """
         Validate that a script file exists within the cloned repository.
 
+        Performs symlink-safe validation:
+        1. Rejects script paths that are symlinks
+        2. Resolves the real path and verifies it stays within the clone directory
+
         Args:
             clone_path: Path to the cloned repository directory
             script_path: Relative path to the script within the repo
 
         Returns:
-            True if the file exists
+            True if the file exists and passes symlink safety checks
 
         Raises:
-            GitHubAPIError: If the file does not exist (404)
+            GitHubAPIError: If the file does not exist (404), is a symlink (400),
+                           or resolves outside the clone directory (400)
         """
         full_path = os.path.join(clone_path, script_path)
+        if not os.path.exists(full_path):
+            raise GitHubAPIError(f"File not found: {script_path}", 404)
+
+        # Reject symlinks — repository-controlled symlinks could point outside
+        # the clone directory or to sensitive host files
+        if os.path.islink(full_path):
+            raise GitHubAPIError(
+                "Script path is a symlink; symlinks are not allowed", 400
+            )
+
+        # Resolve the real path and verify it stays within the clone directory.
+        # This catches path traversal via intermediate symlinked directories
+        # (e.g., dir -> /etc, then dir/passwd as script_path).
+        real_clone = os.path.realpath(clone_path)
+        real_script = os.path.realpath(full_path)
+        if not real_script.startswith(real_clone + os.sep) and real_script != real_clone:
+            raise GitHubAPIError(
+                "Script path resolves outside the clone directory", 400
+            )
+
         if not os.path.isfile(full_path):
             raise GitHubAPIError(f"File not found: {script_path}", 404)
+
         return True
 
     def cleanup_clone(self, clone_path: str) -> None:

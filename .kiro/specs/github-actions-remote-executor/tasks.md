@@ -29,7 +29,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Keep the existing token stripping from `.git/config` as defense-in-depth
     - _Requirements: 3.17_
 
-  - [ ] 184.4 Add symlink-safe script path validation
+  - [x] 184.4 Add symlink-safe script path validation
     - In `src/repository.py` `validate_script_exists()`, after confirming the file exists, check `os.path.islink()` on the full script path; reject with error if it's a symlink
     - Resolve the full script path using `os.path.realpath()` and verify the resolved path starts with the clone directory path; reject if it escapes
     - _Requirements: 3.18, 3.19_
