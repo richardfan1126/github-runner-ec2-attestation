@@ -83,6 +83,15 @@ class ServerConfig:
     max_encrypted_payload_bytes: int = 524_288  # 512KB default
     max_decrypted_payload_bytes: int = 262_144  # 256KB default
 
+    # Script environment variable deny-list
+    # Keys matching this list (exact or prefix for '*' entries) are rejected
+    script_env_deny_list: list[str] = field(default_factory=lambda: [
+        "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "BASH_FUNC_*",
+        "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "PROMPT_COMMAND",
+        "PS1", "PS2", "PS4", "IFS", "CDPATH", "GLOBIGNORE", "BASH_XTRACEFD",
+        "BASH_LOADABLES_PATH",
+    ])
+
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
     require_protected_ref: bool = False
@@ -197,6 +206,12 @@ class ServerConfig:
         if max_decrypted_payload_bytes_raw is not None:
             max_decrypted_payload_bytes = int(max_decrypted_payload_bytes_raw)
         
+        # Parse optional SCRIPT_ENV_DENY_LIST (comma-separated, uses default if not set)
+        script_env_deny_list_raw = os.getenv("SCRIPT_ENV_DENY_LIST")
+        script_env_deny_list = None  # Will use dataclass default
+        if script_env_deny_list_raw is not None:
+            script_env_deny_list = [e.strip() for e in script_env_deny_list_raw.split(",") if e.strip()]
+        
         return cls(
             port=int(port),
             max_concurrent_executions=int(max_concurrent),
@@ -220,6 +235,7 @@ class ServerConfig:
             max_request_body_bytes=max_request_body_bytes,
             max_encrypted_payload_bytes=max_encrypted_payload_bytes,
             max_decrypted_payload_bytes=max_decrypted_payload_bytes,
+            **({"script_env_deny_list": script_env_deny_list} if script_env_deny_list is not None else {}),
         )
     
     def validate(self) -> None:

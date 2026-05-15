@@ -736,6 +736,34 @@ def add_routes(app: FastAPI) -> None:
                 script_env = body.get('script_env') or {}
                 script_env = {str(k): str(v) for k, v in script_env.items() if isinstance(k, str) and isinstance(v, str)}
                 
+                # Check script_env keys against deny-list (Requirements: 52.7, 52.8, 52.9)
+                if script_env:
+                    deny_list = config.script_env_deny_list
+                    # Separate exact-match entries from prefix-match entries (ending with '*')
+                    exact_deny = {e for e in deny_list if not e.endswith('*')}
+                    prefix_deny = [e[:-1] for e in deny_list if e.endswith('*')]
+                    
+                    denied_keys = []
+                    for key in script_env:
+                        if key in exact_deny:
+                            denied_keys.append(key)
+                        else:
+                            for prefix in prefix_deny:
+                                if key.startswith(prefix):
+                                    denied_keys.append(key)
+                                    break
+                    
+                    if denied_keys:
+                        logger.warning(
+                            f"script_env contains denied keys: {denied_keys}"
+                        )
+                        return _encrypted_error_response(
+                            encryption_manager, shared_key,
+                            "denied_env_key", 400,
+                            "script_env contains denied environment variable keys",
+                            {"denied_keys": denied_keys}
+                        )
+                
                 # Create execution record with atomic concurrency check
                 exec_manager = request.app.state.execution_manager
                 execution_record, accepted = exec_manager.try_create_execution(

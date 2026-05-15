@@ -62,7 +62,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - If checksum does not match, fail the build with an integrity error
     - _Requirements: 53.6_
 
-  - [ ] 184.10 Implement script_env deny-list
+  - [x] 184.10 Implement script_env deny-list
     - Add `script_env_deny_list` to `ServerConfig` in `src/config.py`; read from `SCRIPT_ENV_DENY_LIST` env var (comma-separated); default to: `BASH_ENV,ENV,SHELLOPTS,BASHOPTS,BASH_FUNC_*,PATH,LD_PRELOAD,LD_LIBRARY_PATH,PROMPT_COMMAND,PS1,PS2,PS4,IFS,CDPATH,GLOBIGNORE,BASH_XTRACEFD`
     - In `src/server.py`, after sanitizing `script_env` (string keys/values), check each key against the deny-list (exact match + prefix match for `*` entries); reject with encrypted error if any key matches
     - _Requirements: 52.7, 52.8, 52.9_

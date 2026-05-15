@@ -138,7 +138,7 @@ The system consists of the following major components:
 - Receives encrypted /execute request payloads and delegates decryption to the Encryption Manager (see Encryption Manager for PQ_Hybrid_KEM key derivation details)
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
 - Extracts the mandatory `nonce` from the decrypted request body; validates that the nonce is a string type, between 16-256 characters, and contains only URL-safe characters (alphanumeric, hyphen, underscore, period, tilde); rejects with HTTP 400 if nonce is missing, empty, wrong type, out of bounds, or contains invalid characters
-- Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), checks keys against the Script_Env_Deny_List (rejects dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`), and passes permitted entries to the Script Executor for injection into the Execution_Container as environment variables
+- Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), checks keys against the Script_Env_Deny_List (rejects dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`, `BASH_LOADABLES_PATH`), and passes permitted entries to the Script Executor for injection into the Execution_Container as environment variables
 - Validates the decrypted request using the Request Validator
 - After OIDC validation, verifies the `repository` claim matches the `repository_url` in the request; rejects with HTTP 403 if mismatch
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
@@ -875,7 +875,7 @@ class ServerConfig:
     nonce_cache_ttl_seconds: int  # TTL for nonce cache entries, matching OIDC token lifetime
     allowed_branches: list[str] | None  # Optional branch patterns for OIDC ref claim validation
     require_protected_ref: bool  # When true, require ref_protected claim to be "true"; parsed with strict boolean validation (only true/1/yes/false/0/no accepted; unrecognized values fail startup)
-    script_env_deny_list: list[str]  # Environment variable key names/prefixes rejected from script_env (default: BASH_ENV, PATH, LD_PRELOAD, etc.)
+    script_env_deny_list: list[str]  # Environment variable key names/prefixes rejected from script_env (default: BASH_ENV, PATH, LD_PRELOAD, BASH_LOADABLES_PATH, etc.)
 ```
 
 ### OIDCValidationResult
@@ -1663,7 +1663,7 @@ class EncryptionContext:
 
 ### Property 169: Script Environment Variable Forwarding
 
-*For any* /execute request containing a `script_env` dictionary with string key-value pairs in the decrypted payload, the GHA_Server should extract and sanitize the dictionary (accepting only string keys and string values), check keys against the configurable Script_Env_Deny_List (rejecting dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`, `SHELLOPTS`, `IFS`, and `BASH_FUNC_*` prefix matches), pass permitted entries to the Script_Executor, and the resulting Execution_Container should have those key-value pairs set as environment variables. When `script_env` is absent or empty, the container should be created with no additional environment variables. Non-string keys or values in `script_env` should be silently coerced to strings or dropped. If any key matches the deny-list, the request should be rejected with an error.
+*For any* /execute request containing a `script_env` dictionary with string key-value pairs in the decrypted payload, the GHA_Server should extract and sanitize the dictionary (accepting only string keys and string values), check keys against the configurable Script_Env_Deny_List (rejecting dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`, `SHELLOPTS`, `IFS`, `BASH_LOADABLES_PATH`, and `BASH_FUNC_*` prefix matches), pass permitted entries to the Script_Executor, and the resulting Execution_Container should have those key-value pairs set as environment variables. When `script_env` is absent or empty, the container should be created with no additional environment variables. Non-string keys or values in `script_env` should be silently coerced to strings or dropped. If any key matches the deny-list, the request should be rejected with an error.
 
 **Validates: Requirements 52.1, 52.2, 52.3, 52.4, 52.5, 52.6, 52.7, 52.8, 52.9, 52.10, 52.11**
 
