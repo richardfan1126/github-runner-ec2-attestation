@@ -2,7 +2,8 @@
 # Based on Amazon Linux 2023
 # Pinned versions for reproducible builds
 
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023.10.20260302.1
+# Tag: 2023.10.20260302.1
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023.10.20260302.1@sha256:139c488a2b47155ccb61262cfe299509793a8edad74572473e14960630f1559a
 
 # Lock DNF to the specific AL2023 release matching the base image.
 # This ensures packages are resolved from the exact repository snapshot,

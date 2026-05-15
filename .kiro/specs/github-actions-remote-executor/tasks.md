@@ -52,7 +52,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add a comment next to each pinned SHA indicating the version tag and date (e.g., `# v4.2.0 - 2024-10-15`)
     - _Requirements: 11.15_
 
-  - [ ] 184.8 Pin Dockerfile base image to @sha256: digest
+  - [x] 184.8 Pin Dockerfile base image to @sha256: digest
     - In `.github/docker/Dockerfile.kiwi-builder`, append `@sha256:<digest>` to the `FROM` directive
     - Add a comment documenting the tag corresponding to the pinned digest
     - _Requirements: 11.16_
