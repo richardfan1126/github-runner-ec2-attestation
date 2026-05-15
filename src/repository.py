@@ -83,12 +83,38 @@ class RepositoryClient:
                 error_message=f"Network error during authentication: {str(e)}"
             )
 
+    def _create_askpass_helper(self, token: str) -> str:
+        """
+        Create a temporary GIT_ASKPASS helper script that provides the token
+        without exposing it in subprocess argv or /proc/<pid>/cmdline.
+
+        The script uses a heredoc-style approach to avoid shell metacharacter
+        issues with the token value. GitHub tokens (ghp_*, ghs_*, github_pat_*)
+        contain only [A-Za-z0-9_] characters, but we escape defensively.
+
+        Args:
+            token: GitHub token to provide via the helper
+
+        Returns:
+            Path to the temporary helper script
+        """
+        # Escape single quotes in token for safe shell embedding
+        # Replace ' with '\'' (end quote, escaped quote, start quote)
+        safe_token = token.replace("'", "'\\''")
+        fd, helper_path = tempfile.mkstemp(prefix="git_askpass_", suffix=".sh")
+        try:
+            os.write(fd, f"#!/bin/sh\necho '{safe_token}'\n".encode())
+        finally:
+            os.close(fd)
+        os.chmod(helper_path, 0o700)
+        return helper_path
+
     def clone_repo(self, repo_url: str, commit: str, token: str) -> CloneResult:
         """
         Clone a repository at a specific commit into a temp directory.
 
-        Uses `git clone --depth 1` with the token embedded in the URL,
-        then checks out the exact commit.
+        Uses a GIT_ASKPASS helper script to provide credentials without
+        exposing the token in subprocess argv or /proc/<pid>/cmdline.
 
         Args:
             repo_url: GitHub repository URL (e.g., https://github.com/owner/repo)
@@ -102,19 +128,26 @@ class RepositoryClient:
             GitHubAPIError: For clone failures with appropriate status codes
         """
         owner, repo = self._parse_repo_url(repo_url)
-        clone_url = f"https://{token}@github.com/{owner}/{repo}.git"
+        clone_url = f"https://x-access-token@github.com/{owner}/{repo}.git"
 
         os.makedirs(self.temp_storage_path, exist_ok=True)
         clone_dir = tempfile.mkdtemp(dir=self.temp_storage_path, prefix=f"{commit[:8]}_")
 
+        helper_path = self._create_askpass_helper(token)
         try:
-            # Shallow clone
+            clone_env = {
+                **os.environ,
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_ASKPASS": helper_path,
+            }
+
+            # Shallow clone using GIT_ASKPASS for credential delivery
             result = subprocess.run(
                 ["git", "clone", "--depth", "1", clone_url, clone_dir],
                 capture_output=True,
                 text=True,
                 timeout=120,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                env=clone_env,
             )
 
             if result.returncode != 0:
@@ -135,7 +168,7 @@ class RepositoryClient:
                 text=True,
                 timeout=120,
                 cwd=clone_dir,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                env=clone_env,
             )
 
             if fetch_result.returncode != 0:
@@ -160,7 +193,7 @@ class RepositoryClient:
             if not non_git:
                 raise GitHubAPIError("Cloned repository is empty", 400)
 
-            # Strip the GitHub token from .git/config
+            # Strip the GitHub token from .git/config as defense-in-depth
             clean_url = f"https://github.com/{owner}/{repo}.git"
             strip_result = subprocess.run(
                 ["git", "remote", "set-url", "origin", clean_url],
@@ -191,6 +224,14 @@ class RepositoryClient:
         except Exception as e:
             self.cleanup_clone(clone_dir)
             raise GitHubAPIError(f"Network error: {str(e)}", 500)
+        finally:
+            # Always clean up the askpass helper script
+            try:
+                if os.path.exists(helper_path):
+                    os.unlink(helper_path)
+                    logger.debug("Cleaned up GIT_ASKPASS helper script")
+            except OSError as e:
+                logger.warning(f"Failed to clean up GIT_ASKPASS helper: {e}")
 
     def validate_script_exists(self, clone_path: str, script_path: str) -> bool:
         """

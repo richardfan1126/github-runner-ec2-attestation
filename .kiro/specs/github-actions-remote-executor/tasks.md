@@ -22,7 +22,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - In `.github/workflows/build-attestable-image.yml`, after ORAS push, capture the full digest-pinned reference (including `@sha256:`) and output it as a workflow output for downstream consumers
     - _Requirements: 15.22_
 
-  - [ ] 184.3 Implement git clone credential isolation
+  - [x] 184.3 Implement git clone credential isolation
     - In `src/repository.py`, replace the token-in-URL clone mechanism with a `GIT_ASKPASS` helper script (or `http.extraHeader` via environment-scoped git config) that provides the token without exposing it in subprocess argv
     - Create a temporary helper script that echoes the token on demand; pass its path via `GIT_ASKPASS` environment variable to the `git clone` subprocess
     - Clean up the helper script in a `finally` block after clone completes (regardless of success/failure)
