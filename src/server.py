@@ -23,7 +23,7 @@ from src.attestation import AttestationGenerator
 from src.script_executor import ScriptExecutor
 from src.validation import RequestValidator
 from src.models import ExecutionStatus, CloneResult
-from src.logging_config import set_log_context, clear_log_context, sanitize_for_logging, sanitize_error_message
+from src.logging_config import set_log_context, clear_log_context, sanitize_for_logging, sanitize_error_message, sanitize_log_message, sanitize_nonce_for_logging, truncate_field
 from src.nonce_cache import NonceCache
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,25 @@ def _validate_nonce_strict(nonce_value, encryption_manager, shared_key, endpoint
         )
 
     return None
+
+
+def _categorize_clone_error(status_code: int) -> str:
+    """
+    Map a clone error status code to a categorized description for error envelopes.
+
+    Error envelopes must not contain raw stderr or paths — only a safe,
+    categorized description of what went wrong.
+
+    Requirements: 7.15, 7.18
+    """
+    if status_code == 401:
+        return "clone_authentication_failed"
+    elif status_code == 404:
+        return "clone_target_not_found"
+    elif status_code == 400:
+        return "clone_invalid_request"
+    else:
+        return "clone_failed"
 
 
 class RateLimiter:
@@ -643,7 +662,7 @@ def add_routes(app: FastAPI) -> None:
             # Anti-replay nonce cache duplicate check
             nonce_cache = request.app.state.nonce_cache
             if not nonce_cache.check_and_store(request_nonce):
-                logger.warning(f"Duplicate nonce detected on /execute: {request_nonce}")
+                logger.warning(f"Duplicate nonce detected on /execute: {sanitize_nonce_for_logging(request_nonce)}")
                 return _encrypted_error_response(
                     encryption_manager, shared_key,
                     "duplicate_nonce", 400,
@@ -661,7 +680,7 @@ def add_routes(app: FastAPI) -> None:
             validation_result = validator.validate_execution_request(body)
             
             if not validation_result.valid:
-                logger.warning(f"Validation failed: {validation_result.errors}")
+                logger.warning(f"Validation failed: {truncate_field(str(validation_result.errors))}")
                 return _encrypted_error_response(
                     encryption_manager, shared_key,
                     "validation_failed", 400,
@@ -708,13 +727,13 @@ def add_routes(app: FastAPI) -> None:
                         script_path=body['script_path']
                     )
                 except GitHubAPIError as e:
-                    logger.warning(f"GitHub API error: {e.message}")
+                    logger.warning(f"GitHub API error: {sanitize_log_message(e.message)}")
                     if clone_result:
                         repo_client.cleanup_clone(clone_result.clone_path)
                     return _encrypted_error_response(
                         encryption_manager, shared_key,
                         "github_api_error", e.status_code,
-                        e.message
+                        _categorize_clone_error(e.status_code)
                     )
                 
                 phase_times['file_retrieval'] = (time.time() - fetch_start) * 1000
@@ -1021,7 +1040,7 @@ def add_routes(app: FastAPI) -> None:
             # Anti-replay nonce cache duplicate check
             nonce_cache = request.app.state.nonce_cache
             if not nonce_cache.check_and_store(nonce):
-                logger.warning(f"Duplicate nonce detected on /output: {nonce}")
+                logger.warning(f"Duplicate nonce detected on /output: {sanitize_nonce_for_logging(nonce)}")
                 return _encrypted_error_response(
                     encryption_manager, shared_key,
                     "duplicate_nonce", 400,

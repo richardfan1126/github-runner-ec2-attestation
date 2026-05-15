@@ -3,6 +3,7 @@ import contextvars
 import logging
 import logging.handlers
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -196,8 +197,6 @@ def sanitize_error_message(message: str) -> str:
     Returns:
         Sanitized error message safe for external exposure
     """
-    import re
-    
     # Remove absolute file paths
     message = re.sub(r'/[a-zA-Z0-9_/.-]+', '[PATH]', message)
     
@@ -214,3 +213,161 @@ def sanitize_error_message(message: str) -> str:
         sanitized_lines.append(line)
     
     return '\n'.join(sanitized_lines).strip()
+
+
+# Maximum length for user-controlled log fields before truncation
+LOG_FIELD_MAX_LENGTH = 256
+
+
+class LogSanitizer:
+    """Sanitizes log messages and error responses to prevent credential leakage.
+
+    Redacts:
+    - GitHub tokens (ghp_*, ghs_*, github_pat_*)
+    - Credentialed URLs (https://token@host/...)
+    - Authorization header values
+    - Absolute file paths
+    - Environment variable assignments containing tokens
+    - ASCII control characters (except newline and tab)
+
+    Requirements: 7.12, 7.13, 7.14, 7.15, 7.16, 7.17, 7.18
+    """
+
+    # GitHub token patterns: ghp_, ghs_, github_pat_ followed by alphanumeric/underscore
+    _GITHUB_TOKEN_RE = re.compile(
+        r'\b(ghp_[A-Za-z0-9_]{1,255}|ghs_[A-Za-z0-9_]{1,255}|github_pat_[A-Za-z0-9_]{1,255})\b'
+    )
+
+    # Credentialed URLs: https://anything@host (captures the credential portion)
+    _CREDENTIALED_URL_RE = re.compile(
+        r'https?://[^@\s]+@[^\s]+'
+    )
+
+    # Authorization header values in log output (case-insensitive)
+    _AUTH_HEADER_RE = re.compile(
+        r'(Authorization:\s*)(Bearer\s+\S+|Basic\s+\S+|token\s+\S+|\S+)',
+        re.IGNORECASE
+    )
+
+    # Absolute file paths (Unix-style)
+    _ABS_PATH_RE = re.compile(
+        r'(?<![a-zA-Z0-9_])(/(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]+)'
+    )
+
+    # Environment variable assignments containing token-like values
+    _ENV_TOKEN_RE = re.compile(
+        r'([A-Z_][A-Z0-9_]*=)(ghp_[A-Za-z0-9_]+|ghs_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|[A-Za-z0-9+/=]{40,})',
+        re.IGNORECASE
+    )
+
+    # ASCII control characters (0x00-0x1F except \n=0x0A and \t=0x09, plus 0x7F)
+    # Note: \r (0x0D) IS stripped because CR is a log injection vector (OWASP)
+    _CONTROL_CHARS_RE = re.compile(
+        r'[\x00-\x08\x0b-\x1f\x7f]'
+    )
+
+    def sanitize(self, message: str) -> str:
+        """
+        Apply all sanitization rules to a message.
+
+        Args:
+            message: Raw message (e.g., subprocess stderr, exception text)
+
+        Returns:
+            Sanitized message safe for logging or error responses
+        """
+        if not message:
+            return message
+
+        # 1. Redact GitHub tokens
+        message = self._GITHUB_TOKEN_RE.sub('[REDACTED_TOKEN]', message)
+
+        # 2. Redact credentialed URLs
+        message = self._CREDENTIALED_URL_RE.sub('[REDACTED_URL]', message)
+
+        # 3. Redact Authorization header values
+        message = self._AUTH_HEADER_RE.sub(r'\1[REDACTED]', message)
+
+        # 4. Redact environment variable assignments containing tokens
+        message = self._ENV_TOKEN_RE.sub(r'\1[REDACTED]', message)
+
+        # 5. Redact absolute file paths
+        message = self._ABS_PATH_RE.sub('[PATH]', message)
+
+        # 6. Remove ASCII control characters
+        message = self._CONTROL_CHARS_RE.sub('', message)
+
+        return message
+
+    def sanitize_for_error_response(self, message: str) -> str:
+        """
+        Sanitize a message for inclusion in encrypted error envelopes.
+
+        More aggressive than sanitize() — strips all internal details and
+        returns only a categorized description.
+
+        Args:
+            message: Raw error message
+
+        Returns:
+            Sanitized message suitable for error envelopes
+        """
+        sanitized = self.sanitize(message)
+        # Apply length cap
+        return truncate_field(sanitized)
+
+
+# Module-level singleton for convenience
+_log_sanitizer = LogSanitizer()
+
+
+def get_log_sanitizer() -> LogSanitizer:
+    """Return the module-level LogSanitizer singleton."""
+    return _log_sanitizer
+
+
+def sanitize_log_message(message: str) -> str:
+    """
+    Convenience function: sanitize a message using the module-level LogSanitizer.
+
+    Args:
+        message: Raw message to sanitize
+
+    Returns:
+        Sanitized message
+    """
+    return _log_sanitizer.sanitize(message)
+
+
+def truncate_field(value: str, max_length: int = LOG_FIELD_MAX_LENGTH) -> str:
+    """
+    Truncate a user-controlled log field to max_length characters.
+
+    Args:
+        value: The field value to potentially truncate
+        max_length: Maximum allowed length (default: 256)
+
+    Returns:
+        Original value if within limit, otherwise truncated with '[truncated]' suffix
+    """
+    if not value or len(value) <= max_length:
+        return value
+    return value[:max_length] + '[truncated]'
+
+
+def sanitize_nonce_for_logging(nonce: str) -> str:
+    """
+    Return a safe representation of a nonce for logging.
+
+    Instead of logging the full nonce value (which could be used for replay
+    if logs are compromised), log only the first 8 characters as a prefix.
+
+    Args:
+        nonce: The full nonce value
+
+    Returns:
+        Truncated nonce prefix suitable for log messages
+    """
+    if not nonce:
+        return '<empty>'
+    return nonce[:8] + '...'

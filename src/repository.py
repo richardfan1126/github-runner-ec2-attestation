@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
+from src.logging_config import sanitize_log_message, truncate_field
 from src.models import CloneResult
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class RepositoryClient:
             self._authenticated = False
             return AuthResult(
                 success=False,
-                error_message=f"Network error during authentication: {str(e)}"
+                error_message=f"Network error during authentication: {sanitize_log_message(truncate_field(str(e)))}"
             )
 
     def _create_askpass_helper(self, token: str) -> str:
@@ -157,9 +158,9 @@ class RepositoryClient:
                 elif "not found" in stderr or "does not exist" in stderr or "repository" in stderr:
                     raise GitHubAPIError(f"Repository not found: {owner}/{repo}", 404)
                 else:
-                    raise GitHubAPIError(
-                        f"Clone failed: {result.stderr.strip()}", 500
-                    )
+                    sanitized_stderr = sanitize_log_message(truncate_field(result.stderr.strip()))
+                    logger.warning(f"Clone failed with stderr: {sanitized_stderr}")
+                    raise GitHubAPIError("clone_failed", 500)
 
             # Fetch the specific commit and checkout
             fetch_result = subprocess.run(
@@ -206,7 +207,7 @@ class RepositoryClient:
             if strip_result.returncode == 0:
                 logger.info("Stripped GitHub token from .git/config")
             else:
-                logger.warning(f"Failed to strip token from .git/config: {strip_result.stderr.strip()}")
+                logger.warning(f"Failed to strip token from .git/config: {sanitize_log_message(truncate_field(strip_result.stderr.strip()))}")
 
             # Remove the .git directory entirely
             git_dir = os.path.join(clone_dir, ".git")
@@ -223,7 +224,7 @@ class RepositoryClient:
             raise
         except Exception as e:
             self.cleanup_clone(clone_dir)
-            raise GitHubAPIError(f"Network error: {str(e)}", 500)
+            raise GitHubAPIError(f"Network error: {sanitize_log_message(truncate_field(str(e)))}", 500)
         finally:
             # Always clean up the askpass helper script
             try:
@@ -231,7 +232,7 @@ class RepositoryClient:
                     os.unlink(helper_path)
                     logger.debug("Cleaned up GIT_ASKPASS helper script")
             except OSError as e:
-                logger.warning(f"Failed to clean up GIT_ASKPASS helper: {e}")
+                logger.warning(f"Failed to clean up GIT_ASKPASS helper: {sanitize_log_message(str(e))}")
 
     def validate_script_exists(self, clone_path: str, script_path: str) -> bool:
         """
@@ -289,7 +290,7 @@ class RepositoryClient:
             if clone_path and os.path.exists(clone_path):
                 shutil.rmtree(clone_path)
         except OSError as e:
-            logger.warning(f"Failed to clean up clone directory {clone_path}: {e}")
+            logger.warning(f"Failed to clean up clone directory: {sanitize_log_message(str(e))}")
 
     def _parse_repo_url(self, repo_url: str) -> tuple[str, str]:
         """
