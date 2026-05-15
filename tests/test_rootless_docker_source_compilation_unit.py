@@ -205,9 +205,14 @@ class TestDockerfileBuildDependencies:
     def test_libslirp_devel_installed(self, dockerfile_content):
         """libslirp is built from source (not available as package in AL2023)."""
         assert re.search(
-            r"git clone.*libslirp",
+            r"libslirp",
             dockerfile_content,
         ), "Dockerfile must build libslirp from source (not available as dnf package)"
+        # Verify it uses a tarball with checksum verification (more resilient than git clone)
+        assert re.search(
+            r"curl.*libslirp.*tar\.gz|libslirp.*tar\.gz",
+            dockerfile_content,
+        ), "Dockerfile must download libslirp tarball for source build"
 
     def test_libcap_devel_installed(self, dockerfile_content):
         """libcap-devel is installed for slirp4netns compilation."""

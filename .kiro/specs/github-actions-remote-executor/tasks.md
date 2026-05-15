@@ -94,7 +94,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Log sanitization tests**: Verify subprocess stderr containing GitHub token is redacted; verify error responses don't contain absolute paths; verify multi-line input is escaped; verify nonce values not logged verbatim
     - _Requirements: 3.20, 7.19, 11.17, 15.23, 45.14, 52.11, 54.9_
 
-- [ ] 185. Checkpoint - Ensure all security hardening round 2 tests pass
+- [x] 185. Checkpoint - Ensure all security hardening round 2 tests pass
   - Run the full test suite and verify all new tests from 184.13 pass
   - Verify no regressions in existing tests
 

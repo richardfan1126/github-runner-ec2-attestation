@@ -119,14 +119,20 @@ class TestRunner:
 
 
 class TestCheckoutStep:
-    """Requirement 2.2: first step must be actions/checkout@v4 with submodules: recursive."""
+    """Requirement 2.2: first step must be actions/checkout (SHA-pinned) with submodules: recursive."""
 
     def test_first_step_is_checkout(self, build_ami_steps):
-        """The first step must use actions/checkout@v4."""
+        """The first step must use actions/checkout pinned to a commit SHA."""
         first = build_ami_steps[0]
         uses = first.get("uses", "")
-        assert uses.startswith("actions/checkout@v4"), (
-            f"First step must use actions/checkout@v4, got {uses!r}"
+        assert uses.startswith("actions/checkout@"), (
+            f"First step must use actions/checkout, got {uses!r}"
+        )
+        # After 184.7, actions must be pinned to a 40-char hex SHA
+        ref = uses.split("@", 1)[1]
+        import re
+        assert re.match(r"^[0-9a-f]{40}$", ref), (
+            f"actions/checkout must be pinned to a full commit SHA, got {ref!r}"
         )
 
     def test_checkout_has_submodules_recursive(self, build_ami_steps):
