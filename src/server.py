@@ -526,10 +526,33 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Decode base64 fields with strict validation
+            import binascii
+            try:
+                encrypted_payload = base64.b64decode(encrypted_payload_b64, validate=True)
+            except (binascii.Error, ValueError) as e:
+                logger.warning(f"Invalid base64 in encrypted_payload: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "invalid_base64",
+                        "Invalid base64 encoding in encrypted_payload"
+                    )
+                )
+            try:
+                client_public_key = base64.b64decode(client_public_key_b64, validate=True)
+            except (binascii.Error, ValueError) as e:
+                logger.warning(f"Invalid base64 in client_public_key: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "invalid_base64",
+                        "Invalid base64 encoding in client_public_key"
+                    )
+                )
+
             # Decrypt the request payload
             try:
-                encrypted_payload = base64.b64decode(encrypted_payload_b64)
-                client_public_key = base64.b64decode(client_public_key_b64)
                 body, shared_key = encryption_manager.decrypt_request(
                     encrypted_payload, client_public_key
                 )
@@ -924,10 +947,23 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
+            # Decode base64 with strict validation
+            import binascii
+            try:
+                encrypted_payload = base64.b64decode(encrypted_payload_b64, validate=True)
+            except (binascii.Error, ValueError) as e:
+                logger.warning(f"Invalid base64 in encrypted_payload on output endpoint: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=create_error_response(
+                        "invalid_base64",
+                        "Invalid base64 encoding in encrypted_payload"
+                    )
+                )
+
             # Decrypt the request payload using Shared_Key;
             # successful decryption proves caller identity (no separate OIDC validation needed)
             try:
-                encrypted_payload = base64.b64decode(encrypted_payload_b64)
                 body = encryption_manager.decrypt_with_shared_key(encrypted_payload, shared_key)
             except (ValueError, Exception) as e:
                 logger.warning(f"Decryption failed on output endpoint: {e}")

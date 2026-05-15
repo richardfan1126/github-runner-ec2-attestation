@@ -42,7 +42,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - These checks must occur BEFORE the nonce cache duplicate check
     - _Requirements: 45.10, 45.11, 45.12_
 
-  - [ ] 184.6 Add strict base64 decoding with validate=True
+  - [x] 184.6 Add strict base64 decoding with validate=True
     - In `src/server.py`, update all `base64.b64decode()` calls on `encrypted_payload` and `client_public_key` fields to pass `validate=True`
     - If decoding fails due to malformed base64, return HTTP 400 with error indicating invalid base64 encoding
     - _Requirements: 45.13_
