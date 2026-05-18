@@ -4,15 +4,7 @@ Date: 2026-05-15
 
 ## Findings
 
-### 1. High: AMI build verifies and pulls by mutable tag, not immutable digest
-
-- `scripts/build-ami.py` validates artifact references as tag-only values such as `ghcr.io/owner/repo/package:tag`, even though the CLI help mentions digest references.
-- `verify_artifact_signature()` verifies the artifact using the mutable tag, and `pull_artifact_from_ghcr()` later pulls that same mutable tag.
-- If the tag is moved between verification and pull, the AMI build can verify one artifact but convert a different artifact into an AMI.
-- Required hardening: require `@sha256:` artifact references, verify exactly that digest, and pull exactly that digest.
-- Impact: artifact provenance and AMI contents are not cryptographically bound to the same immutable object.
-
-### 2. High: Requested commit is not bound to the GitHub OIDC `sha` claim
+### 1. High: Requested commit is not bound to the GitHub OIDC `sha` claim
 
 - `src/validation.py` verifies the GitHub OIDC token signature, issuer, audience, repository, branch restrictions, and protected-ref status.
 - `src/server.py` then clones and executes the caller-supplied `commit_hash` without checking it against the token's `sha` claim.
@@ -20,7 +12,7 @@ Date: 2026-05-15
 - Required hardening: reject `/execute` unless `body["commit_hash"] == oidc_result.claims["sha"]`, or explicitly document and attest that arbitrary commit execution is intended.
 - Impact: protected-ref checks do not prove the executed code is the same code that minted the OIDC token.
 
-### 3. High: GitHub Actions AWS role trust is repo-wide and workflow-dispatch builds are not branch-restricted
+### 2. High: GitHub Actions AWS role trust is repo-wide and workflow-dispatch builds are not branch-restricted
 
 - `terraform/github-actions-iam-role/main.tf` allows any subject matching `repo:${var.github_org}/${var.github_repo}:*` to assume the AMI-builder AWS role.
 - `.github/workflows/build-attestable-image.yml` runs the `build-ami` job when `github.event_name == 'workflow_dispatch'`, regardless of branch.
@@ -28,7 +20,23 @@ Date: 2026-05-15
 - Required hardening: restrict the AWS role trust to the exact protected branch and workflow identity, and restrict `workflow_dispatch` AMI builds to `refs/heads/main`.
 - Impact: compromise of a less-trusted workflow context can become AWS infrastructure access and AMI publication capability.
 
-### 4. Medium: Default deployment is a public HTTP service with a shared, non-instance-specific audience
+### 3. High: Runtime image digest is verified at startup, but execution still uses the tag reference
+
+- `src/main.py` validates/pulls the configured container image with `container_image_digest=config.container_image_digest` during startup.
+- `src/script_executor.py` later creates execution containers with `image=self._container_image`.
+- If `CONTAINER_IMAGE` is a mutable tag plus a separate `CONTAINER_IMAGE_DIGEST`, startup verification proves the tag matched the digest at startup, but execution is still addressed by the mutable tag.
+- Required hardening: normalize the runtime image reference to an immutable `image@sha256:<digest>` reference after verification and use only that immutable reference for `containers.create()`.
+- Impact: tag movement after startup can cause execution in an image different from the one operators intended to pin.
+
+### 4. High: Real `ScriptExecutor` wiring does not receive the verified image digest
+
+- `src/main.py` passes `container_image_digest=config.container_image_digest` to the temporary startup executor used for dangling-container cleanup.
+- `src/server.py` constructs the real request-handling `ScriptExecutor` without passing `container_image_digest`.
+- The digest verification support exists in `ScriptExecutor`, but the production app path does not provide the configured digest to the executor that actually runs submitted scripts.
+- Required hardening: pass `container_image_digest=config.container_image_digest` in `create_app()` and add a regression test for production wiring.
+- Impact: digest pinning can appear configured and tested at startup while the executor path remains tag-based.
+
+### 5. Medium: Default deployment is a public HTTP service with a shared, non-instance-specific audience
 
 - `terraform/deploy/main.tf` allows inbound traffic from anywhere on port 8080 and assigns a public IP.
 - `terraform/deploy/outputs.tf` publishes the endpoint as `http://<public-ip>:8080`.
@@ -37,7 +45,7 @@ Date: 2026-05-15
 - Required hardening: place the service behind private networking, TLS, and an instance-specific audience value.
 - Impact: operators can deploy multiple instances that accept the same OIDC audience, and the service is publicly reachable by default.
 
-### 5. Medium: OIDC policy is repo-scoped only by default and does not restrict workflow identity
+### 6. Medium: OIDC policy is repo-scoped only by default and does not restrict workflow identity
 
 - `src/validation.py` authorizes primarily on the `repository` claim after signature, issuer, and audience validation.
 - `ALLOWED_BRANCHES` and `REQUIRE_PROTECTED_REF` are supported, but the default AMI env file does not set them.
@@ -45,7 +53,7 @@ Date: 2026-05-15
 - Required hardening: require protected refs by default for production and add workflow identity allow-listing for trusted caller workflows.
 - Impact: any workflow in an allowed repository that can mint a token for the configured audience is treated as equally trusted.
 
-### 6. Medium: Artifact provenance verification is optional outside the CI wrapper
+### 7. Medium: Artifact provenance verification is optional outside the CI wrapper
 
 - `scripts/build-ami.py` accepts `--expected-workflow`, but the argument defaults to `None`.
 - When omitted, the script skips workflow identity verification and accepts any valid attestation from the same repository identity.
@@ -53,21 +61,13 @@ Date: 2026-05-15
 - Required hardening: make `--expected-workflow` required, or provide a secure default that matches the trusted build workflow.
 - Impact: operators can accidentally build AMIs from artifacts produced by a less-trusted workflow.
 
-### 7. Medium: AMI Python dependency handling claims lockfile enforcement, but does not use it for wheel resolution
+### 8. Medium: Build-time source supply chain still has unsigned source inputs
 
-- `.github/scripts/build-kiwi-image.sh` exports locked requirements from `uv.lock`.
-- The script then reads dependency ranges from `pyproject.toml` and runs `pip3 download` against those ranges.
-- `kiwi-descriptions/config.sh` later installs whatever local wheels were downloaded, without using the exported requirements file or enforcing hashes.
-- Required hardening: download and install from the exported locked requirements with hash checking, for example with `pip --require-hashes -r requirements.txt`.
-- Impact: the built AMI can silently include newer dependency versions than the reviewed lockfile, weakening reproducibility and supply-chain review.
-
-### 8. Medium: Build-time source supply chain still has unsigned or unhashed inputs
-
-- `.github/docker/Dockerfile.kiwi-builder` downloads the `libslirp` tarball over HTTPS but does not verify a checksum or signature.
 - `.github/scripts/build-kiwi-image.sh` clones `rootlesskit`, `slirp4netns`, and `fuse-overlayfs` and checks out pinned commits, but does not verify signed tags, commit signatures, checksums, or vendored source archives.
-- `dockerd-rootless.sh` is checksum-verified, so this issue is limited to the remaining source inputs.
-- Required hardening: verify checksums/signatures for all source archives, verify signed commits/tags, or vendor the exact reviewed source artifacts.
-- Impact: compromise of an upstream source location or build-time network path can alter rootless Docker components embedded into the trusted AMI.
+- `scripts/build-ami.py` clones `awslabs/coldsnap` at a pinned tag and builds with `cargo install --locked`, but does not verify a signed tag or commit.
+- Several other inputs are stronger: the builder base image is digest-pinned, `libslirp` and `dockerd-rootless.sh` are checksum-verified, and ORAS is checksum-verified.
+- Required hardening: verify signed commits/tags where available, use checksum-verified release archives, or vendor the exact reviewed source artifacts.
+- Impact: compromise of an upstream source location or build-time network path can alter rootless Docker or snapshot tooling embedded into the trusted build chain.
 
 ### 9. Medium: GitHub token appears in `git clone` process arguments
 
@@ -94,11 +94,18 @@ Date: 2026-05-15
 ### 12. Medium: Execution container sandbox has residual hardening gaps
 
 - `src/script_executor.py` drops all Linux capabilities but re-adds several capabilities and leaves container networking enabled by default.
-- The container is not configured with a read-only root filesystem, explicit non-root user, pids limit, or tmpfs-only scratch space.
-- Required hardening: remove unnecessary capabilities, disable networking unless required, set `read_only=True`, add `pids_limit`, run as a non-root user, and provide explicit tmpfs scratch mounts.
+- The container is not configured with a read-only root filesystem, explicit non-root user, or tmpfs-only scratch space.
+- Required hardening: remove unnecessary capabilities, disable networking unless required, set `read_only=True`, run as a non-root user, and provide explicit tmpfs scratch mounts.
 - Impact: malicious scripts have more container-local attack surface and outbound network capability than necessary.
 
-### 13. Low: The AMI build instance SSH private key is exported through Terraform outputs
+### 13. Medium: Execution containers do not enforce PID limits
+
+- `src/script_executor.py` sets memory and CPU limits when creating execution containers.
+- The `containers.create()` call does not set `pids_limit`.
+- Required hardening: configure a workload-appropriate `pids_limit` and add a regression test that fork-heavy scripts fail inside the container without exhausting host process resources.
+- Impact: a hostile script can create many processes and pressure the container runtime or host process table despite CPU and memory limits.
+
+### 14. Low: The AMI build instance SSH private key is exported through Terraform outputs
 
 - `terraform/build-ami/ssh_key.tf` generates a new private key in Terraform.
 - `terraform/build-ami/outputs.tf` exposes that private key as the `ssh_private_key` output, marked sensitive but still present in Terraform state.
@@ -106,38 +113,14 @@ Date: 2026-05-15
 - Required hardening: prefer SSM Session Manager, EC2 Instance Connect with short-lived keys, or key generation outside Terraform state.
 - Impact: the ephemeral build-instance credential is materialized in local or CI Terraform state.
 
-### 14. Low: SSH host key is not verified during AMI build
+### 15. Low: SSH host key is not verified during AMI build
 
 - `scripts/build-ami.py` uses `paramiko.AutoAddPolicy()`, which silently accepts any SSH host key on first connection.
 - An attacker who can intercept traffic between the runner and the EC2 build instance can modify commands executed during AMI creation.
 - Required hardening: verify the instance SSH host key out-of-band before running provisioning commands, or avoid SSH by using SSM.
 - Impact: the build control channel lacks host authentication.
 
-### 15. Medium: GitHub Actions and builder base image are not pinned to immutable digests
-
-- `.github/workflows/build-attestable-image.yml` uses third-party actions by mutable tags such as `actions/checkout@v4`, `astral-sh/setup-uv@v5`, `docker/setup-buildx-action@v3`, `actions/attest@v4`, and `aws-actions/configure-aws-credentials@v4`.
-- `.github/docker/Dockerfile.kiwi-builder` uses `public.ecr.aws/amazonlinux/amazonlinux:2023.10.20260302.1` without a digest.
-- Terraform provider lockfiles and several downloaded tools are hash-pinned, but the CI action and base image entry points are still mutable references.
-- Required hardening: pin GitHub Actions to full commit SHAs and pin container base images with `@sha256:` digests.
-- Impact: compromise or unexpected movement of a tag can alter the trusted build environment without a repository diff.
-
-### 16. Medium: `script_env` can alter Bash execution semantics without key-level restrictions
-
-- `/execute` accepts caller-supplied `script_env` and passes it directly into the execution container environment.
-- Bash startup and script behavior can be influenced by environment variables such as `BASH_ENV`, `SHELLOPTS`, `PATH`, and language/tool-specific variables.
-- `script_env_hash` is included in execution attestation, but the server does not enforce an allow-list or deny-list for high-impact names.
-- Required hardening: restrict `script_env` keys to an allow-list or deny known execution-affecting variables, and require clients/verifiers to compare the attested `script_env_hash`.
-- Impact: a valid attestation for a script path may still represent execution materially altered by environment variables.
-
-### 17. Medium: Repository script validation follows symlinks
-
-- `RepositoryClient.validate_script_exists()` uses `os.path.isfile()` on `clone_path/script_path`, which follows symlinks.
-- `server.py` later uses `os.path.getsize()` on that same path, which also follows symlinks.
-- A repository-controlled `script_path` can therefore be a symlink rather than a regular file in the repository tree.
-- Required hardening: reject symlink script paths, resolve paths with `realpath`, and require the resolved path to remain inside the clone directory.
-- Impact: the attested `script_path` may not unambiguously identify a regular repository file, and host-side validation can observe symlink targets outside the checkout.
-
-### 18. Medium: Runtime AMI includes packages that are not justified for executor runtime
+### 16. Medium: Runtime AMI includes packages that are not justified for executor runtime
 
 - `kiwi-descriptions/appliance.kiwi` installs `pciutils`, `gzip`, `awscli`, `tar`, `binutils`, `python3.11-pip`, and `git` into the runtime image.
 - Static usage shows the executor needs `python3.11`, Docker/rootless runtime components, NitroTPM tooling, and boot/verity/systemd packages; there are no runtime references to `awscli`, `binutils`, `python3.11-pip`, or `pciutils`.
@@ -146,7 +129,7 @@ Date: 2026-05-15
 - Required hardening: maintain a runtime package allow-list, remove `awscli`, `binutils`, `python3.11-pip`, `pciutils`, and any unneeded archive/debug tools after build-time use, and either remove host-side `git` by switching checkout semantics or keep it with explicit justification and stronger credential isolation.
 - Impact: a compromised executor or container escape gains extra post-compromise tooling for cloud interaction, package installation, binary inspection, repository access, and diagnostics.
 
-### 19. Medium: Exception and subprocess error paths bypass the existing log sanitizer
+### 17. Medium: Exception and subprocess error paths bypass the existing log sanitizer
 
 - `src/logging_config.py` defines `sanitize_for_logging()` and `sanitize_error_message()`, and `src/server.py` imports them, but the main request and exception paths log raw interpolated strings instead.
 - `src/repository.py` raises `GitHubAPIError(f"Clone failed: {result.stderr.strip()}", 500)` for unclassified clone failures.
@@ -155,16 +138,30 @@ Date: 2026-05-15
 - Required hardening: never log or return raw subprocess stderr; centralize redaction for tokens, authorization headers, credentialed URLs, environment assignments, absolute paths, and control characters; expose allow-listed external error messages while retaining sanitized diagnostic categories internally.
 - Impact: GitHub tokens, credentialed URLs, local paths, tool stderr, or environment-derived details can be persisted in logs or disclosed through encrypted error responses.
 
-### 20. Low: User-controlled log fields are not consistently escaped, bounded, or minimized
+### 18. Low: User-controlled log fields are not consistently escaped, bounded, or minimized
 
 - `src/server.py` logs user-controlled `repository_url`, `script_path`, validation errors, and duplicate nonce values.
 - Nonce strictness is already tracked separately, but the current logging path can still create high-cardinality log entries or multi-line/control-character log injection if hostile values reach these messages.
 - Required hardening: use structured logging fields with JSON escaping or `repr()`, apply length caps before logging, avoid logging nonce values, and prefer request/execution IDs over user-supplied identifiers.
 - Impact: logs become easier to forge, search pollution increases during hostile traffic, and sensitive repository paths or request metadata are retained unnecessarily.
 
+### 19. Medium: Output polling can generate TPM attestations on every request
+
+- `/execution/{id}/output` calls `generate_output_attestation()` for output responses.
+- A polling client can repeatedly request output and force repeated NitroTPM attestation work.
+- Required hardening: add a dedicated rate limit for output-attestation generation, keyed by execution ID and caller/source, with a lower budget than normal output polling. Return output without a new attestation, or return a rate-limit error, when the attestation budget is exhausted.
+- Impact: frequent polling can turn TPM attestation into an avoidable resource-exhaustion path.
+
+### 20. Medium: Service starts even when NitroTPM is unavailable
+
+- `src/main.py` checks NitroTPM availability at startup.
+- If the device is unavailable, startup logs an error and warning but continues serving.
+- Required hardening: fail closed in production when NitroTPM is unavailable, allowing startup without TPM only behind an explicit development/test configuration flag.
+- Impact: the service can accept requests even though its core attestation guarantee cannot be produced.
+
 ## Resolved Findings (from previous review dated 2026-04-18)
 
-The following issues identified in the prior review have been remediated and verified against the current codebase.
+The following issues identified in prior review passes have been remediated and verified against the current codebase.
 
 | # | Previous Severity | Description | Resolution |
 |---|-------------------|-------------|------------|
@@ -196,10 +193,15 @@ The following issues identified in the prior review have been remediated and ver
 | 26 | Low | Builder image DNF packages float despite comment claiming pinned versions | `Dockerfile.kiwi-builder` now locks `releasever` to a specific AL2023 snapshot via `/etc/dnf/vars/releasever`, and the comment accurately describes this mitigation. |
 | 27 | High | Docker daemon runs rootful | The service now uses the rootless Docker socket at `/run/user/{uid}/docker.sock`, and the systemd unit waits for `/run/user/1000/docker.sock`. |
 | 28 | Medium | Rust installed with bare `curl \| sh` | `install_rust()` now downloads the standalone Rust tarball and detached signature, imports the Rust GPG key, and runs `gpg --verify` before installation. |
-| 29 | Medium | Execution container image is not digest-pinned by default | The AMI env file sets `CONTAINER_IMAGE_DIGEST`, and `ServerConfig.validate()` now requires a configured or digest-pinned image reference. |
+| 29 | Medium | Execution container image is not digest-pinned by default | The AMI env file sets `CONTAINER_IMAGE_DIGEST`, and `ServerConfig.validate()` now requires a configured or digest-pinned image reference. Runtime use of the verified digest is tracked separately. |
 | 30 | Low | `ExecutionManager._execution_durations` list grows unboundedly | Execution durations are stored in a bounded `deque(maxlen=10000)`. |
 | 31 | Medium | `RateLimiter._requests` dict grows unboundedly under distributed traffic | `RateLimiter.cleanup_stale_ips()` prunes stale IP entries and is called by periodic cleanup. |
 | 32 | Medium | `validate_script_path` does not reject absolute paths or null bytes | `validate_script_path()` now rejects empty, null-byte, absolute, and traversal paths. |
+| 33 | High | AMI build verifies and pulls by mutable tag, not immutable digest | `scripts/build-ami.py` now requires digest-pinned GHCR artifact references, strips mutable tags for pull/verify operations, and uses the pinned digest for ORAS and GitHub attestation verification. |
+| 34 | Medium | AMI Python dependency handling claims lockfile enforcement, but does not use it for wheel resolution | `.github/scripts/build-kiwi-image.sh` now exports requirements from `uv.lock` with hashes, downloads wheels with `--require-hashes`, and `kiwi-descriptions/config.sh` installs with `pip --require-hashes`. |
+| 35 | Medium | GitHub Actions and builder base image are not pinned to immutable revisions | `.github/workflows/build-attestable-image.yml` now pins actions to full commit SHAs, and `.github/docker/Dockerfile.kiwi-builder` pins the Amazon Linux base image with `@sha256:`. |
+| 36 | Medium | `script_env` can alter Bash execution semantics without key-level restrictions | `ServerConfig.script_env_deny_list` and `/execute` validation now reject high-impact environment keys such as Bash startup variables, loader variables, `PATH`, and credential-related prefixes. |
+| 37 | Medium | Repository script validation follows symlinks | `RepositoryClient.validate_script_exists()` now rejects symlinks and verifies the real script path remains inside the real clone directory. |
 
 ## Threat Model
 
@@ -217,20 +219,21 @@ The following trust assumptions should be explicit when evaluating the findings 
 
 ## Coverage Gaps
 
-- There are no tests asserting that AMI artifact references must be digest-pinned and that verification and pull use the same digest.
 - There are no tests asserting that requested `commit_hash` must match the GitHub OIDC `sha` claim.
 - There are no tests asserting the AWS OIDC trust policy is restricted to the trusted branch and workflow identity.
-- There are no tests asserting GitHub Actions are pinned by commit SHA and container base images are pinned by digest.
+- There are no tests asserting runtime execution uses an immutable container image digest reference after startup verification.
+- There are no tests asserting the production `create_app()` path passes `container_image_digest` into `ScriptExecutor`.
 - There are no tests or deployment safeguards requiring TLS, private networking, or an instance-specific OIDC audience.
 - There are no tests requiring production defaults for `ALLOWED_BRANCHES`, `REQUIRE_PROTECTED_REF`, or workflow identity allow-listing.
-- There are no tests asserting AMI image Python dependencies are downloaded and installed from the reviewed lockfile with hash verification.
 - There are no tests asserting all build-time source artifacts are signature- or checksum-verified.
 - There are no tests asserting GitHub tokens are never placed in subprocess argv.
 - There are no tests asserting strict nonce type/length/format validation and strict base64 decoding.
 - There are no tests asserting JWKS cache entries expire.
-- There are no tests asserting `script_env` key restrictions or verifier checks for `script_env_hash`.
-- There are no tests asserting `script_path` cannot be a symlink and must resolve inside the cloned repository.
+- There are no tests asserting execution containers use read-only root filesystems, non-root users, no unnecessary capabilities, disabled networking where possible, and tmpfs-only scratch space.
+- There are no tests asserting execution containers set a `pids_limit`.
 - There is no automated runtime package allow-list check for `appliance.kiwi`, nor a dependency-based assertion that build/debug/admin tools are absent from the final AMI.
 - There are no tests asserting subprocess stderr, exception strings, credentialed URLs, environment-style values, absolute paths, and user-controlled fields are redacted before logging or response construction.
+- There are no tests asserting output attestation generation has a dedicated rate limit.
+- There are no tests asserting production startup fails closed when NitroTPM is unavailable.
 - I did not inspect a live built AMI, so I could not verify the effective Docker seccomp profile, user-namespace behavior, or SELinux/AppArmor enforcement at runtime.
 - I did not perform dependency CVE triage against the locked package set or the mutable upstream build environments.
