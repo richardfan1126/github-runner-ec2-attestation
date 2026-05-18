@@ -168,6 +168,7 @@ if [ -s "${REQUIREMENTS_WOLFCRYPT}" ]; then
     WOLFCRYPT_SRC_DIR=$(mktemp -d)
     pip3 download \
         --require-hashes \
+        --no-deps \
         --no-binary=:all: \
         -r "${REQUIREMENTS_WOLFCRYPT}" \
         -d "${WOLFCRYPT_SRC_DIR}"
