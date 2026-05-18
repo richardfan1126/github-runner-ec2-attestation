@@ -205,9 +205,18 @@ if [ ! -d "/tmp/kiwi-build/wheels" ]; then
     exit 1
 fi
 
-# Install dependencies from pre-downloaded wheels (fully offline)
-echo "Installing dependencies from pre-downloaded wheels..."
-pip3.11 install --no-index --find-links /tmp/kiwi-build/wheels /tmp/kiwi-build/wheels/*.whl
+# Check if requirements.txt with hashes exists (created by build-kiwi-image.sh)
+if [ ! -f "/tmp/kiwi-build/requirements.txt" ]; then
+    echo "ERROR: requirements.txt not found in /tmp/kiwi-build/"
+    exit 1
+fi
+
+# Install dependencies from pre-downloaded wheels with hash verification (fully offline).
+# The requirements.txt contains hashes for all packages: original sdist/wheel hashes
+# from uv.lock for binary deps, plus the computed wheel hash for wolfcrypt.
+# This ensures that even the offline installation step verifies every wheel's integrity.
+echo "Installing dependencies from pre-downloaded wheels with hash verification..."
+pip3.11 install --no-index --find-links /tmp/kiwi-build/wheels --require-hashes -r /tmp/kiwi-build/requirements.txt
 
 # Verify critical packages are importable
 echo "Verifying critical packages..."

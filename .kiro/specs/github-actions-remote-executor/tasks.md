@@ -126,9 +126,9 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
   - Run the full test suite and verify the updated package minimization tests pass
   - Verify no regressions in existing tests
 
-- [ ] 188. Fix KIWI image Python dependency installation to use uv.lock via hash-verified path
+- [x] 188. Fix KIWI image Python dependency installation to use uv.lock via hash-verified path
 
-  - [ ] 188.1 Replace pip3 download with uv export-based wheel acquisition in build-kiwi-image.sh
+  - [x] 188.1 Replace pip3 download with uv export-based wheel acquisition in build-kiwi-image.sh
     - Remove the `pip3 download` block that reads dependency names from `pyproject.toml` version ranges and downloads wheels using `--only-binary` / platform flags
     - Remove the `python3 -c "import tomllib..."` block that extracts dependency names from `pyproject.toml`
     - Instead, use the already-exported `requirements.txt` (from `uv export --frozen --format requirements-txt --no-dev`) as the single source of truth for downloading wheels
@@ -142,21 +142,21 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Copy `requirements-install.txt` into the image overlay at `/tmp/kiwi-build/requirements.txt` for use by `config.sh`
     - _Requirements: 12.19, 12.20, 12.21, 12.22_
 
-  - [ ] 188.2 Update config.sh to install with --require-hashes using the exported requirements.txt
+  - [x] 188.2 Update config.sh to install with --require-hashes using the exported requirements.txt
     - Replace the current `pip3.11 install --no-index --find-links /tmp/kiwi-build/wheels /tmp/kiwi-build/wheels/*.whl` with `pip3.11 install --no-index --find-links /tmp/kiwi-build/wheels --require-hashes -r /tmp/kiwi-build/requirements.txt`
     - The `requirements.txt` at this point contains hashes for all packages: original sdist/wheel hashes from `uv.lock` for binary deps, plus the computed wheel hash for wolfcrypt (appended by build-kiwi-image.sh after building the wolfcrypt wheel)
     - This ensures that even the offline installation step verifies every wheel's integrity against known hashes
     - Keep the existing post-install verification checks (import fastapi, uvicorn, etc.)
     - _Requirements: 12.19, 12.22, 12.23_
 
-  - [ ] 188.3 Add regression tests for lockfile-enforced dependency installation
+  - [x] 188.3 Add regression tests for lockfile-enforced dependency installation
     - Verify that `build-kiwi-image.sh` does NOT contain `pip3 download` commands that read version ranges from `pyproject.toml` (i.e., no `pip3 download ... ${BINARY_DEPS}` or similar variable expansion from pyproject.toml parsing)
     - Verify that `build-kiwi-image.sh` uses the exported `requirements.txt` (from `uv export --frozen`) for wheel downloads
     - Verify that `config.sh` uses `--require-hashes` with the requirements file during installation
     - Verify that `config.sh` does NOT use bare `*.whl` glob patterns without hash verification
     - _Requirements: 12.24_
 
-- [ ] 189. Checkpoint - Ensure lockfile-enforced dependency tests pass
+- [x] 189. Checkpoint - Ensure lockfile-enforced dependency tests pass
   - Run the full test suite and verify all new tests from 188.3 pass
   - Verify no regressions in existing tests
 
