@@ -473,6 +473,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 22. THE Build_Workflow SHALL install Python dependencies from the lockfile-enforced export using pip3 install --no-index --find-links (fully offline, no network required) or `uv sync --frozen`
 23. THE installation process SHALL occur during the KIWI image build phase before the image is finalized
 24. THE test suite SHALL include regression tests that verify: (a) the build script does NOT use `pip3 download` with version ranges from `pyproject.toml` for AMI-embedded dependencies, (b) the build script uses `uv export --frozen` or equivalent to produce a hash-checked requirements file from `uv.lock`, (c) the installation step uses `--require-hashes` or `--frozen` to enforce integrity
+25. WHEN a dependency (e.g., wolfcrypt) only publishes source distributions, THE Build_Workflow SHALL download the source tarball with hash verification against `uv.lock` (via `pip3 download --require-hashes --no-binary=:all: -r <wolfcrypt-requirements>`), build the wheel inside the KIWI builder Docker container, compute the wheel's SHA-256 hash, and include that hash in the final requirements file used by `config.sh` for `--require-hashes` installation
 
 ### Requirement 13: Artifact Publishing with PCR Annotations
 
