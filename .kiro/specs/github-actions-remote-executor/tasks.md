@@ -16,7 +16,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - The check must occur after OIDC validation succeeds and before repository cloning begins
     - _Requirements: 2.33, 2.34, 2.35, 2.36_
 
-  - [ ] 190.2 Normalize container image to immutable digest reference after startup verification
+  - [x] 190.2 Normalize container image to immutable digest reference after startup verification
     - In `src/script_executor.py` `__init__`, after receiving `container_image_digest`, compute the Immutable_Image_Reference: strip any tag from `container_image` (everything after `:` but before `@`), then append `@sha256:<digest>` to produce `<repository>@sha256:<digest>`
     - Store the normalized reference as `self._immutable_image_ref`
     - In `_execute_in_container()`, use `self._immutable_image_ref` (not `self._container_image`) when calling `self._docker_client.containers.create(image=...)`

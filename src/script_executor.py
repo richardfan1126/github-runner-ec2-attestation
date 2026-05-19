@@ -72,8 +72,70 @@ class ScriptExecutor:
         self._output_collector = output_collector
         self._temp_storage_path = temp_storage_path
         self._container_image_digest = container_image_digest
+        self._immutable_image_ref = self._compute_immutable_image_ref(
+            container_image, container_image_digest
+        )
         self._active_containers = {}
         self._container_lock = threading.Lock()
+
+    def _compute_immutable_image_ref(self, container_image: str, container_image_digest: "str | None") -> str:
+        """
+        Compute an immutable image reference from the container image and digest.
+
+        Strips any mutable tag from the image reference and appends the digest
+        to produce a reference of the form <repository>@sha256:<digest>.
+
+        If no digest is configured but the image already contains @sha256:,
+        uses it directly. If no digest is available and the image is a mutable
+        tag, logs a warning and falls back to the tag for backward compatibility.
+
+        Args:
+            container_image: The configured container image reference (may include tag)
+            container_image_digest: Optional SHA-256 digest string
+
+        Returns:
+            The immutable image reference string
+        """
+        if container_image_digest is not None:
+            # Strip tag (everything after ':' but before '@') to get the repository
+            repository = container_image
+            # First strip any existing @sha256: suffix
+            if "@sha256:" in repository:
+                repository = repository.split("@sha256:", 1)[0]
+            # Then strip any tag
+            if ":" in repository:
+                # Handle the case where ':' is part of a registry port (e.g. localhost:5000/image)
+                # by only stripping after the last '/'
+                last_slash = repository.rfind("/")
+                if last_slash != -1:
+                    after_slash = repository[last_slash + 1:]
+                    if ":" in after_slash:
+                        repository = repository[:last_slash + 1] + after_slash.split(":", 1)[0]
+                else:
+                    # No slash at all, simple image:tag
+                    repository = repository.split(":", 1)[0]
+
+            # Normalize digest: if it already has 'sha256:' prefix, extract just the hex
+            digest_hex = container_image_digest
+            if digest_hex.startswith("sha256:"):
+                digest_hex = digest_hex[len("sha256:"):]
+
+            immutable_ref = f"{repository}@sha256:{digest_hex}"
+            logger.info(f"Using immutable image reference: {immutable_ref}")
+            return immutable_ref
+
+        # No explicit digest configured
+        if "@sha256:" in container_image:
+            # Image already pinned by digest — use it directly
+            logger.info(f"Container image already pinned by digest: {container_image}")
+            return container_image
+
+        # Mutable tag with no digest — backward compatibility fallback
+        logger.warning(
+            f"No container_image_digest configured and image '{container_image}' "
+            f"uses a mutable tag; falling back to tag-based reference (not immutable)"
+        )
+        return container_image
 
     def execute_async(self, execution_id: str, repo_path: str, script_path: str, script_env: "dict[str, str] | None" = None) -> None:
         """
@@ -152,7 +214,7 @@ class ScriptExecutor:
                 check=True,
             )
             container = self._docker_client.containers.create(
-                image=self._container_image,
+                image=self._immutable_image_ref,
                 name=container_name,
                 command=["bash", f"/workspace/{script_path}"],
                 mem_limit=self._memory_limit,
