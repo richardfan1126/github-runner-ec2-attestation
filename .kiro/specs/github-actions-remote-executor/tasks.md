@@ -24,7 +24,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - If `container_image_digest` is None and `container_image` is a mutable tag, log a warning and fall back to the tag (backward compatibility)
     - _Requirements: 34.13, 34.14, 34.15, 34.16_
 
-  - [ ] 190.3 Pass container_image_digest to production ScriptExecutor in create_app()
+  - [x] 190.3 Pass container_image_digest to production ScriptExecutor in create_app()
     - In `src/server.py` `create_app()`, when constructing the request-handling `ScriptExecutor`, pass `container_image_digest=config.container_image_digest`
     - Verify both the startup executor (in `src/main.py`) and the request-handling executor (in `src/server.py`) receive the same `container_image_digest` value from config
     - _Requirements: 34.17_
