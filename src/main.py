@@ -65,11 +65,21 @@ def main() -> int:
         logger.info("Verifying NitroTPM device availability...")
         attestation_generator = AttestationGenerator(config.tpm_attest_path)
         if not attestation_generator.verify_tpm_available():
-            logger.error(
-                f"NitroTPM device not available at {config.tpm_attest_path}. "
-                "Attestation functionality will not work."
-            )
-            logger.warning("Continuing startup, but attestation will fail at runtime.")
+            if not config.allow_no_tpm:
+                logger.error(
+                    f"NitroTPM device not available at {config.tpm_attest_path}. "
+                    "Attestation cannot be produced. Set ALLOW_NO_TPM=true to bypass "
+                    "this check in development/test environments."
+                )
+                return 1
+            else:
+                logger.warning(
+                    "*** NitroTPM device NOT available — attestation will fail at runtime. ***"
+                )
+                logger.warning(
+                    "ALLOW_NO_TPM is set to true. This is acceptable for dev/test only. "
+                    "Do NOT run in production without a functioning NitroTPM device."
+                )
         else:
             logger.info("NitroTPM device verified and available")
         

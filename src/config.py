@@ -85,6 +85,9 @@ class ServerConfig:
     max_output_attestations_per_window: int = 10
     output_attestation_window_seconds: int = 60
 
+    # NitroTPM Availability Enforcement
+    allow_no_tpm: bool = False
+
     # Request Body Size Limits
     max_request_body_bytes: int = 1_048_576  # 1MB default
     max_encrypted_payload_bytes: int = 524_288  # 512KB default
@@ -229,6 +232,10 @@ class ServerConfig:
         # Parse optional REQUIRE_PROTECTED_REF (boolean, default False)
         require_protected_ref_raw = os.getenv("REQUIRE_PROTECTED_REF", "false")
         require_protected_ref = parse_strict_bool(require_protected_ref_raw, "REQUIRE_PROTECTED_REF")
+
+        # Parse optional ALLOW_NO_TPM (boolean, default False)
+        allow_no_tpm_raw = os.getenv("ALLOW_NO_TPM", "false")
+        allow_no_tpm = parse_strict_bool(allow_no_tpm_raw, "ALLOW_NO_TPM")
         
         # Parse optional MAX_OUTPUT_SIZE_BYTES (default 10MB)
         max_output_size_bytes_raw = os.getenv("MAX_OUTPUT_SIZE_BYTES")
@@ -283,6 +290,7 @@ class ServerConfig:
             container_pids_limit=container_pids_limit,
             max_output_attestations_per_window=max_output_attestations_per_window,
             output_attestation_window_seconds=output_attestation_window_seconds,
+            allow_no_tpm=allow_no_tpm,
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,

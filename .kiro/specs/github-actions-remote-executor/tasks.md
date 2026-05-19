@@ -46,7 +46,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - In `src/server.py`, instantiate the rate limiter at app startup; in the output handler, before calling `generate_output_attestation()`, check the rate limiter; if budget exhausted, set `output_attestation_document` to null and add `attestation_rate_limited: true` to the response
     - _Requirements: 55.1, 55.2, 55.3, 55.4, 55.5, 55.6, 55.7, 55.8_
 
-  - [ ] 190.6 Add NitroTPM availability enforcement at startup
+  - [x] 190.6 Add NitroTPM availability enforcement at startup
     - Add `allow_no_tpm: bool` to `ServerConfig` in `src/config.py`; read from `ALLOW_NO_TPM` env var; default to false; use the same strict boolean parsing as other boolean config values
     - In `src/main.py`, after the existing NitroTPM availability check: if TPM is unavailable and `allow_no_tpm` is False, log an error and exit with non-zero code; if TPM is unavailable and `allow_no_tpm` is True, log a prominent warning and continue
     - _Requirements: 9.16, 9.17, 9.18, 9.19, 9.20_
