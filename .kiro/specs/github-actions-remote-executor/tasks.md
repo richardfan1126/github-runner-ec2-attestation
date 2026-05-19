@@ -8,7 +8,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [x] 1. Tasks 1–189 (completed): Project structure, configuration, data models, request validation, repository client, attestation generator, execution management, output collection, script executor, HTTP server, OIDC authentication, PQ Hybrid KEM encryption, anti-replay nonce cache, concurrency enforcement, contextvars logging, Docker container security, rootless Docker migration, KIWI image build infrastructure, GitHub Actions workflow, AMI converter, deployment, cleanup, debug SSH, security hardening round 1 (mandatory nonces, request body limits, encrypted error envelopes, execution_id binding, post-clone cleanup, strict boolean parsing, raw filename sanitization, debug gate fail-closed, lockfile-enforced deps, helper source integrity, UID pinning, LimitCORE=0, OutputCollector config passthrough), script environment variable forwarding, health endpoint hardening, container image digest pinning, rootless Docker dependencies built from source, security hardening round 2 (immutable artifact digest pinning, credential isolation via GIT_ASKPASS, strict nonce type/length/format validation, strict base64 decoding, CI action SHA pinning, Dockerfile base image digest pinning, libslirp checksum verification, script_env deny-list, symlink-safe script path validation, runtime image package minimization, log and error response sanitization), build-time package uninstall via KIWI (python3.11-pip in uninstall section, binutils retained for dracut UKI), lockfile-enforced dependency installation (uv export → pip3 download --require-hashes → config.sh --require-hashes), and comprehensive property/unit/integration tests for all of the above
 
-- [ ] 190. Security hardening round 3: OIDC commit hash binding, immutable container image reference, production executor digest wiring, container PID limits, output attestation rate limiting, NitroTPM availability enforcement
+- [x] 190. Security hardening round 3: OIDC commit hash binding, immutable container image reference, production executor digest wiring, container PID limits, output attestation rate limiting, NitroTPM availability enforcement
 
   - [x] 190.1 Add OIDC commit hash binding to Request Validator
     - In `src/validation.py`, add a `validate_commit_hash_binding(self, oidc_claims: dict, commit_hash: str) -> bool` method that compares `commit_hash.lower()` against `oidc_claims["sha"].lower()`; returns False on mismatch
@@ -51,7 +51,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - In `src/main.py`, after the existing NitroTPM availability check: if TPM is unavailable and `allow_no_tpm` is False, log an error and exit with non-zero code; if TPM is unavailable and `allow_no_tpm` is True, log a prominent warning and continue
     - _Requirements: 9.16, 9.17, 9.18, 9.19, 9.20_
 
-  - [ ] 190.7 Write tests for all security hardening round 3 changes
+  - [x] 190.7 Write tests for all security hardening round 3 changes
     - **OIDC commit hash binding tests**: Verify request with matching `commit_hash` and OIDC `sha` claim is accepted; verify mismatch is rejected with 403; verify comparison is case-insensitive (uppercase hex in commit_hash matches lowercase in sha claim)
     - **Immutable image reference tests**: Verify when `container_image_digest` is configured, `containers.create()` receives `image@sha256:<digest>` reference; verify mutable tag is NOT passed when digest is available; verify warning is logged when no digest is configured
     - **Production executor wiring tests**: Verify `create_app()` passes `container_image_digest` to ScriptExecutor; verify both startup and request-handling executors receive the same digest value
@@ -60,7 +60,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **NitroTPM enforcement tests**: Verify startup fails when TPM unavailable and ALLOW_NO_TPM is false; verify startup succeeds with warning when TPM unavailable and ALLOW_NO_TPM is true; verify startup succeeds normally when TPM is available regardless of ALLOW_NO_TPM
     - _Requirements: 2.37, 8.31, 9.21, 34.18, 55.9_
 
-- [ ] 191. Checkpoint - Ensure all security hardening round 3 tests pass
+- [x] 191. Checkpoint - Ensure all security hardening round 3 tests pass
   - Run the full test suite and verify all new tests from 190.7 pass
   - Verify no regressions in existing tests
 
