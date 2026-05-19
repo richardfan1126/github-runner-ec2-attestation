@@ -36,7 +36,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - In `src/server.py` `create_app()`, pass `container_pids_limit=config.container_pids_limit` to the ScriptExecutor constructor
     - _Requirements: 8.27, 8.28, 8.29, 8.30_
 
-  - [ ] 190.5 Add output attestation rate limiting
+  - [x] 190.5 Add output attestation rate limiting
     - Create `src/output_attestation_rate_limiter.py` with an `OutputAttestationRateLimiter` class:
       - `__init__(self, max_per_window: int, window_seconds: int)` — stores config
       - `check_and_record(self, execution_id: str) -> bool` — returns True if within budget (attestation allowed), False if budget exhausted; thread-safe

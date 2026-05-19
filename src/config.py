@@ -81,6 +81,10 @@ class ServerConfig:
     # Container PID Limits (fork bomb protection)
     container_pids_limit: int = 256
 
+    # Output Attestation Rate Limiting
+    max_output_attestations_per_window: int = 10
+    output_attestation_window_seconds: int = 60
+
     # Request Body Size Limits
     max_request_body_bytes: int = 1_048_576  # 1MB default
     max_encrypted_payload_bytes: int = 524_288  # 512KB default
@@ -186,6 +190,36 @@ class ServerConfig:
                 raise ValueError(
                     f"Invalid MAX_CONTAINER_PIDS value: {container_pids_limit} (must be a positive integer)"
                 )
+        # Parse optional MAX_OUTPUT_ATTESTATIONS_PER_WINDOW (default 10, must be positive integer)
+        max_output_attestations_per_window_raw = os.getenv("MAX_OUTPUT_ATTESTATIONS_PER_WINDOW")
+        max_output_attestations_per_window = 10
+        if max_output_attestations_per_window_raw is not None:
+            try:
+                max_output_attestations_per_window = int(max_output_attestations_per_window_raw)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"Invalid MAX_OUTPUT_ATTESTATIONS_PER_WINDOW value: '{max_output_attestations_per_window_raw}' (must be a positive integer)"
+                )
+            if max_output_attestations_per_window <= 0:
+                raise ValueError(
+                    f"Invalid MAX_OUTPUT_ATTESTATIONS_PER_WINDOW value: {max_output_attestations_per_window} (must be a positive integer)"
+                )
+
+        # Parse optional OUTPUT_ATTESTATION_WINDOW_SECONDS (default 60, must be positive integer)
+        output_attestation_window_seconds_raw = os.getenv("OUTPUT_ATTESTATION_WINDOW_SECONDS")
+        output_attestation_window_seconds = 60
+        if output_attestation_window_seconds_raw is not None:
+            try:
+                output_attestation_window_seconds = int(output_attestation_window_seconds_raw)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"Invalid OUTPUT_ATTESTATION_WINDOW_SECONDS value: '{output_attestation_window_seconds_raw}' (must be a positive integer)"
+                )
+            if output_attestation_window_seconds <= 0:
+                raise ValueError(
+                    f"Invalid OUTPUT_ATTESTATION_WINDOW_SECONDS value: {output_attestation_window_seconds} (must be a positive integer)"
+                )
+
         allowed_branches = None
         if allowed_branches_raw is not None:
             allowed_branches = [b.strip() for b in allowed_branches_raw.split(",") if b.strip()]
@@ -247,6 +281,8 @@ class ServerConfig:
             container_cpu_limit=float(container_cpu_limit),
             container_image_digest=container_image_digest,
             container_pids_limit=container_pids_limit,
+            max_output_attestations_per_window=max_output_attestations_per_window,
+            output_attestation_window_seconds=output_attestation_window_seconds,
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,

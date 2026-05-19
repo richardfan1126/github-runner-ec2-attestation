@@ -25,6 +25,7 @@ from src.validation import RequestValidator
 from src.models import ExecutionStatus, CloneResult
 from src.logging_config import set_log_context, clear_log_context, sanitize_for_logging, sanitize_error_message, sanitize_log_message, sanitize_nonce_for_logging, truncate_field
 from src.nonce_cache import NonceCache
+from src.output_attestation_rate_limiter import OutputAttestationRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +343,10 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
     app.state.rate_limiter = rate_limiter
     app.state.encryption_manager = encryption_manager
     app.state.nonce_cache = NonceCache(config.nonce_cache_ttl_seconds)
+    app.state.output_attestation_rate_limiter = OutputAttestationRateLimiter(
+        max_per_window=config.max_output_attestations_per_window,
+        window_seconds=config.output_attestation_window_seconds,
+    )
     
     # Request logging middleware (exclude tokens)
     @app.middleware("http")
@@ -1130,26 +1135,33 @@ def add_routes(app: FastAPI) -> None:
                 }
 
             # Generate Output_Attestation_Document on every poll response
+            # (subject to rate limiting to prevent TPM resource exhaustion)
             script_output = (
                 f"stdout:{stdout}\n"
                 f"stderr:{stderr}\n"
                 f"exit_code:{exit_code}"
             )
 
-            attestation_gen = request.app.state.attestation_generator
-            attestation_bytes, attestation_error_msg = (
-                attestation_gen.generate_output_attestation(
-                    script_output, nonce=nonce, execution_id=execution_id
+            output_attestation_limiter = request.app.state.output_attestation_rate_limiter
+            if output_attestation_limiter.check_and_record(execution_id):
+                attestation_gen = request.app.state.attestation_generator
+                attestation_bytes, attestation_error_msg = (
+                    attestation_gen.generate_output_attestation(
+                        script_output, nonce=nonce, execution_id=execution_id
+                    )
                 )
-            )
 
-            if attestation_bytes is not None:
-                response_data["output_attestation_document"] = (
-                    base64.b64encode(attestation_bytes).decode("utf-8")
-                )
+                if attestation_bytes is not None:
+                    response_data["output_attestation_document"] = (
+                        base64.b64encode(attestation_bytes).decode("utf-8")
+                    )
+                else:
+                    response_data["output_attestation_document"] = None
+                    response_data["attestation_error"] = attestation_error_msg
             else:
+                # Rate limit exceeded: return null attestation with indicator
                 response_data["output_attestation_document"] = None
-                response_data["attestation_error"] = attestation_error_msg
+                response_data["attestation_rate_limited"] = True
             
             # Encrypt response with shared key
             encrypted_response = encryption_manager.encrypt_response(
