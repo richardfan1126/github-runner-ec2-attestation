@@ -30,7 +30,7 @@ VALID_OIDC_RESULT = OIDCValidationResult(
     valid=True,
     status_code=200,
     error_message=None,
-    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com", "sha": "a" * 40},
 )
 
 
@@ -163,7 +163,7 @@ class TestEndToEndIntegration:
         """
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -202,7 +202,7 @@ class TestEndToEndIntegration:
         for i in range(3):
             request_data = {
                 "repository_url": "https://github.com/owner/repo",
-                "commit_hash": f"{i:040x}",
+                "commit_hash": "a" * 40,
                 "script_path": f"scripts/test{i}.sh",
                 "github_token": "ghp_test_token",
                 "oidc_token": "valid.oidc.token",
@@ -233,7 +233,7 @@ class TestEndToEndIntegration:
 
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "a1a2a3a4a5a6a1a2a3a4a5a6a1a2a3a4a5a6a1a2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -282,7 +282,7 @@ class TestErrorScenarios:
 
             request_data = {
                 "repository_url": "https://github.com/owner/repo",
-                "commit_hash": "c1c2c3c4c5c6c1c2c3c4c5c6c1c2c3c4c5c6c1c2",
+                "commit_hash": "a" * 40,
                 "script_path": "scripts/test.sh",
                 "github_token": "invalid_token",
                 "oidc_token": "valid.oidc.token",
@@ -325,7 +325,7 @@ class TestErrorScenarios:
 
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/timeout.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -374,7 +374,7 @@ class TestPQHybridKEMEndToEnd:
         """
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -399,7 +399,7 @@ class TestPQHybridKEMEndToEnd:
         """
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -423,7 +423,7 @@ class TestPQHybridKEMEndToEnd:
         """
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "f1f2f3f4f5f6f1f2f3f4f5f6f1f2f3f4f5f6f1f2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -456,7 +456,7 @@ class TestPQHybridKEMEndToEnd:
         """
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "a2b2c2d2e2f2a2b2c2d2e2f2a2b2c2d2e2f2a2b2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -489,7 +489,7 @@ class TestPQHybridKEMErrorScenarios:
 
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "b1b2b3b4b5b6b1b2b3b4b5b6b1b2b3b4b5b6b1b2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -511,7 +511,7 @@ class TestPQHybridKEMErrorScenarios:
 
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "c1c2c3c4c5c6c1c2c3c4c5c6c1c2c3c4c5c6c1c2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -542,7 +542,7 @@ class TestPQHybridKEMErrorScenarios:
         # Create an execution first so the execution record exists
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -566,7 +566,7 @@ class TestPQHybridKEMErrorScenarios:
         """
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "e1e2e3e4e5e6e1e2e3e4e5e6e1e2e3e4e5e6e1e2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -590,7 +590,7 @@ class TestCleanupAndRetention:
         """Test cleanup of expired executions"""
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "b1b2b3b4b5b6b1b2b3b4b5b6b1b2b3b4b5b6b1b2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",
@@ -628,7 +628,7 @@ class TestCleanupAndRetention:
 
         request_data = {
             "repository_url": "https://github.com/owner/repo",
-            "commit_hash": "c1c2c3c4c5c6c1c2c3c4c5c6c1c2c3c4c5c6c1c2",
+            "commit_hash": "a" * 40,
             "script_path": "scripts/test.sh",
             "github_token": "ghp_test_token",
             "oidc_token": "valid.oidc.token",

@@ -31,7 +31,7 @@ from tests.encryption_test_helpers import (
 )
 
 
-def _make_oidc_result(repository: str) -> OIDCValidationResult:
+def _make_oidc_result(repository: str, sha: str = "a" * 40) -> OIDCValidationResult:
     """Create a successful OIDC validation result with the given repository claim."""
     return OIDCValidationResult(
         valid=True,
@@ -41,6 +41,7 @@ def _make_oidc_result(repository: str) -> OIDCValidationResult:
             "repository": repository,
             "iss": "https://token.actions.githubusercontent.com",
             "aud": "https://example.com",
+            "sha": sha,
         },
     )
 
@@ -174,7 +175,7 @@ class TestOIDCRepoBindingIntegration:
         """
         app, client = app_and_client
 
-        oidc_result = _make_oidc_result("owner/repo")
+        oidc_result = _make_oidc_result("owner/repo", sha="b" * 40)
         app.state.request_validator.validate_oidc_token_from_body = Mock(
             return_value=oidc_result
         )
@@ -314,7 +315,7 @@ class TestOutputSharedKeyAuthIntegration:
         app, client = app_and_client
 
         # First, create an execution via /execute
-        oidc_result = _make_oidc_result("owner/repo")
+        oidc_result = _make_oidc_result("owner/repo", sha="f" * 40)
         app.state.request_validator.validate_oidc_token_from_body = Mock(
             return_value=oidc_result
         )
@@ -366,7 +367,7 @@ class TestOutputSharedKeyAuthIntegration:
         """
         app, client = app_and_client
 
-        oidc_result = _make_oidc_result("owner/repo")
+        oidc_result = _make_oidc_result("owner/repo", sha="1" * 40)
         app.state.request_validator.validate_oidc_token_from_body = Mock(
             return_value=oidc_result
         )
@@ -423,7 +424,7 @@ class TestOutputSharedKeyAuthIntegration:
         app, client = app_and_client
 
         # First, create an execution via /execute
-        oidc_result = _make_oidc_result("owner/repo")
+        oidc_result = _make_oidc_result("owner/repo", sha="2" * 40)
         app.state.request_validator.validate_oidc_token_from_body = Mock(
             return_value=oidc_result
         )
@@ -469,7 +470,7 @@ class TestOutputSharedKeyAuthIntegration:
         app, client = app_and_client
 
         # First, create an execution via /execute
-        oidc_result = _make_oidc_result("owner/repo")
+        oidc_result = _make_oidc_result("owner/repo", sha="3" * 40)
         app.state.request_validator.validate_oidc_token_from_body = Mock(
             return_value=oidc_result
         )

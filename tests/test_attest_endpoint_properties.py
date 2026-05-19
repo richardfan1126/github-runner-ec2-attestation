@@ -201,8 +201,21 @@ def test_non_attest_attestation_excludes_server_public_key(
         "oidc_token": "valid.oidc.token",
     }
 
+    # Build OIDC result with sha claim matching the generated commit_hash
+    oidc_result_with_sha = OIDCValidationResult(
+        valid=True,
+        status_code=200,
+        error_message=None,
+        claims={
+            "repository": "owner/repo",
+            "iss": "https://token.actions.githubusercontent.com",
+            "aud": "https://example.com",
+            "sha": commit_hash,
+        },
+    )
+
     with patch.object(
-        app.state.request_validator, "validate_oidc_token_from_body", return_value=VALID_OIDC_RESULT
+        app.state.request_validator, "validate_oidc_token_from_body", return_value=oidc_result_with_sha
     ), patch.object(
         app.state.request_validator, "validate_execution_request"
     ) as mock_validate, patch.object(

@@ -10,7 +10,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [ ] 190. Security hardening round 3: OIDC commit hash binding, immutable container image reference, production executor digest wiring, container PID limits, output attestation rate limiting, NitroTPM availability enforcement
 
-  - [ ] 190.1 Add OIDC commit hash binding to Request Validator
+  - [x] 190.1 Add OIDC commit hash binding to Request Validator
     - In `src/validation.py`, add a `validate_commit_hash_binding(self, oidc_claims: dict, commit_hash: str) -> bool` method that compares `commit_hash.lower()` against `oidc_claims["sha"].lower()`; returns False on mismatch
     - In `src/server.py`, after the repository binding check (which verifies `repository` claim matches `repository_url`), call `validate_commit_hash_binding()` with the OIDC claims and the request's `commit_hash`; if it returns False, return encrypted error envelope with error_code 403 and message indicating commit hash mismatch
     - The check must occur after OIDC validation succeeds and before repository cloning begins

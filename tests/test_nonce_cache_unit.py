@@ -49,7 +49,7 @@ def _get_test_config(nonce_ttl: int = 300) -> ServerConfig:
     )
 
 
-def _make_oidc_result(repository: str = "owner/repo") -> OIDCValidationResult:
+def _make_oidc_result(repository: str = "owner/repo", sha: str = "a" * 40) -> OIDCValidationResult:
     return OIDCValidationResult(
         valid=True,
         status_code=200,
@@ -58,6 +58,7 @@ def _make_oidc_result(repository: str = "owner/repo") -> OIDCValidationResult:
             "repository": repository,
             "iss": GITHUB_OIDC_ISSUER,
             "aud": EXPECTED_AUDIENCE,
+            "sha": sha,
         },
     )
 

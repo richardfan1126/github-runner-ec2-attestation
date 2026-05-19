@@ -42,6 +42,7 @@ VALID_OIDC_RESULT = OIDCValidationResult(
         "repository": "owner/repo",
         "iss": "https://token.actions.githubusercontent.com",
         "aud": "https://example.com",
+        "sha": "a" * 40,
     },
 )
 

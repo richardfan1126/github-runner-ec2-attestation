@@ -250,6 +250,7 @@ VALID_OIDC_RESULT = OIDCValidationResult(
         "repository": "owner/repo",
         "iss": GITHUB_OIDC_ISSUER,
         "aud": EXPECTED_AUDIENCE,
+        "sha": "a" * 40,
     },
 )
 

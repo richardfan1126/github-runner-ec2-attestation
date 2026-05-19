@@ -29,17 +29,17 @@ VALID_OIDC_RESULT = OIDCValidationResult(
     valid=True,
     status_code=200,
     error_message=None,
-    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com", "sha": "a" * 40},
 )
 
 
-def _make_oidc_result(repository: str) -> OIDCValidationResult:
+def _make_oidc_result(repository: str, sha: str = "a" * 40) -> OIDCValidationResult:
     """Create an OIDCValidationResult with a specific repository claim."""
     return OIDCValidationResult(
         valid=True,
         status_code=200,
         error_message=None,
-        claims={"repository": repository, "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+        claims={"repository": repository, "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com", "sha": sha},
     )
 
 
@@ -151,7 +151,7 @@ def _post_output(client, execution_id, shared_key, offset=0, nonce=None):
 def _base_request_data(**overrides):
     data = {
         "repository_url": "https://github.com/owner/repo",
-        "commit_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "commit_hash": "a" * 40,
         "script_path": "scripts/test.sh",
         "github_token": "ghp_test_token",
         "oidc_token": "valid.oidc.token",
@@ -344,7 +344,7 @@ class TestConcurrencyEnforcementIntegration:
         test_client = TestClient(application)
 
         # First execution should succeed
-        req1 = _base_request_data(commit_hash="1111111111111111111111111111111111111111")
+        req1 = _base_request_data()
         body1 = make_encrypted_execute_request(req1, ctx)
         resp1 = test_client.post("/execute", json=body1)
         assert resp1.status_code == 200
@@ -353,7 +353,7 @@ class TestConcurrencyEnforcementIntegration:
         time.sleep(0.3)
 
         # Second execution should be rejected with 503
-        req2 = _base_request_data(commit_hash="2222222222222222222222222222222222222222")
+        req2 = _base_request_data()
         body2 = make_encrypted_execute_request(req2, ctx)
         resp2 = test_client.post("/execute", json=body2)
         assert_encrypted_error(resp2, ctx.shared_key, "at_capacity", 503)

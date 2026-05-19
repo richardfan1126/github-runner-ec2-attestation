@@ -45,7 +45,7 @@ def _get_test_config() -> ServerConfig:
     )
 
 
-def _make_oidc_result(repository: str) -> OIDCValidationResult:
+def _make_oidc_result(repository: str, sha: str = "a" * 40) -> OIDCValidationResult:
     return OIDCValidationResult(
         valid=True,
         status_code=200,
@@ -54,6 +54,7 @@ def _make_oidc_result(repository: str) -> OIDCValidationResult:
             "repository": repository,
             "iss": GITHUB_OIDC_ISSUER,
             "aud": EXPECTED_AUDIENCE,
+            "sha": sha,
         },
     )
 

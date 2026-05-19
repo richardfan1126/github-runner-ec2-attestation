@@ -347,6 +347,25 @@ class RequestValidator:
                     return key.key
         return None
     
+    def validate_commit_hash_binding(self, oidc_claims: dict, commit_hash: str) -> bool:
+        """Verify that the request commit_hash matches the OIDC token's sha claim.
+
+        This ensures the executed code is the same code that minted the OIDC
+        token, closing the gap where a valid workflow could request execution
+        of a different commit.
+
+        Args:
+            oidc_claims: Decoded OIDC token claims (must contain "sha" key).
+            commit_hash: The commit hash from the execution request body.
+
+        Returns:
+            True if the commit hashes match (case-insensitive), False on mismatch.
+
+        Requirements: 2.33, 2.34, 2.35, 2.36
+        """
+        oidc_sha = oidc_claims.get("sha", "")
+        return commit_hash.lower() == oidc_sha.lower()
+
     def validate_execution_request(self, request: dict) -> ValidationResult:
         """
         Validates execution request structure and fields.

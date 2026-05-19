@@ -26,7 +26,7 @@ VALID_OIDC_RESULT = OIDCValidationResult(
     valid=True,
     status_code=200,
     error_message=None,
-    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com", "sha": "a" * 40},
 )
 
 
@@ -193,17 +193,12 @@ class TestExecuteEndpoint:
             "oidc_token": "valid.oidc.token",
         }
 
-        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
-             patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
-            mock_validate.return_value = Mock(
-                valid=False,
-                errors=["Invalid commit hash format"]
-            )
-
+        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             body = make_encrypted_execute_request(request_data, ctx)
             response = client.post("/execute", json=body)
 
-            assert_encrypted_error(response, ctx.shared_key, "validation_failed", 400)
+            # Commit hash binding check rejects before format validation
+            assert_encrypted_error(response, ctx.shared_key, "commit_hash_mismatch", 403)
 
     def test_authentication_failure_401(self):
         """Test 401 error for GitHub authentication failure"""
@@ -281,7 +276,14 @@ class TestExecuteEndpoint:
             "oidc_token": "valid.oidc.token",
         }
 
-        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT), \
+        oidc_result_b = OIDCValidationResult(
+            valid=True,
+            status_code=200,
+            error_message=None,
+            claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com", "sha": "b" * 40},
+        )
+
+        with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=oidc_result_b), \
              patch.object(app.state.request_validator, 'validate_execution_request') as mock_validate:
             mock_validate.return_value = Mock(valid=True, errors=[])
 

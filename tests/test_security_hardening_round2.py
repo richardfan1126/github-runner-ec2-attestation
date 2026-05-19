@@ -49,6 +49,7 @@ VALID_OIDC_RESULT = OIDCValidationResult(
         "repository": "owner/repo",
         "iss": "https://token.actions.githubusercontent.com",
         "aud": "https://example.com",
+        "sha": "a" * 40,
     },
 )
 
@@ -137,7 +138,7 @@ def client(app):
 def _base_request_data(**overrides):
     data = {
         "repository_url": "https://github.com/owner/repo",
-        "commit_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "commit_hash": "a" * 40,
         "script_path": "scripts/test.sh",
         "github_token": "ghp_test_token_value",
         "oidc_token": "valid.oidc.token",

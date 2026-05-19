@@ -29,7 +29,7 @@ VALID_OIDC_RESULT = OIDCValidationResult(
     valid=True,
     status_code=200,
     error_message=None,
-    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com"},
+    claims={"repository": "owner/repo", "iss": "https://token.actions.githubusercontent.com", "aud": "https://example.com", "sha": "a" * 40},
 )
 
 OIDC_BEARER_HEADER = {"Authorization": "Bearer valid.oidc.token"}

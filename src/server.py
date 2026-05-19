@@ -659,6 +659,20 @@ def add_routes(app: FastAPI) -> None:
                     "OIDC token repository claim does not match request repository_url"
                 )
 
+            # OIDC commit hash binding: verify the OIDC token's sha claim matches the request commit_hash
+            request_commit_hash = body.get("commit_hash", "")
+            if not validator.validate_commit_hash_binding(oidc_result.claims, request_commit_hash):
+                oidc_sha = oidc_result.claims.get("sha", "")
+                logger.warning(
+                    f"Commit hash mismatch: OIDC sha={oidc_sha}, "
+                    f"request commit_hash={request_commit_hash}"
+                )
+                return _encrypted_error_response(
+                    encryption_manager, shared_key,
+                    "commit_hash_mismatch", 403,
+                    "OIDC token sha claim does not match request commit_hash"
+                )
+
             # Anti-replay nonce cache duplicate check
             nonce_cache = request.app.state.nonce_cache
             if not nonce_cache.check_and_store(request_nonce):
