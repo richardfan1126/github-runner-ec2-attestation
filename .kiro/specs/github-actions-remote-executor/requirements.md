@@ -22,7 +22,7 @@ This specification covers three major aspects:
 
 7. **Streaming Output Requirements (Requirement 44)**: How the Script_Executor streams output from Execution_Containers incrementally during execution, so that clients can observe partial output while scripts are still running rather than waiting for the container to exit.
 
-8. **Security Hardening Requirements (Requirements 45-51, 54)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection (including mandatory nonces, strict type/format/length validation, and strict base64 decoding), debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, IAM permission scoping, host login access hardening, and runtime image package minimization.
+8. **Security Hardening Requirements (Requirements 45-51, 54-55)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection (including mandatory nonces, strict type/format/length validation, and strict base64 decoding), debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, IAM permission scoping, host login access hardening, runtime image package minimization, and output attestation rate limiting.
 
 Note: Security hardening acceptance criteria from the security review are integrated throughout the existing requirements where they naturally belong. Only genuinely new requirement areas appear in the Security Hardening Requirements section.
 
@@ -88,6 +88,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 | 52 | Script Environment Variable Forwarding | Runtime |
 | 53 | Rootless Docker Dependencies Built from Source | Image Provisioning |
 | 54 | Runtime Image Package Minimization | Security Hardening |
+| 55 | Output Attestation Rate Limiting | Security Hardening |
 
 ## Glossary
 
@@ -158,6 +159,9 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Request_Body_Limit**: Maximum allowed size in bytes for incoming HTTP request bodies on encrypted endpoints, enforced before JSON parsing or base64 decoding to prevent resource exhaustion from oversized requests
 - **Script_Env_Deny_List**: A configurable set of environment variable key names that are rejected when present in the `script_env` dictionary, preventing callers from injecting variables that alter Bash execution semantics (e.g., `BASH_ENV`, `PATH`, `SHELLOPTS`, `ENV`, `BASH_FUNC_*`)
 - **Log_Sanitizer**: A centralized component that redacts sensitive data (tokens, credentialed URLs, absolute paths, environment assignments, control characters) from log messages and error responses before they are persisted or returned to callers
+- **Immutable_Image_Reference**: A container image reference in the format `image@sha256:<digest>` that addresses a specific image manifest by content hash rather than a mutable tag, ensuring the same image is used regardless of tag movement
+- **Output_Attestation_Rate_Limiter**: A per-execution-ID rate limiter that restricts the number of NitroTPM attestation document generations for output polling within a configurable time window, preventing resource exhaustion from frequent polling
+- **ALLOW_NO_TPM**: An explicit boolean configuration flag that, when set to true, permits the GHA_Server to start and serve requests without NitroTPM availability; intended only for development and testing environments
 
 ## Requirements
 
@@ -215,6 +219,11 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 30. IF REQUIRE_PROTECTED_REF is true and `ref_protected` is not "true", THEN THE Request_Validator SHALL reject the request with HTTP 403 Forbidden
 31. WHEN Allowed_Branches is not configured, THE Request_Validator SHALL skip branch validation
 32. WHEN REQUIRE_PROTECTED_REF is not configured or is false, THE Request_Validator SHALL skip protected ref validation
+33. WHEN the GHA_Server processes a valid /execute request, THE Request_Validator SHALL verify that the `commit_hash` field in the Execution_Request matches the `sha` claim from the validated OIDC_Token
+34. IF the `commit_hash` does not match the OIDC_Token `sha` claim, THEN THE Request_Validator SHALL reject the request with HTTP 403 Forbidden and an error message indicating commit hash mismatch
+35. THE `commit_hash` vs `sha` claim comparison SHALL be case-insensitive (both values normalized to lowercase) to account for mixed-case hex representations
+36. THE `commit_hash` vs `sha` claim comparison SHALL occur after OIDC_Token validation succeeds and before repository cloning begins
+37. THE test suite SHALL include regression tests that verify: (a) a request with a `commit_hash` matching the OIDC `sha` claim is accepted, (b) a request with a `commit_hash` differing from the OIDC `sha` claim is rejected with HTTP 403, (c) the comparison is case-insensitive (e.g., uppercase hex in commit_hash matches lowercase hex in sha claim)
 
 ### Requirement 3: Repository Cloning
 
@@ -382,6 +391,11 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 24. THE GHA_Server SHALL enforce a maximum size for the `client_public_key` field (maximum 2048 bytes, sufficient for X25519 public key + ML-KEM-768 ciphertext with length prefixes); IF exceeded, THEN reject with HTTP 400 Bad Request
 25. THE GHA_Server SHALL enforce a maximum size for the decrypted JSON payload (configurable via MAX_DECRYPTED_PAYLOAD_BYTES, default 256 KB) after decryption; IF exceeded, THEN reject with HTTP 400 Bad Request
 26. THE GHA_Server SHALL read MAX_REQUEST_BODY_BYTES, MAX_ENCRYPTED_PAYLOAD_BYTES, and MAX_DECRYPTED_PAYLOAD_BYTES from configuration at startup
+27. THE Script_Executor SHALL set a `pids_limit` parameter when calling `containers.create()` for each Execution_Container to prevent fork bombs from exhausting the host process table
+28. THE `pids_limit` value SHALL be configurable via a MAX_CONTAINER_PIDS configuration environment variable with a default value of 256 processes
+29. WHEN a script inside the Execution_Container attempts to create more processes than the configured `pids_limit`, THE container runtime SHALL prevent the additional process creation
+30. THE GHA_Server SHALL read MAX_CONTAINER_PIDS from configuration at startup and validate it is a positive integer; IF configured with a non-positive or non-integer value, THEN THE GHA_Server SHALL fail to start with a descriptive error
+31. THE test suite SHALL include a regression test that verifies `pids_limit` is passed to `containers.create()` with the configured value
 
 ### Requirement 9: Configuration Management
 
@@ -404,6 +418,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 13. THE GHA_Server configuration parser SHALL accept only the following string values as valid booleans: `true`, `1`, `yes` (case-insensitive) for true, and `false`, `0`, `no` (case-insensitive) for false; this strict parsing SHALL apply to all boolean configuration values (including REQUIRE_PROTECTED_REF)
 14. IF any boolean configuration environment variable contains a value that is not in the recognized boolean set (e.g., `treu`, `enabled`, `on`, `TRUE1`), THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating the configuration key name, the invalid value received, and the list of accepted values
 15. THE test suite SHALL include regression tests that verify typo values such as `treu`, `enabled`, `on`, and `yess` cause a startup failure rather than being interpreted as false
+16. WHEN the GHA_Server checks NitroTPM availability at startup and the device is unavailable, THE GHA_Server SHALL refuse to start and exit with a non-zero exit code
+17. THE GHA_Server SHALL support an ALLOW_NO_TPM configuration flag (boolean, default false) that permits startup without NitroTPM availability; this flag SHALL use the same strict boolean parsing as other boolean configuration values (see criteria 13-15)
+18. WHEN ALLOW_NO_TPM is true and NitroTPM is unavailable, THE GHA_Server SHALL log a prominent warning indicating that attestation guarantees are disabled and start serving
+19. WHEN ALLOW_NO_TPM is false (or not configured) and NitroTPM is unavailable, THE GHA_Server SHALL log an error indicating that NitroTPM is required for production operation and exit
+20. THE GHA_Server SHALL NOT silently degrade to serving without attestation capability in production; the failure mode SHALL be explicit and visible
+21. THE test suite SHALL include regression tests that verify: (a) startup fails when NitroTPM is unavailable and ALLOW_NO_TPM is false, (b) startup succeeds with a warning when NitroTPM is unavailable and ALLOW_NO_TPM is true, (c) startup succeeds normally when NitroTPM is available regardless of ALLOW_NO_TPM value
 
 ### Requirement 10: Health and Monitoring
 
@@ -702,6 +722,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 10. IF the digest does not match, THEN fail to start with a descriptive error
 11. THE GHA_Server SHALL support digest-pinned container image references (e.g., ubuntu:24.04@sha256:...)
 12. THE default env file and .env.example SHALL include a CONTAINER_IMAGE_DIGEST entry with a pinned digest value; operators SHOULD update this digest when changing the container image version
+13. WHEN the GHA_Server verifies the Container_Image at startup against CONTAINER_IMAGE_DIGEST, THE GHA_Server SHALL normalize the image reference to an Immutable_Image_Reference in the format `<repository>@sha256:<digest>` and use only that immutable reference for all subsequent `containers.create()` calls
+14. THE Script_Executor SHALL use only the Immutable_Image_Reference (not the mutable tag) when calling `containers.create()` for Execution_Containers; IF CONTAINER_IMAGE_DIGEST is configured, THEN THE Script_Executor SHALL NOT pass the original tag-based image reference to `containers.create()`
+15. THE Immutable_Image_Reference SHALL be constructed by combining the image repository name (without tag) with the verified digest in the format `<repository>@sha256:<digest>`
+16. IF CONTAINER_IMAGE already contains an `@sha256:` reference and CONTAINER_IMAGE_DIGEST is not separately configured, THE Script_Executor SHALL use that reference directly
+17. WHEN `create_app()` in `src/server.py` constructs the request-handling Script_Executor, THE GHA_Server SHALL pass `container_image_digest=config.container_image_digest` to the Script_Executor constructor so that digest pinning is enforced on the code path that actually runs submitted scripts
+18. THE test suite SHALL include regression tests that verify: (a) when CONTAINER_IMAGE_DIGEST is configured, `containers.create()` receives an `image@sha256:<digest>` reference, (b) the mutable tag is not passed to `containers.create()` when a digest is available, (c) the production `create_app()` path passes `container_image_digest` to the Script_Executor, (d) both the startup executor and the request-handling executor receive the same `container_image_digest` value
 
 ### Requirement 35: Git Package Provisioning in KIWI Image
 
@@ -1260,3 +1286,19 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. THE `tar` and `gzip` packages SHALL be evaluated for runtime necessity; IF they are only required as transitive dependencies of other packages (e.g., Docker), they SHALL remain; IF they are not required by any runtime dependency chain, they SHALL be removed
 8. THE appliance.kiwi file SHALL include a comment block at the top of the `<packages type="image">` section documenting the package allow-list policy: "Only packages with documented runtime justification are included. Build/debug/admin tools must not be present in the production image."
 9. THE test suite SHALL include a regression test that parses appliance.kiwi and verifies that `awscli`, `binutils`, `python3.11-pip`, and `pciutils` are NOT present in the `<packages type="image">` section
+
+### Requirement 55: Output Attestation Rate Limiting
+
+**User Story:** As a security engineer, I want output attestation generation rate-limited per execution ID, so that frequent polling cannot turn TPM attestation into a resource-exhaustion path
+
+#### Acceptance Criteria
+
+1. THE GHA_Server SHALL maintain an Output_Attestation_Rate_Limiter that tracks attestation generation counts per Execution_ID within a configurable time window
+2. THE Output_Attestation_Rate_Limiter SHALL enforce a maximum number of attestation generations per Execution_ID per time window (configurable via MAX_OUTPUT_ATTESTATIONS_PER_WINDOW, default 10)
+3. THE time window duration SHALL be configurable via OUTPUT_ATTESTATION_WINDOW_SECONDS (default 60 seconds)
+4. WHEN the attestation budget for an Execution_ID is exhausted within the current window, THE GHA_Server SHALL return the Script_Output without generating a new Output_Attestation_Document
+5. WHEN the attestation budget is exhausted, THE response SHALL set `output_attestation_document` to null and include an `attestation_rate_limited: true` field indicating that attestation generation was skipped due to rate limiting
+6. THE Output_Attestation_Rate_Limiter SHALL NOT block or reject the output polling request itself; the client SHALL still receive the current Script_Output and execution status
+7. WHEN the time window expires, THE attestation budget for the Execution_ID SHALL reset, allowing new attestation generations
+8. THE GHA_Server SHALL read MAX_OUTPUT_ATTESTATIONS_PER_WINDOW and OUTPUT_ATTESTATION_WINDOW_SECONDS from configuration at startup
+9. THE test suite SHALL include regression tests that verify: (a) output attestation is generated normally within the rate limit, (b) after exceeding the rate limit, output is returned without a new attestation and `output_attestation_document` is null, (c) the rate-limited response includes `attestation_rate_limited: true`, (d) the budget resets after the time window expires

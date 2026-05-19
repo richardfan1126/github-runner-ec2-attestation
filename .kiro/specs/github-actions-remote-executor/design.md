@@ -159,7 +159,8 @@ The system consists of the following major components:
 - Retrieves execution status and output by execution ID
 - Supports offset-based output retrieval
 - Returns completion status and exit codes
-- On every poll response, generates an Output_Attestation_Document containing a SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) in the user_data field, with execution_id included (without Server_Public_Key; nonce included if provided), regardless of whether execution is running, completed, failed, or timed_out
+- Before generating an Output_Attestation_Document, checks the Output_Attestation_Rate_Limiter for the execution ID; if the attestation budget is exhausted within the current window, skips attestation generation and returns `output_attestation_document: null` with an `attestation_rate_limited: true` indicator
+- On every poll response (when within rate limit), generates an Output_Attestation_Document containing a SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) in the user_data field, with execution_id included (without Server_Public_Key; nonce included if provided), regardless of whether execution is running, completed, failed, or timed_out
 - Returns Output_Attestation_Document in base64 encoding alongside Script_Output and Attestation_Document on every poll response
 - If Output_Attestation_Document generation fails, still returns Script_Output and Attestation_Document with an error field
 - Once decryption succeeds, returns ALL subsequent errors (nonce duplicate, execution not found, attestation failure) as encrypted error envelopes using the Shared_Key
@@ -168,7 +169,8 @@ The system consists of the following major components:
 **Request Validator**
 - Validates OIDC JWT tokens per Requirement 2 (signature via JWKS, iss, aud, repository, exp claims, optional branch/ref restrictions); uses PyJWT with RS256 algorithm and the `cryptography` backend for signature verification
 - Fetches and caches GitHub's OIDC provider JWKS; refreshes cache on unknown key ID
-- Returns 401 for missing/invalid/expired tokens and signature failures; returns 403 for unauthorized repositories or branch/ref mismatches
+- Returns 401 for missing/invalid/expired tokens and signature failures; returns 403 for unauthorized repositories, branch/ref mismatches, or commit hash mismatches
+- Verifies that the `commit_hash` field in the Execution_Request matches the `sha` claim from the validated OIDC_Token (case-insensitive comparison, both normalized to lowercase); rejects with HTTP 403 if mismatch. This check occurs after OIDC validation succeeds and before repository cloning begins.
 - Does NOT require authentication for /health or /attest endpoints
 - Validates request structure and required fields
 - Validates repository URL format
@@ -222,9 +224,11 @@ The system consists of the following major components:
 
 **Script Executor**
 - Creates a new ephemeral Docker container (Execution_Container) from the configured Container_Image for each script execution using the Docker SDK (`docker` Python package)
+- After startup digest verification, normalizes the image reference to an Immutable_Image_Reference in the format `<repository>@sha256:<digest>` and uses ONLY that immutable reference for all `containers.create()` calls (never the mutable tag)
 - Assigns a unique container name derived from the Execution_ID to each container
-- Configures containers with security constraints: memory limits, CPU limits, writable root filesystem, no privilege escalation, running as root user; internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts
+- Configures containers with security constraints: memory limits, CPU limits, writable root filesystem, no privilege escalation, running as root user, pids_limit (configurable via MAX_CONTAINER_PIDS, default 256); internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts
 - Creates each container with cap_drop=ALL to remove all Linux capabilities, then adds back a minimal set required for build scripts: CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID, CAP_NET_BIND_SERVICE, CAP_KILL (see Requirement 8.18 for per-capability justification)
+- Sets `pids_limit` when calling `containers.create()` to prevent fork bombs from exhausting the host process table
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
 - Ensures the cloned repository directory is readable before mounting into the container
@@ -276,22 +280,23 @@ The system consists of the following major components:
 7. Request Handler extracts OIDC_Token from decrypted body `oidc_token` field
 8. Request Validator validates the OIDC_Token (signature via JWKS, iss, aud, repository, exp claims)
 9. Request Validator verifies `repository` claim matches `repository_url` in the request; rejects with HTTP 403 if mismatch
-10. Request Validator validates optional branch/ref restrictions (Allowed_Branches, REQUIRE_PROTECTED_REF)
-11. Request Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
-12. Request Handler validates request structure from decrypted body
-13. Request Validator validates all request body fields (repository_url, commit_hash, script_path, github_token)
-14. Request Validator checks script file size against MAX_SCRIPT_SIZE_BYTES; rejects with HTTP 413 if exceeded
-15. Execution Manager checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically; rejects with HTTP 503 if at capacity
-16. Repository Client authenticates and clones the repository at the specified commit into a temporary directory (wrapped in `finally` block for cleanup on unexpected errors)
-17. Repository Client strips token from .git/config and removes .git directory
-18. Attestation Generator creates attestation document with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, timestamp) and nonce (no Server_Public_Key)
-19. Execution Manager creates execution record with unique ID (stores `repository` claim)
-20. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
-21. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned (all post-decryption errors from steps 6-18 are also returned as encrypted error envelopes)
-22. Request Handler extracts optional `script_env` dictionary from the decrypted body, sanitizes it (string keys and values only), and passes it to the Script Executor
-23. Script Executor creates a new Docker container from the configured Container_Image (with cap_drop=ALL and cap_add for the minimal build-script capability set), injects `script_env` as container environment variables, and begins asynchronous execution inside it
-24. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
-25. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
+10. Request Validator verifies `commit_hash` field matches the `sha` claim from the validated OIDC_Token (case-insensitive, both normalized to lowercase); rejects with HTTP 403 if mismatch
+11. Request Validator validates optional branch/ref restrictions (Allowed_Branches, REQUIRE_PROTECTED_REF)
+12. Request Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
+13. Request Handler validates request structure from decrypted body
+14. Request Validator validates all request body fields (repository_url, commit_hash, script_path, github_token)
+15. Request Validator checks script file size against MAX_SCRIPT_SIZE_BYTES; rejects with HTTP 413 if exceeded
+16. Execution Manager checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically; rejects with HTTP 503 if at capacity
+17. Repository Client authenticates and clones the repository at the specified commit into a temporary directory (wrapped in `finally` block for cleanup on unexpected errors)
+18. Repository Client strips token from .git/config and removes .git directory
+19. Attestation Generator creates attestation document with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, timestamp) and nonce (no Server_Public_Key)
+20. Execution Manager creates execution record with unique ID (stores `repository` claim)
+21. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
+22. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned (all post-decryption errors from steps 6-19 are also returned as encrypted error envelopes)
+23. Request Handler extracts optional `script_env` dictionary from the decrypted body, sanitizes it (string keys and values only), and passes it to the Script Executor
+24. Script Executor creates a new Docker container from the configured Container_Image using the Immutable_Image_Reference (with cap_drop=ALL, cap_add for the minimal build-script capability set, and pids_limit), injects `script_env` as container environment variables, and begins asynchronous execution inside it
+25. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
+26. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
 
 **Output Polling Flow:**
 
@@ -302,13 +307,14 @@ The system consists of the following major components:
 5. Output Handler checks nonce against Nonce_Cache; rejects with HTTP 400 if duplicate
 6. Output Handler retrieves execution record by ID
 7. Output Collector returns current status, output from offset, and completion flag
-8. Output Handler computes SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) and generates an Output_Attestation_Document with the digest and execution_id in user_data, plus nonce (no Server_Public_Key)
-9. Response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code (if available) on every poll response regardless of execution status
-10. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
-11. Response payload encrypted with Shared_Key and returned (all post-decryption errors from steps 4-6 are also returned as encrypted error envelopes)
-12. Client decrypts response using the same Shared_Key derived during PQ_Hybrid_KEM key exchange
-13. Client repeats polling until execution completes
-14. Client can verify output integrity on every poll by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
+8. Output Handler checks the Output_Attestation_Rate_Limiter for the execution ID; if budget is exhausted, skips attestation generation and sets `output_attestation_document: null` with `attestation_rate_limited: true`
+9. If within rate limit, Output Handler computes SHA-256 digest of the current Script_Output (stdout + stderr + exit_code at that point in time) and generates an Output_Attestation_Document with the digest and execution_id in user_data, plus nonce (no Server_Public_Key)
+10. Response includes Script_Output, Attestation_Document, Output_Attestation_Document, and exit code (if available) on every poll response regardless of execution status
+11. If Output_Attestation_Document generation fails, response still includes Script_Output and Attestation_Document with an attestation_error field
+12. Response payload encrypted with Shared_Key and returned (all post-decryption errors from steps 4-6 are also returned as encrypted error envelopes)
+13. Client decrypts response using the same Shared_Key derived during PQ_Hybrid_KEM key exchange
+14. Client repeats polling until execution completes
+15. Client can verify output integrity on every poll by comparing SHA-256 of returned Script_Output against the digest in Output_Attestation_Document's user_data
 
 ### Concurrency Model
 
@@ -397,7 +403,7 @@ The attestation document in the /execute response does NOT include the Server_Pu
 **Error Responses (post-decryption, returned as encrypted error envelopes with HTTP 200):**
 - 400 Bad Request: Missing/empty nonce, duplicate nonce, validation failure, decrypted payload size exceeded
 - 401 Unauthorized: Missing/invalid/expired OIDC token (from decrypted body), signature verification failure, invalid iss or aud claim
-- 403 Forbidden: Valid OIDC token from an unauthorized repository, repository claim does not match repository_url, branch/ref restriction violation
+- 403 Forbidden: Valid OIDC token from an unauthorized repository, repository claim does not match repository_url, commit_hash does not match OIDC sha claim, branch/ref restriction violation
 - 404 Not Found: Repository, commit, or file not found
 - 413 Payload Too Large: Script file exceeds size limit
 - 503 Service Unavailable: Maximum concurrent executions reached
@@ -461,6 +467,22 @@ When Output_Attestation_Document generation fails (after decryption, any status)
   "exit_code": null,
   "output_attestation_document": null,
   "attestation_error": "Failed to generate output attestation document"
+}
+```
+
+When Output_Attestation is rate-limited (after decryption, any status):
+```json
+{
+  "execution_id": "uuid-v4",
+  "status": "running|completed|failed|timed_out",
+  "stdout": "output text...",
+  "stderr": "error text...",
+  "stdout_offset": 2048,
+  "stderr_offset": 512,
+  "complete": false,
+  "exit_code": null,
+  "output_attestation_document": null,
+  "attestation_rate_limited": true
 }
 ```
 
@@ -580,6 +602,15 @@ class RequestValidator:
         """
         pass
 
+    def validate_commit_hash_binding(self, oidc_claims: dict, commit_hash: str) -> bool:
+        """
+        Validates that the commit_hash field in the Execution_Request matches the
+        `sha` claim from the validated OIDC_Token. Comparison is case-insensitive
+        (both values normalized to lowercase). Returns False on mismatch (HTTP 403).
+        Called after OIDC validation succeeds and before repository cloning begins.
+        """
+        pass
+
     def _fetch_jwks(self, force_refresh: bool = False) -> dict:
         """
         Fetches JWKS from https://token.actions.githubusercontent.com/.well-known/jwks
@@ -695,11 +726,16 @@ import docker
 
 class ScriptExecutor:
     def __init__(self, docker_client: docker.DockerClient, container_image: str,
-                 memory_limit: str, cpu_limit: float, timeout_seconds: int):
+                 memory_limit: str, cpu_limit: float, timeout_seconds: int,
+                 container_pids_limit: int = 256, container_image_digest: str | None = None):
         """
         Initialize with Docker client and container configuration.
         The docker_client connects to the rootless Docker socket at
         /run/user/{uid}/docker.sock (where uid is the gha-executor user's UID).
+        
+        After initialization, normalizes the image reference to an Immutable_Image_Reference
+        in the format `<repository>@sha256:<digest>` if container_image_digest is provided,
+        and uses ONLY that immutable reference for all subsequent containers.create() calls.
         
         Args:
             docker_client: Docker SDK client instance (connected to rootless socket)
@@ -707,6 +743,10 @@ class ScriptExecutor:
             memory_limit: Docker memory constraint (e.g., '4g')
             cpu_limit: Docker CPU constraint (e.g., 1.0 for one CPU)
             timeout_seconds: Maximum execution timeout
+            container_pids_limit: Maximum number of processes per container (default 256)
+            container_image_digest: SHA-256 digest for image verification; when provided,
+                the executor normalizes to `<repository>@sha256:<digest>` and uses only
+                that immutable reference for containers.create()
         """
         pass
 
@@ -876,6 +916,10 @@ class ServerConfig:
     allowed_branches: list[str] | None  # Optional branch patterns for OIDC ref claim validation
     require_protected_ref: bool  # When true, require ref_protected claim to be "true"; parsed with strict boolean validation (only true/1/yes/false/0/no accepted; unrecognized values fail startup)
     script_env_deny_list: list[str]  # Environment variable key names/prefixes rejected from script_env (default: BASH_ENV, PATH, LD_PRELOAD, BASH_LOADABLES_PATH, etc.)
+    container_pids_limit: int  # Maximum number of processes per Execution_Container (default 256, configurable via MAX_CONTAINER_PIDS)
+    allow_no_tpm: bool  # When true, permits startup without NitroTPM availability (default false); uses strict boolean parsing
+    max_output_attestations_per_window: int  # Maximum attestation generations per execution per window (default 10)
+    output_attestation_window_seconds: int  # Duration of the rate limit window in seconds (default 60)
 ```
 
 ### OIDCValidationResult
@@ -1351,9 +1395,9 @@ class EncryptionContext:
 
 ### Property 111: Docker Container Security Constraints
 
-*For any* Execution_Container created by the Script_Executor, the container should be configured with: root user, a writable root filesystem, privilege escalation disabled, memory limits enforced, CPU limits enforced, cap_drop=ALL with cap_add for the minimal build-script capability set (CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID, CAP_NET_BIND_SERVICE, CAP_KILL). Internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts.
+*For any* Execution_Container created by the Script_Executor, the container should be configured with: root user, a writable root filesystem, privilege escalation disabled, memory limits enforced, CPU limits enforced, pids_limit enforced (configurable via MAX_CONTAINER_PIDS, default 256), cap_drop=ALL with cap_add for the minimal build-script capability set (CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID, CAP_NET_BIND_SERVICE, CAP_KILL). Internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts.
 
-**Validates: Requirements 8.1, 8.2, 8.3, 8.5, 8.6, 8.17, 8.18, 8.19**
+**Validates: Requirements 8.1, 8.2, 8.3, 8.5, 8.6, 8.17, 8.18, 8.19, 8.27, 8.28**
 
 ### Property 112: Container Removal Verification
 
@@ -1667,6 +1711,36 @@ class EncryptionContext:
 
 **Validates: Requirements 52.1, 52.2, 52.3, 52.4, 52.5, 52.6, 52.7, 52.8, 52.9, 52.10, 52.11**
 
+### Property 175: OIDC Commit Hash Binding
+
+*For any* /execute request where the `commit_hash` field in the Execution_Request does not match the `sha` claim from the validated OIDC_Token (case-insensitive comparison, both normalized to lowercase), the server should reject the request with HTTP 403 Forbidden. *For any* /execute request where the `commit_hash` matches the `sha` claim (case-insensitively), the request should not be rejected on commit hash grounds. The comparison should occur after OIDC validation succeeds and before repository cloning begins.
+
+**Validates: Requirements 2.33, 2.34, 2.35, 2.36**
+
+### Property 176: Immutable Container Image Reference Enforcement
+
+*For any* Execution_Container created by the Script_Executor when `container_image_digest` is configured, the `containers.create()` call should receive an Immutable_Image_Reference in the format `<repository>@sha256:<digest>` rather than the mutable tag-based reference. *For any* container image reference that already contains `@sha256:` and no separate digest is configured, the Script_Executor should use that reference directly.
+
+**Validates: Requirements 34.13, 34.14, 34.15, 34.16**
+
+### Property 177: Container PID Limit Enforcement
+
+*For any* Execution_Container created by the Script_Executor, the `containers.create()` call should include a `pids_limit` parameter set to the configured MAX_CONTAINER_PIDS value (default 256). *For any* MAX_CONTAINER_PIDS configuration that is non-positive or non-integer, the server should fail to start with a descriptive error.
+
+**Validates: Requirements 8.27, 8.28, 8.30**
+
+### Property 178: Output Attestation Rate Limiting
+
+*For any* execution ID where the number of output attestation generations within the current time window has reached MAX_OUTPUT_ATTESTATIONS_PER_WINDOW (default 10), subsequent /execution/{id}/output poll responses should return the Script_Output without generating a new Output_Attestation_Document, set `output_attestation_document` to null, and set `attestation_rate_limited: true`. The output polling request itself should NOT be blocked or rejected. *For any* execution ID where the time window (OUTPUT_ATTESTATION_WINDOW_SECONDS, default 60) has expired, the attestation budget should reset.
+
+**Validates: Requirements 55.1, 55.2, 55.3, 55.4, 55.5, 55.6, 55.7**
+
+### Property 179: NitroTPM Availability Enforcement
+
+*For any* server startup where NitroTPM is unavailable and ALLOW_NO_TPM is false (or not configured), the server should fail to start with a non-zero exit code and log an error indicating NitroTPM is required. *For any* server startup where NitroTPM is unavailable and ALLOW_NO_TPM is true, the server should start successfully with a prominent warning that attestation guarantees are disabled. ALLOW_NO_TPM uses strict boolean parsing (only true/1/yes/false/0/no accepted; unrecognized values fail startup).
+
+**Validates: Requirements 9.16, 9.17, 9.18, 9.19, 9.20**
+
 ### Error Categories
 
 The system handles errors in the following categories:
@@ -1679,7 +1753,7 @@ The system handles errors in the following categories:
 2. **Post-Decryption Application Errors (returned as encrypted error envelopes with HTTP 200)**
    - 400 Bad Request: Missing/empty nonce, duplicate nonce, validation failures
    - 401 Unauthorized: Missing/invalid/expired OIDC tokens (from decrypted body), JWT signature verification failures, invalid iss or aud claims
-   - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories), repository claim does not match repository_url, branch/ref restriction violation
+   - 403 Forbidden: Valid OIDC token from an unauthorized repository (repository claim not in Allowed_Repositories), repository claim does not match repository_url, commit_hash does not match OIDC sha claim, branch/ref restriction violation
    - 404 Not Found: Repository, commit, file, or execution ID not found
    - 413 Payload Too Large: Script file exceeds size limit, decrypted payload exceeds MAX_DECRYPTED_PAYLOAD_BYTES
    - 503 Service Unavailable: Maximum concurrent executions reached
@@ -1715,7 +1789,7 @@ All error responses follow a consistent JSON structure:
 
 **OIDC Authentication Errors**
 - OIDC token extracted from decrypted request body `oidc_token` field (not Authorization header)
-- Error responses follow the status code mapping defined in Requirement 2 (401 for missing/invalid/expired tokens and signature failures; 403 for unauthorized repositories, repository mismatches, and branch/ref violations)
+- Error responses follow the status code mapping defined in Requirement 2 (401 for missing/invalid/expired tokens and signature failures; 403 for unauthorized repositories, repository mismatches, commit hash mismatches, and branch/ref violations)
 - JWKS cached and refreshed on unknown key ID to handle key rotation
 - Authentication failures logged with claim details (excluding the token itself)
 
@@ -1740,7 +1814,7 @@ All error responses follow a consistent JSON structure:
 - Once request decryption succeeds, ALL subsequent application-level errors are encrypted with the Shared_Key before returning
 - The encrypted error envelope is a JSON payload: `{"error": "description", "error_code": 403, "error_details": {...}}`
 - The envelope is returned with HTTP 200 OK at the transport layer so observers cannot distinguish errors from successes
-- On /execute: covers OIDC failures (401/403), repository mismatch (403), nonce duplicate (400), validation errors (400), script size exceeded (413), capacity exceeded (503), clone failures, attestation failures
+- On /execute: covers OIDC failures (401/403), repository mismatch (403), commit hash mismatch (403), nonce duplicate (400), validation errors (400), script size exceeded (413), capacity exceeded (503), clone failures, attestation failures
 - On /execution/{id}/output: covers nonce duplicate (400), execution not found (404), attestation failures
 
 **Attestation Errors**
