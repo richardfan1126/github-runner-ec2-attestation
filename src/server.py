@@ -318,6 +318,7 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
         output_collector=output_collector,
         temp_storage_path=config.temp_storage_path,
         container_image_digest=config.container_image_digest,
+        container_pids_limit=config.container_pids_limit,
     )
     request_validator = RequestValidator(
         allowed_repositories=config.allowed_repositories,

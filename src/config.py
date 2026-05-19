@@ -78,6 +78,9 @@ class ServerConfig:
     # Container Image Digest Pinning
     container_image_digest: Optional[str] = None
 
+    # Container PID Limits (fork bomb protection)
+    container_pids_limit: int = 256
+
     # Request Body Size Limits
     max_request_body_bytes: int = 1_048_576  # 1MB default
     max_encrypted_payload_bytes: int = 524_288  # 512KB default
@@ -168,6 +171,21 @@ class ServerConfig:
 
         # Parse optional CONTAINER_IMAGE_DIGEST (SHA-256 digest, None if not set)
         container_image_digest = os.getenv("CONTAINER_IMAGE_DIGEST") or None
+
+        # Parse optional MAX_CONTAINER_PIDS (default 256, must be positive integer)
+        container_pids_limit_raw = os.getenv("MAX_CONTAINER_PIDS")
+        container_pids_limit = 256
+        if container_pids_limit_raw is not None:
+            try:
+                container_pids_limit = int(container_pids_limit_raw)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"Invalid MAX_CONTAINER_PIDS value: '{container_pids_limit_raw}' (must be a positive integer)"
+                )
+            if container_pids_limit <= 0:
+                raise ValueError(
+                    f"Invalid MAX_CONTAINER_PIDS value: {container_pids_limit} (must be a positive integer)"
+                )
         allowed_branches = None
         if allowed_branches_raw is not None:
             allowed_branches = [b.strip() for b in allowed_branches_raw.split(",") if b.strip()]
@@ -228,6 +246,7 @@ class ServerConfig:
             container_memory_limit=container_memory_limit,
             container_cpu_limit=float(container_cpu_limit),
             container_image_digest=container_image_digest,
+            container_pids_limit=container_pids_limit,
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,
@@ -296,6 +315,11 @@ class ServerConfig:
         if self.container_cpu_limit <= 0:
             errors.append(
                 f"Invalid container_cpu_limit: {self.container_cpu_limit} (must be > 0)"
+            )
+        
+        if self.container_pids_limit < 1:
+            errors.append(
+                f"Invalid container_pids_limit: {self.container_pids_limit} (must be >= 1)"
             )
         
         if self.max_output_size_bytes < 1:

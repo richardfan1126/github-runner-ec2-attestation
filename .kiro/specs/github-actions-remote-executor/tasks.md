@@ -29,7 +29,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Verify both the startup executor (in `src/main.py`) and the request-handling executor (in `src/server.py`) receive the same `container_image_digest` value from config
     - _Requirements: 34.17_
 
-  - [ ] 190.4 Add container PID limits
+  - [x] 190.4 Add container PID limits
     - Add `container_pids_limit: int` to `ServerConfig` in `src/config.py`; read from `MAX_CONTAINER_PIDS` env var; default to 256; validate is a positive integer at startup (fail to start if non-positive or non-integer)
     - In `src/script_executor.py` `__init__`, accept `container_pids_limit: int = 256` parameter
     - In `_execute_in_container()`, pass `pids_limit=self._container_pids_limit` to `self._docker_client.containers.create()`

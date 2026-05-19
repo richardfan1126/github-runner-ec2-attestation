@@ -41,6 +41,7 @@ class ScriptExecutor:
         output_collector: "OutputCollector | None" = None,
         temp_storage_path: str = "/tmp",
         container_image_digest: "str | None" = None,
+        container_pids_limit: int = 256,
     ):
         """
         Initialize script executor with Docker SDK.
@@ -57,6 +58,7 @@ class ScriptExecutor:
             output_collector: Collector for capturing stdout/stderr
             temp_storage_path: Base path for temporary file storage
             container_image_digest: Optional SHA-256 digest to verify pulled image against
+            container_pids_limit: Maximum number of PIDs allowed in the container (fork bomb protection)
         """
         if docker_client is _UNSET:
             uid = os.getuid()
@@ -72,6 +74,7 @@ class ScriptExecutor:
         self._output_collector = output_collector
         self._temp_storage_path = temp_storage_path
         self._container_image_digest = container_image_digest
+        self._container_pids_limit = container_pids_limit
         self._immutable_image_ref = self._compute_immutable_image_ref(
             container_image, container_image_digest
         )
@@ -219,6 +222,7 @@ class ScriptExecutor:
                 command=["bash", f"/workspace/{script_path}"],
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
+                pids_limit=self._container_pids_limit,
                 volumes={
                     host_repo_path: {"bind": "/workspace", "mode": "ro"},
                 },
