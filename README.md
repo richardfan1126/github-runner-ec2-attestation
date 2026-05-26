@@ -29,12 +29,21 @@ All configuration is done through environment variables. See `.env.example` for 
 - `TPM_ATTEST_PATH`: NitroTPM attestation tool path (default: /usr/bin/nitro-tpm-attest)
 - `ALLOWED_REPOSITORIES`: Comma-separated list of GitHub repositories authorized to execute scripts (e.g., `owner/repo1,owner/repo2`)
 - `EXPECTED_AUDIENCE`: Expected `aud` claim in OIDC tokens, used to ensure tokens were issued for this Remote Executor instance (e.g., `https://your-remote-executor.example.com`)
-- `CONTAINER_IMAGE`: Docker image used for script execution (e.g., `python:3.11-slim`)
-- `CONTAINER_IMAGE_DIGEST`: Optional SHA-256 digest to pin the container image (e.g., `sha256:abc123...`). **Recommended for production** — set this to prevent tag drift and ensure the server always runs the exact expected image. When set, the server verifies the pulled image matches this digest at startup and refuses to start if there is a mismatch.
-- `CONTAINER_MEMORY_LIMIT`: Memory limit for execution containers (e.g., `512m`)
+- `CONTAINER_IMAGE`: Docker image used for script execution (e.g., `ubuntu:24.04`)
+- `CONTAINER_IMAGE_DIGEST`: **Required.** SHA-256 digest to pin the container image (e.g., `sha256:abc123...`). The server refuses to start if this is not set and the `CONTAINER_IMAGE` reference does not contain `@sha256:`. This prevents tag drift and ensures the server always runs the exact expected image.
+- `CONTAINER_MEMORY_LIMIT`: Memory limit for execution containers (e.g., `4g`)
 - `CONTAINER_CPU_LIMIT`: CPU limit for execution containers (e.g., `1.0`)
 - `MAX_OUTPUT_SIZE_BYTES`: Maximum buffered output size per execution in bytes (default: 10485760 = 10MB)
 - `NONCE_CACHE_TTL_SECONDS`: TTL for the anti-replay nonce cache in seconds (default: 300)
+- `MAX_CONTAINER_PIDS`: PID limit for execution containers to prevent fork bombs (default: 256)
+- `MAX_OUTPUT_ATTESTATIONS_PER_WINDOW`: Maximum output attestation generations per execution within the rate-limit window (default: 10)
+- `OUTPUT_ATTESTATION_WINDOW_SECONDS`: Sliding window duration for output attestation rate limiting (default: 60)
+- `ALLOW_NO_TPM`: When set to `true`, allows the server to start without a functioning NitroTPM device. **For development/testing only** — do not use in production (default: `false`)
+- `MAX_REQUEST_BODY_BYTES`: Maximum raw request body size in bytes (default: 1048576 = 1MB)
+- `MAX_ENCRYPTED_PAYLOAD_BYTES`: Maximum encrypted payload size in bytes (default: 524288 = 512KB)
+- `MAX_DECRYPTED_PAYLOAD_BYTES`: Maximum decrypted payload size in bytes (default: 262144 = 256KB)
+- `SCRIPT_ENV_DENY_LIST`: Comma-separated list of environment variable names (or prefix patterns ending with `*`) that are rejected in `script_env`. Default deny-list includes security-sensitive variables like `PATH`, `LD_PRELOAD`, `BASH_ENV`, etc.
+- `CLEANUP_INTERVAL_SECONDS`: Interval in seconds for periodic cleanup of expired executions and stale rate-limiter entries (default: 60)
 - `ALLOWED_BRANCHES`: Optional comma-separated list of glob patterns restricting which branches may execute scripts (e.g., `main,release/*`). When unset, any branch in an allowed repository is accepted.
 - `REQUIRE_PROTECTED_REF`: When set to `true`, only OIDC tokens from protected refs are accepted (default: `false`)
 
@@ -106,14 +115,14 @@ Run the build script locally to convert the KIWI image into an AMI:
 
 ```bash
 uv run --project scripts python scripts/build-ami.py \
-  --artifact-ref ghcr.io/<owner>/<repo>/attestable-image:<tag>
+  --artifact-ref ghcr.io/<owner>/<repo>/attestable-image:<tag>@sha256:<digest>
 ```
 
 CLI arguments:
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
-| `--artifact-ref` | Yes | — | GHCR artifact reference (e.g., `ghcr.io/owner/repo/attestable-image:tag`) |
+| `--artifact-ref` | Yes | — | GHCR artifact reference with a `@sha256:` digest pin (e.g., `ghcr.io/owner/repo/attestable-image:tag@sha256:abcdef...` or `ghcr.io/owner/repo/attestable-image@sha256:abcdef...`). Tag-only references without a digest are rejected. |
 | `--region` | No | `us-east-1` | AWS region for AMI creation |
 | `--instance-type` | No | `c5.9xlarge` | EC2 instance type for the temporary build instance |
 | `--output-file` | No | `ami_build_result.json` | Path for the JSON build result |
@@ -226,7 +235,7 @@ The client flow is:
 
 ## API Endpoints
 
-All endpoints are rate-limited per source IP (configurable via `RATE_LIMIT_PER_IP` and `RATE_LIMIT_WINDOW_SECONDS`), except `/health` and `/attest` which are exempt. Rate limit headers are included on every rate-limited response:
+All endpoints are rate-limited per source IP (configurable via `RATE_LIMIT_PER_IP` and `RATE_LIMIT_WINDOW_SECONDS`). Rate limit headers are included on every response:
 
 | Header | Description |
 |---|---|
@@ -300,11 +309,12 @@ All request and response payloads are encrypted (see [Encryption](#encryption)).
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `repository_url` | string | Yes | GitHub repository URL (e.g. `https://github.com/owner/repo`) |
-| `commit_hash` | string | Yes | Full 40-character hex SHA of the commit |
+| `commit_hash` | string | Yes | Full 40-character hex SHA of the commit (must match the OIDC token's `sha` claim) |
 | `script_path` | string | Yes | Path to the script inside the repository (no path traversal) |
 | `github_token` | string | Yes | GitHub personal access token for repository access |
 | `oidc_token` | string | Yes | GitHub Actions OIDC token for authentication |
-| `nonce` | string | No | Client-provided nonce included in the attestation document |
+| `nonce` | string | Yes | Client-provided nonce included in the attestation document. Must be 16–256 characters, URL-safe characters only (`[a-zA-Z0-9._~-]`) |
+| `script_env` | object | No | Dictionary of environment variables to pass to the script execution container. Keys matching the deny-list (`SCRIPT_ENV_DENY_LIST`) are rejected. |
 
 **Success response (200, encrypted):**
 
@@ -324,7 +334,7 @@ Decrypted response:
 }
 ```
 
-The `attestation_document` is a base64-encoded CBOR document produced by NitroTPM. Its `user_data` contains the repository URL, commit hash, script path, and a timestamp.
+The `attestation_document` is a base64-encoded CBOR document produced by NitroTPM. Its `user_data` contains the repository URL, commit hash, script path, `script_env_hash` (SHA-256 of canonicalized `script_env`), `execution_id`, and a timestamp.
 
 **Error responses:**
 
@@ -333,7 +343,11 @@ The `attestation_document` is a base64-encoded CBOR document produced by NitroTP
 | 400 | `malformed_request` | Request body is not valid JSON or missing `encrypted_payload`/`client_public_key` |
 | 400 | `decryption_failed` | Server could not decrypt the request payload |
 | 400 | `validation_failed` | Missing or invalid fields (details include per-field errors) |
+| 400 | `missing_nonce` | Nonce is required but was missing or empty |
+| 400 | `invalid_nonce` | Nonce fails type, length (16–256 chars), or format (URL-safe only) validation |
 | 400 | `duplicate_nonce` | Nonce has already been used; request rejected as a potential replay |
+| 400 | `denied_env_key` | `script_env` contains keys on the deny-list (details include `denied_keys`) |
+| 400 | `commit_hash_mismatch` | Request `commit_hash` does not match the OIDC token's `sha` claim |
 | 401 | `authentication_failed` | GitHub token authentication failed |
 | 401 | `oidc_authentication_failed` | Missing, invalid, or expired OIDC token; signature verification failure; wrong issuer or audience |
 | 403 | `oidc_authentication_failed` | Valid OIDC token from a repository not in `ALLOWED_REPOSITORIES` |
@@ -352,9 +366,9 @@ The `attestation_document` is a base64-encoded CBOR document produced by NitroTP
 
 Retrieves execution status and output. Supports incremental polling via the `offset` field in the decrypted payload — pass the `stdout_offset` / `stderr_offset` from the previous response to receive only new output.
 
-All request and response payloads are encrypted using the shared key established during the `/execute` call (see [Encryption](#encryption)).
+All request and response payloads are encrypted using the shared key established during the `/execute` call (see [Encryption](#encryption)). Authentication is implicit: only the original caller who performed the PQ Hybrid KEM exchange during `/execute` possesses the shared key, so successful decryption proves caller identity.
 
-When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure.
+When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure. Output attestation is subject to rate limiting (`MAX_OUTPUT_ATTESTATIONS_PER_WINDOW` / `OUTPUT_ATTESTATION_WINDOW_SECONDS`) to prevent TPM resource exhaustion.
 
 Note: `output_attestation_document` is included on **every** poll response, not only when execution is complete. This allows callers to attest incremental output.
 
@@ -370,9 +384,8 @@ Note: `output_attestation_document` is included on **every** poll response, not 
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `oidc_token` | string | — | GitHub Actions OIDC token for authentication (required) |
+| `nonce` | string | — | Client-provided nonce for output attestation freshness (required). Must be 16–256 characters, URL-safe characters only (`[a-zA-Z0-9._~-]`) |
 | `offset` | int | 0 | Byte offset to start retrieving output from |
-| `nonce` | string | null | Client-provided nonce for output attestation freshness |
 
 **Response (200, encrypted):**
 
@@ -394,22 +407,24 @@ Note: `output_attestation_document` is included on **every** poll response, not 
 | `stderr_offset` | int | Next byte offset for stderr (use in subsequent polls) |
 | `complete` | bool | `true` when execution has finished |
 | `exit_code` | int \| null | Process exit code (present only when complete) |
-| `output_attestation_document` | string \| null | Base64-encoded CBOR attestation of the current output snapshot (present on every response; `null` if attestation failed) |
+| `output_attestation_document` | string \| null | Base64-encoded CBOR attestation of the current output snapshot (present on every response; `null` if attestation failed or rate-limited) |
 | `attestation_error` | string | Error message if output attestation failed (present only on failure) |
+| `attestation_rate_limited` | bool | `true` when output attestation was skipped due to rate limiting (present only when rate-limited) |
 
 **Error responses:**
 
 | Status | Error code | Cause |
 |---|---|---|
 | 400 | `malformed_request` | Request body is not valid JSON or missing `encrypted_payload` |
+| 400 | `invalid_base64` | Invalid base64 encoding in `encrypted_payload` |
 | 400 | `decryption_failed` | Server could not decrypt the request payload |
 | 400 | `no_encryption_context` | No encryption context available for this execution ID |
-| 400 | `invalid_offset` | Negative offset value |
+| 400 | `missing_nonce` | Nonce is required but was missing or empty |
+| 400 | `invalid_nonce` | Nonce fails type, length (16–256 chars), or format (URL-safe only) validation |
 | 400 | `duplicate_nonce` | Nonce has already been used; request rejected as a potential replay |
-| 401 | `oidc_authentication_failed` | Missing, invalid, or expired OIDC token |
-| 403 | `oidc_authentication_failed` | Valid OIDC token from an unauthorized repository |
-| 403 | `repository_mismatch` | OIDC token `repository` claim does not match the repository that created the execution |
+| 400 | `invalid_offset` | Negative offset value |
 | 404 | `execution_not_found` | No execution with this ID exists |
+| 413 | `request_body_too_large` | Request body exceeds `MAX_REQUEST_BODY_BYTES` |
 | 429 | `rate_limit_exceeded` | Too many requests from this IP |
 | 500 | `encryption_not_configured` | Server encryption is not configured |
 | 500 | `internal_server_error` | Unexpected server error |
@@ -418,7 +433,7 @@ Note: `output_attestation_document` is included on **every** poll response, not 
 
 ### GET /health
 
-Returns operational status of the server. This endpoint is exempt from rate limiting and does not require authentication.
+Returns operational status of the server. This endpoint does not require authentication.
 
 **Response (200):**
 ```json
