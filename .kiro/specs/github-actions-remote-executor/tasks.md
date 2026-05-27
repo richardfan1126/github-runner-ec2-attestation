@@ -42,7 +42,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
       - Create and immediately remove a test container with `runtime="nvidia"` and `NVIDIA_VISIBLE_DEVICES=all` to verify GPU access is functional; fail to start if the test container fails
     - _Requirements: 56.11, 56.12, 56.13, 9.25, 9.26_
 
-  - [ ] 192.6 Add gpu_enabled to attestation user_data
+  - [x] 192.6 Add gpu_enabled to attestation user_data
     - In `src/attestation.py`, add `gpu_enabled: bool` to the `ExecutionMetadata` (or equivalent structure passed to `generate_attestation`)
     - Include `"gpu_enabled": config.enable_gpu` in the user_data JSON when generating attestation documents for /execute and /execution/{id}/output
     - Update the attestation user_data schema documentation to include `gpu_enabled` field

@@ -836,6 +836,7 @@ def add_routes(app: FastAPI) -> None:
                     nonce=body.get('nonce'),
                     script_env=script_env,
                     execution_id=execution_record.execution_id,
+                    gpu_enabled=request.app.state.config.enable_gpu,
                 )
                 
                 if attestation_error:
@@ -1150,7 +1151,8 @@ def add_routes(app: FastAPI) -> None:
                 attestation_gen = request.app.state.attestation_generator
                 attestation_bytes, attestation_error_msg = (
                     attestation_gen.generate_output_attestation(
-                        script_output, nonce=nonce, execution_id=execution_id
+                        script_output, nonce=nonce, execution_id=execution_id,
+                        gpu_enabled=request.app.state.config.enable_gpu,
                     )
                 )
 

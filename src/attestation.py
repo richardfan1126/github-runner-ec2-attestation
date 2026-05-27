@@ -77,6 +77,7 @@ class AttestationGenerator:
         public_key: Optional[bytes] = None,
         script_env: Optional[Dict[str, str]] = None,
         execution_id: Optional[str] = None,
+        gpu_enabled: Optional[bool] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
         """
         Generate an attestation document using NitroTPM attestation.
@@ -103,6 +104,8 @@ class AttestationGenerator:
                         Used to compute script_env_hash for inclusion in user_data.
             execution_id: Optional execution ID (UUID v4) to include in user_data.
                           Provided when generating attestation for /execute responses.
+            gpu_enabled: Optional boolean indicating whether GPU passthrough is enabled
+                         on this server instance. Included in user_data when provided.
         
         Returns:
             Tuple of (AttestationDocument, None) on success or (None, AttestationError) on failure
@@ -140,6 +143,8 @@ class AttestationGenerator:
                 }
                 if execution_id is not None:
                     user_data["execution_id"] = execution_id
+                if gpu_enabled is not None:
+                    user_data["gpu_enabled"] = gpu_enabled
                 user_data_json = json.dumps(user_data)
                 
                 # Write user_data to temporary file
@@ -281,6 +286,7 @@ class AttestationGenerator:
         script_output: str,
         nonce: Optional[str] = None,
         execution_id: Optional[str] = None,
+        gpu_enabled: Optional[bool] = None,
     ) -> tuple[Optional[bytes], Optional[str]]:
         """
         Generate an output attestation document for a completed script execution.
@@ -292,6 +298,8 @@ class AttestationGenerator:
             script_output: The canonical Script_Output string (stdout + stderr + exit_code)
             nonce: Optional client-provided nonce for inclusion in attestation
             execution_id: Optional execution ID to include in user_data
+            gpu_enabled: Optional boolean indicating whether GPU passthrough is enabled
+                         on this server instance. Included in user_data when provided.
 
         Returns:
             Tuple of (attestation_bytes, None) on success or (None, error_message) on failure
@@ -311,6 +319,8 @@ class AttestationGenerator:
             user_data = {"output_digest": digest}
             if execution_id is not None:
                 user_data["execution_id"] = execution_id
+            if gpu_enabled is not None:
+                user_data["gpu_enabled"] = gpu_enabled
             user_data_content = json.dumps(user_data)
 
             # Write user_data to temporary file

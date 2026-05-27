@@ -334,7 +334,7 @@ Decrypted response:
 }
 ```
 
-The `attestation_document` is a base64-encoded CBOR document produced by NitroTPM. Its `user_data` contains the repository URL, commit hash, script path, `script_env_hash` (SHA-256 of canonicalized `script_env`), `execution_id`, and a timestamp.
+The `attestation_document` is a base64-encoded CBOR document produced by NitroTPM. Its `user_data` contains the repository URL, commit hash, script path, `script_env_hash` (SHA-256 of canonicalized `script_env`), `execution_id`, `gpu_enabled` (boolean reflecting the server's `ENABLE_GPU` configuration), and a timestamp.
 
 **Error responses:**
 
@@ -368,7 +368,7 @@ Retrieves execution status and output. Supports incremental polling via the `off
 
 All request and response payloads are encrypted using the shared key established during the `/execute` call (see [Encryption](#encryption)). Authentication is implicit: only the original caller who performed the PQ Hybrid KEM exchange during `/execute` possesses the shared key, so successful decryption proves caller identity.
 
-When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure. Output attestation is subject to rate limiting (`MAX_OUTPUT_ATTESTATIONS_PER_WINDOW` / `OUTPUT_ATTESTATION_WINDOW_SECONDS`) to prevent TPM resource exhaustion.
+When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`), `execution_id`, and `gpu_enabled` (boolean reflecting the server's `ENABLE_GPU` configuration). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure. Output attestation is subject to rate limiting (`MAX_OUTPUT_ATTESTATIONS_PER_WINDOW` / `OUTPUT_ATTESTATION_WINDOW_SECONDS`) to prevent TPM resource exhaustion.
 
 Note: `output_attestation_document` is included on **every** poll response, not only when execution is complete. This allows callers to attest incremental output.
 
