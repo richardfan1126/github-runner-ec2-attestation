@@ -17,7 +17,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Validate `gpu_devices` is non-empty when `enable_gpu` is true; fail to start if empty
     - _Requirements: 56.1, 56.2, 56.3, 56.4, 9.22, 9.23, 9.24_
 
-  - [ ] 192.2 Add GPU parameters to ScriptExecutor
+  - [x] 192.2 Add GPU parameters to ScriptExecutor
     - In `src/script_executor.py` `__init__`, accept `enable_gpu: bool = False`, `gpu_devices: str = "all"`, and `nvidia_driver_capabilities: str = "compute,utility"` parameters
     - Store as `self._enable_gpu`, `self._gpu_devices`, `self._nvidia_driver_capabilities`
     - In `_execute_in_container()`, when `self._enable_gpu` is True:

@@ -42,6 +42,9 @@ class ScriptExecutor:
         temp_storage_path: str = "/tmp",
         container_image_digest: "str | None" = None,
         container_pids_limit: int = 256,
+        enable_gpu: bool = False,
+        gpu_devices: str = "all",
+        nvidia_driver_capabilities: str = "compute,utility",
     ):
         """
         Initialize script executor with Docker SDK.
@@ -59,6 +62,9 @@ class ScriptExecutor:
             temp_storage_path: Base path for temporary file storage
             container_image_digest: Optional SHA-256 digest to verify pulled image against
             container_pids_limit: Maximum number of PIDs allowed in the container (fork bomb protection)
+            enable_gpu: Whether to enable GPU passthrough via NVIDIA Container Toolkit CDI mode
+            gpu_devices: NVIDIA_VISIBLE_DEVICES value (e.g. "all", "0", "0,1")
+            nvidia_driver_capabilities: NVIDIA_DRIVER_CAPABILITIES value (e.g. "compute,utility")
         """
         if docker_client is _UNSET:
             uid = os.getuid()
@@ -75,6 +81,9 @@ class ScriptExecutor:
         self._temp_storage_path = temp_storage_path
         self._container_image_digest = container_image_digest
         self._container_pids_limit = container_pids_limit
+        self._enable_gpu = enable_gpu
+        self._gpu_devices = gpu_devices
+        self._nvidia_driver_capabilities = nvidia_driver_capabilities
         self._immutable_image_ref = self._compute_immutable_image_ref(
             container_image, container_image_digest
         )
@@ -216,6 +225,19 @@ class ScriptExecutor:
                 timeout=30,
                 check=True,
             )
+
+            # Build container environment: start with script_env, then overlay
+            # server-controlled GPU env vars so callers cannot override GPU policy.
+            container_env = dict(script_env) if script_env else {}
+            if self._enable_gpu:
+                container_env["NVIDIA_VISIBLE_DEVICES"] = self._gpu_devices
+                container_env["NVIDIA_DRIVER_CAPABILITIES"] = self._nvidia_driver_capabilities
+
+            # Build optional kwargs for GPU passthrough (CDI mode)
+            create_kwargs = {}
+            if self._enable_gpu:
+                create_kwargs["runtime"] = "nvidia"
+
             container = self._docker_client.containers.create(
                 image=self._immutable_image_ref,
                 name=container_name,
@@ -231,7 +253,8 @@ class ScriptExecutor:
                 cap_drop=["ALL"],
                 cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"],
                 detach=True,
-                environment=script_env or {},
+                environment=container_env,
+                **create_kwargs,
             )
 
             # Track the container
