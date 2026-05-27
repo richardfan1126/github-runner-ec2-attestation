@@ -26,7 +26,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - When `self._enable_gpu` is False, do NOT pass `runtime` or GPU env vars
     - _Requirements: 56.5, 56.6, 56.7, 56.8, 56.9_
 
-  - [ ] 192.3 Add NVIDIA env vars to Script_Env_Deny_List
+  - [x] 192.3 Add NVIDIA env vars to Script_Env_Deny_List
     - In `src/config.py`, extend the default `script_env_deny_list` to include `NVIDIA_VISIBLE_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES`
     - This prevents callers from overriding the server's GPU access policy via the `script_env` field in execution requests
     - _Requirements: 56.10_

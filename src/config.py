@@ -100,6 +100,8 @@ class ServerConfig:
         "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "PROMPT_COMMAND",
         "PS1", "PS2", "PS4", "IFS", "CDPATH", "GLOBIGNORE", "BASH_XTRACEFD",
         "BASH_LOADABLES_PATH",
+        # GPU access policy: prevent callers from overriding server-controlled GPU settings
+        "NVIDIA_VISIBLE_DEVICES", "NVIDIA_DRIVER_CAPABILITIES",
     ])
 
     # GPU Passthrough Configuration
