@@ -8,7 +8,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [x] 1. Tasks 1–191 (completed): Project structure, configuration, data models, request validation, repository client, attestation generator, execution management, output collection, script executor, HTTP server, OIDC authentication, PQ Hybrid KEM encryption, anti-replay nonce cache, concurrency enforcement, contextvars logging, Docker container security, rootless Docker migration, KIWI image build infrastructure, GitHub Actions workflow, AMI converter, deployment, cleanup, debug SSH, security hardening rounds 1-3 (mandatory nonces, request body limits, encrypted error envelopes, execution_id binding, post-clone cleanup, strict boolean parsing, raw filename sanitization, debug gate fail-closed, lockfile-enforced deps, helper source integrity, UID pinning, LimitCORE=0, OutputCollector config passthrough, immutable artifact digest pinning, credential isolation via GIT_ASKPASS, strict nonce type/length/format validation, strict base64 decoding, CI action SHA pinning, Dockerfile base image digest pinning, libslirp checksum verification, script_env deny-list, symlink-safe script path validation, runtime image package minimization, log and error response sanitization, OIDC commit hash binding, immutable container image reference, production executor digest wiring, container PID limits, output attestation rate limiting, NitroTPM availability enforcement), script environment variable forwarding, health endpoint hardening, container image digest pinning, rootless Docker dependencies built from source, build-time package uninstall via KIWI, lockfile-enforced dependency installation, and comprehensive property/unit/integration tests for all of the above
 
-- [ ] 192. GPU passthrough for Execution Containers via NVIDIA Container Toolkit in CDI mode
+- [x] 192. GPU passthrough for Execution Containers via NVIDIA Container Toolkit in CDI mode
 
   - [x] 192.1 Add GPU configuration to ServerConfig
     - In `src/config.py`, add `enable_gpu: bool` field; read from `ENABLE_GPU` env var; default to `false`; use the same strict boolean parsing as other boolean config values
@@ -70,7 +70,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Add a comment in the Terraform variables documentation noting GPU-compatible instance types
     - _Requirements: 24.11_
 
-  - [ ] 192.10 Write tests for GPU passthrough
+  - [x] 192.10 Write tests for GPU passthrough
     - **Configuration tests**: Verify `ENABLE_GPU=true` is parsed correctly; verify `ENABLE_GPU=treu` fails startup; verify `GPU_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES` defaults
     - **ScriptExecutor GPU tests**: Verify when `enable_gpu=True`, `containers.create()` receives `runtime="nvidia"` and environment includes `NVIDIA_VISIBLE_DEVICES=all` and `NVIDIA_DRIVER_CAPABILITIES=compute,utility`; verify when `enable_gpu=False`, no `runtime` or GPU env vars are passed
     - **Deny-list tests**: Verify `NVIDIA_VISIBLE_DEVICES` in `script_env` is rejected; verify `NVIDIA_DRIVER_CAPABILITIES` in `script_env` is rejected
