@@ -138,7 +138,7 @@ The system consists of the following major components:
 - Receives encrypted /execute request payloads and delegates decryption to the Encryption Manager (see Encryption Manager for PQ_Hybrid_KEM key derivation details)
 - Extracts the OIDC_Token from the decrypted request body `oidc_token` field (NOT from the Authorization header)
 - Extracts the mandatory `nonce` from the decrypted request body; validates that the nonce is a string type, between 16-256 characters, and contains only URL-safe characters (alphanumeric, hyphen, underscore, period, tilde); rejects with HTTP 400 if nonce is missing, empty, wrong type, out of bounds, or contains invalid characters
-- Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), checks keys against the Script_Env_Deny_List (rejects dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`, `BASH_LOADABLES_PATH`), and passes permitted entries to the Script Executor for injection into the Execution_Container as environment variables
+- Extracts the optional `script_env` dictionary from the decrypted request body, sanitizes it (string keys and string values only), checks keys against the Script_Env_Deny_List (rejects dangerous keys like `BASH_ENV`, `PATH`, `LD_PRELOAD`, `BASH_LOADABLES_PATH`, `NVIDIA_VISIBLE_DEVICES`, `NVIDIA_DRIVER_CAPABILITIES`), and passes permitted entries to the Script Executor for injection into the Execution_Container as environment variables
 - Validates the decrypted request using the Request Validator
 - After OIDC validation, verifies the `repository` claim matches the `repository_url` in the request; rejects with HTTP 403 if mismatch
 - Checks nonce against the Nonce_Cache; rejects with HTTP 400 if duplicate
@@ -196,7 +196,7 @@ The system consists of the following major components:
 - Interfaces with the NitroTPM on the Attestable EC2 instance via the `nitro-tpm-attest` command-line tool
 - Creates attestation documents with execution metadata
 - When generating for the /attest endpoint: computes a SHA-256 fingerprint of the Server_Public_Key (composite key) and includes the fingerprint in the `public_key` field of the attestation document (because the composite key exceeds the 1024-byte field limit), but does NOT include user_data (no `--user-data` flag is passed to nitro-tpm-attest)
-- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, timestamp)
+- When generating for /execute or /execution/{id}/output: does NOT include the Server_Public_Key in the attestation document, but DOES include user_data with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, gpu_enabled, timestamp)
 - Accepts an optional nonce parameter; when provided, passes it to nitro-tpm-attest for inclusion in the attestation document
 - Signs documents using NitroTPM cryptographic capabilities
 - Encodes attestation in standard format (CBOR)
@@ -229,6 +229,8 @@ The system consists of the following major components:
 - Configures containers with security constraints: memory limits, CPU limits, writable root filesystem, no privilege escalation, running as root user, pids_limit (configurable via MAX_CONTAINER_PIDS, default 256); internet access is enabled by default (no `network_mode` restriction) since scripts may need to download dependencies or upload artifacts
 - Creates each container with cap_drop=ALL to remove all Linux capabilities, then adds back a minimal set required for build scripts: CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_FOWNER, CAP_SETUID, CAP_SETGID, CAP_NET_BIND_SERVICE, CAP_KILL (see Requirement 8.18 for per-capability justification)
 - Sets `pids_limit` when calling `containers.create()` to prevent fork bombs from exhausting the host process table
+- When ENABLE_GPU is true, passes `runtime="nvidia"` to `containers.create()` and injects `NVIDIA_VISIBLE_DEVICES` (default `all`) and `NVIDIA_DRIVER_CAPABILITIES` (default `compute,utility`) as environment variables, enabling GPU access via the NVIDIA Container Toolkit in CDI mode; these server-controlled GPU environment variables take precedence over any same-named keys in the caller's `script_env`
+- When ENABLE_GPU is false (default), does NOT pass `runtime="nvidia"` or GPU-related environment variables; containers have no GPU access
 - Mounts the cloned repository directory read-only into the container at `/workspace` using Docker volumes
 - Sets the container working directory to `/workspace` so the script can reference sibling files
 - Ensures the cloned repository directory is readable before mounting into the container
@@ -289,12 +291,12 @@ The system consists of the following major components:
 16. Execution Manager checks active execution count against MAX_CONCURRENT_EXECUTIONS atomically; rejects with HTTP 503 if at capacity
 17. Repository Client authenticates and clones the repository at the specified commit into a temporary directory (wrapped in `finally` block for cleanup on unexpected errors)
 18. Repository Client strips token from .git/config and removes .git directory
-19. Attestation Generator creates attestation document with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, timestamp) and nonce (no Server_Public_Key)
+19. Attestation Generator creates attestation document with execution metadata (repository_url, commit_hash, script_path, script_env_hash, execution_id, gpu_enabled, timestamp) and nonce (no Server_Public_Key)
 20. Execution Manager creates execution record with unique ID (stores `repository` claim)
 21. Encryption Manager stores Shared_Key in Encryption_Context keyed by Execution_ID
 22. Response payload (execution ID, attestation document, status) encrypted with Shared_Key and returned (all post-decryption errors from steps 6-19 are also returned as encrypted error envelopes)
 23. Request Handler extracts optional `script_env` dictionary from the decrypted body, sanitizes it (string keys and values only), and passes it to the Script Executor
-24. Script Executor creates a new Docker container from the configured Container_Image using the Immutable_Image_Reference (with cap_drop=ALL, cap_add for the minimal build-script capability set, and pids_limit), injects `script_env` as container environment variables, and begins asynchronous execution inside it
+24. Script Executor creates a new Docker container from the configured Container_Image using the Immutable_Image_Reference (with cap_drop=ALL, cap_add for the minimal build-script capability set, pids_limit, and optionally runtime="nvidia" with GPU environment variables when ENABLE_GPU is true), injects `script_env` as container environment variables, and begins asynchronous execution inside it
 25. Script Executor starts a Log_Streaming_Thread that uses `container.logs(stream=True, follow=True)` to incrementally capture stdout/stderr and feed chunks to the Output_Collector in real time during execution (enforcing MAX_OUTPUT_SIZE_BYTES)
 26. Execution Manager updates status upon completion; Log_Streaming_Thread terminates; container is removed
 
@@ -676,13 +678,16 @@ class AttestationGenerator:
         
         Args:
             metadata: Execution metadata to include in user_data (repository_url,
-                      commit_hash, script_path, script_env_hash, execution_id, timestamp).
+                      commit_hash, script_path, script_env_hash, execution_id,
+                      gpu_enabled, timestamp).
                       When None (e.g., for /attest), user_data is omitted entirely
                       from the attestation document. script_env_hash is the SHA-256
                       hex digest of canonicalized script_env (keys sorted, JSON no
                       whitespace); SHA-256("{}") when script_env is empty or not provided.
                       execution_id binds the attestation to the specific server execution
                       record so consumers can verify which execution produced the attestation.
+                      gpu_enabled indicates whether the server has GPU passthrough enabled,
+                      allowing consumers to verify the execution environment's GPU capability.
             nonce: Optional client-provided nonce for freshness verification
             public_key: Optional SHA-256 fingerprint of the Server_Public_Key to include
                         in the public_key field. Only provided when generating for the
@@ -727,7 +732,9 @@ import docker
 class ScriptExecutor:
     def __init__(self, docker_client: docker.DockerClient, container_image: str,
                  memory_limit: str, cpu_limit: float, timeout_seconds: int,
-                 container_pids_limit: int = 256, container_image_digest: str | None = None):
+                 container_pids_limit: int = 256, container_image_digest: str | None = None,
+                 enable_gpu: bool = False, gpu_devices: str = "all",
+                 nvidia_driver_capabilities: str = "compute,utility"):
         """
         Initialize with Docker client and container configuration.
         The docker_client connects to the rootless Docker socket at
@@ -747,6 +754,13 @@ class ScriptExecutor:
             container_image_digest: SHA-256 digest for image verification; when provided,
                 the executor normalizes to `<repository>@sha256:<digest>` and uses only
                 that immutable reference for containers.create()
+            enable_gpu: When True, passes runtime="nvidia" and GPU environment variables
+                to containers.create(), enabling GPU access via NVIDIA Container Toolkit
+                in CDI mode (default False)
+            gpu_devices: Value for NVIDIA_VISIBLE_DEVICES env var (default "all");
+                controls which GPUs are exposed to the container
+            nvidia_driver_capabilities: Value for NVIDIA_DRIVER_CAPABILITIES env var
+                (default "compute,utility"); controls which driver libraries are mounted
         """
         pass
 
@@ -870,6 +884,7 @@ class AttestationDocument:
     script_path: str
     script_env_hash: str  # SHA-256 hex digest of canonicalized script_env (keys sorted, JSON no whitespace); SHA-256("{}") when empty
     execution_id: str  # UUID v4 binding the attestation to the specific server execution record
+    gpu_enabled: bool  # True when ENABLE_GPU is configured on the server; included in user_data for environment verification
     timestamp: datetime
     signature: bytes  # CBOR-encoded NitroTPM attestation
 ```
@@ -915,11 +930,14 @@ class ServerConfig:
     nonce_cache_ttl_seconds: int  # TTL for nonce cache entries, matching OIDC token lifetime
     allowed_branches: list[str] | None  # Optional branch patterns for OIDC ref claim validation
     require_protected_ref: bool  # When true, require ref_protected claim to be "true"; parsed with strict boolean validation (only true/1/yes/false/0/no accepted; unrecognized values fail startup)
-    script_env_deny_list: list[str]  # Environment variable key names/prefixes rejected from script_env (default: BASH_ENV, PATH, LD_PRELOAD, BASH_LOADABLES_PATH, etc.)
+    script_env_deny_list: list[str]  # Environment variable key names/prefixes rejected from script_env (default: BASH_ENV, PATH, LD_PRELOAD, BASH_LOADABLES_PATH, NVIDIA_VISIBLE_DEVICES, NVIDIA_DRIVER_CAPABILITIES, etc.)
     container_pids_limit: int  # Maximum number of processes per Execution_Container (default 256, configurable via MAX_CONTAINER_PIDS)
     allow_no_tpm: bool  # When true, permits startup without NitroTPM availability (default false); uses strict boolean parsing
     max_output_attestations_per_window: int  # Maximum attestation generations per execution per window (default 10)
     output_attestation_window_seconds: int  # Duration of the rate limit window in seconds (default 60)
+    enable_gpu: bool  # When true, passes runtime="nvidia" and GPU env vars to containers (default false); uses strict boolean parsing
+    gpu_devices: str  # Value for NVIDIA_VISIBLE_DEVICES (default "all"); controls which GPUs are exposed
+    nvidia_driver_capabilities: str  # Value for NVIDIA_DRIVER_CAPABILITIES (default "compute,utility"); controls which driver libs are mounted
 ```
 
 ### OIDCValidationResult
@@ -1741,6 +1759,12 @@ class EncryptionContext:
 
 **Validates: Requirements 9.16, 9.17, 9.18, 9.19, 9.20**
 
+### Property 180: GPU Passthrough via CDI Mode
+
+*For any* Execution_Container created by the Script_Executor when ENABLE_GPU is true, the `containers.create()` call should include `runtime="nvidia"` and the container environment should include `NVIDIA_VISIBLE_DEVICES` set to the configured GPU_DEVICES value (default `all`) and `NVIDIA_DRIVER_CAPABILITIES` set to the configured value (default `compute,utility`). *For any* Execution_Container when ENABLE_GPU is false (default), the `containers.create()` call should NOT include `runtime="nvidia"` and should NOT include `NVIDIA_VISIBLE_DEVICES` or `NVIDIA_DRIVER_CAPABILITIES` in the environment. *For any* caller-provided `script_env` containing `NVIDIA_VISIBLE_DEVICES` or `NVIDIA_DRIVER_CAPABILITIES`, the server should reject the request because these keys are on the Script_Env_Deny_List. All existing container security constraints (cap_drop=ALL, minimal cap_add, no-new-privileges, memory/CPU/pids limits) should remain enforced regardless of GPU configuration.
+
+**Validates: Requirements 56.5, 56.6, 56.7, 56.8, 56.9, 56.10, 56.20, 56.21, 56.22**
+
 ### Error Categories
 
 The system handles errors in the following categories:
@@ -2272,7 +2296,7 @@ Python dependencies are split between `pyproject.toml` (remote executor: fastapi
 
 **wolfcrypt source-build integrity chain:** wolfcrypt-py only publishes source distributions (no pre-built wheels). The source tarball is downloaded with `pip3 download --require-hashes --no-binary=:all:` against the hash from `uv.lock`. The wheel is then built from the verified source inside the KIWI builder Docker container. The built wheel's SHA-256 is computed and added to the final requirements file so that `config.sh` can install all wheels (including wolfcrypt) with `pip install --require-hashes`.
 
-The KIWI image also includes: rootless Docker under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, fuse-overlayfs compiled from source by the build script; libslirp compiled from a release tarball in the Dockerfile with curl retry for CI resilience; hardened daemon.json at `~gha-executor/.config/docker/daemon.json` — Requirements 33, 48, 53), git package (for repository cloning — Requirement 35). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
+The KIWI image also includes: rootless Docker under the `gha-executor` service user (with uidmap from AL2023 repos; rootlesskit, slirp4netns, fuse-overlayfs compiled from source by the build script; libslirp compiled from a release tarball in the Dockerfile with curl retry for CI resilience; hardened daemon.json at `~gha-executor/.config/docker/daemon.json` — Requirements 33, 48, 53), git package (for repository cloning — Requirement 35). When built with `--enable-gpu`, the image additionally includes the NVIDIA Container Toolkit (configured for rootless Docker in CDI mode with `no-cgroups` for backward compatibility) and NVIDIA GPU drivers (Requirement 56). The Container_Image for Execution_Containers is pulled at server startup, not baked into the KIWI image (Requirement 34).
 
 ## Implementation Details
 
@@ -2611,7 +2635,7 @@ By default, there is no ingress rule for port 22 (SSH). The target instance is m
 The target instance is launched from the attestable AMI:
 
 - **AMI**: `var.attestable_ami_id` (required, no default)
-- **Instance Type**: `var.instance_type` (default `c5.9xlarge`)
+- **Instance Type**: `var.instance_type` (default `c5.9xlarge`); GPU-equipped types (G4dn, G5, G6, G6e, P5) are supported for GPU workloads — these instance types support both NitroTPM and NVIDIA GPUs
 - **Subnet**: Placed in the public subnet with `associate_public_ip_address = true`
 - **Security Group**: Attached deployment security group (HTTP 8080 open to 0.0.0.0/0)
 - **Monitoring**: `monitoring = true` (detailed CloudWatch monitoring)
@@ -2623,7 +2647,7 @@ The target instance is launched from the attestable AMI:
 | Variable             | Type   | Required | Default      | Description                              |
 |----------------------|--------|----------|--------------|------------------------------------------|
 | `attestable_ami_id`  | string | Yes      | —            | AMI ID from the build process            |
-| `instance_type`      | string | No       | `c5.9xlarge` | EC2 instance type (NitroTPM-compatible)  |
+| `instance_type`      | string | No       | `c5.9xlarge` | EC2 instance type (NitroTPM-compatible); GPU types (G4dn, G5, G6, P5) supported |
 | `aws_region`         | string | No       | `us-east-1`  | AWS region for deployment                |
 | `enable_ssh`         | bool   | No       | `false`      | Enable SSH debug access (see [PART 5](#part-5-debug-design)) |
 | `key_pair_name`      | string | No       | `""`         | EC2 key pair name for SSH access         |

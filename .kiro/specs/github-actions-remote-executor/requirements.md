@@ -24,6 +24,8 @@ This specification covers three major aspects:
 
 8. **Security Hardening Requirements (Requirements 45-51, 54-55)**: Additional security requirements for areas not covered by existing requirements - anti-replay protection (including mandatory nonces, strict type/format/length validation, and strict base64 decoding), debug image gating, artifact provenance workflow verification, Docker daemon hardening, systemd service hardening, IAM permission scoping, host login access hardening, runtime image package minimization, and output attestation rate limiting.
 
+9. **GPU Passthrough Requirements (Requirement 56)**: Optional GPU device access for Execution_Containers when the Target_Instance is a GPU-equipped EC2 instance type (e.g., G4dn, G5, G6, P5) — using the NVIDIA Container Toolkit in CDI mode for rootless Docker compatibility.
+
 Note: Security hardening acceptance criteria from the security review are integrated throughout the existing requirements where they naturally belong. Only genuinely new requirement areas appear in the Security Hardening Requirements section.
 
 Note: By default, the KIWI image excludes SSH-related packages (openssh-server, cloud-init, ec2-instance-connect) to remove operator access. The debug feature must be enabled at KIWI image build time to include these packages, and then at deployment time to open port 22 and attach a key pair.
@@ -89,6 +91,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 | 53 | Rootless Docker Dependencies Built from Source | Image Provisioning |
 | 54 | Runtime Image Package Minimization | Security Hardening |
 | 55 | Output Attestation Rate Limiting | Security Hardening |
+| 56 | GPU Passthrough for Execution Containers | GPU Passthrough |
 
 ## Glossary
 
@@ -162,6 +165,12 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 - **Immutable_Image_Reference**: A container image reference in the format `image@sha256:<digest>` that addresses a specific image manifest by content hash rather than a mutable tag, ensuring the same image is used regardless of tag movement
 - **Output_Attestation_Rate_Limiter**: A per-execution-ID rate limiter that restricts the number of NitroTPM attestation document generations for output polling within a configurable time window, preventing resource exhaustion from frequent polling
 - **ALLOW_NO_TPM**: An explicit boolean configuration flag that, when set to true, permits the GHA_Server to start and serve requests without NitroTPM availability; intended only for development and testing environments
+
+### GPU Components
+- **NVIDIA_Container_Toolkit**: The NVIDIA Container Toolkit (nvidia-container-toolkit package) that provides the `nvidia` container runtime and the `nvidia-ctk` CLI for configuring GPU access in containers; used in CDI mode for rootless Docker compatibility
+- **CDI** (Container Device Interface): An open specification for container runtimes that abstracts device access (such as NVIDIA GPUs) and standardizes it across runtimes; CDI improves compatibility with rootless containers by avoiding cgroup-based device injection
+- **CDI_Specification**: A YAML file (generated at `/var/run/cdi/nvidia.yaml` by `nvidia-ctk cdi generate`) that describes available GPU devices and the libraries/binaries needed to access them; consumed by the Docker runtime when CDI mode is active
+- **ENABLE_GPU**: An optional boolean configuration flag that, when true, instructs the Script_Executor to pass GPU device access parameters to Execution_Containers via the NVIDIA runtime in CDI mode
 
 ## Requirements
 
@@ -304,6 +313,8 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 16. WHEN the combined stdout and stderr output exceeds MAX_OUTPUT_SIZE_BYTES, THE Output_Collector SHALL truncate the output and mark the output record as truncated
 17. THE GHA_Server SHALL pass `config.max_output_size_bytes` to the Output_Collector constructor at initialization time so that the configured limit is enforced rather than a hardcoded default
 18. THE test suite SHALL include a regression test that configures a lower MAX_OUTPUT_SIZE_BYTES value and verifies the Output_Collector enforces that configured limit
+19. WHEN ENABLE_GPU is true, THE Script_Executor SHALL create each Execution_Container with `runtime="nvidia"` and environment variable `NVIDIA_VISIBLE_DEVICES` set to the configured GPU_DEVICES value (default `all`), enabling GPU access via the NVIDIA Container Toolkit in CDI mode
+20. WHEN ENABLE_GPU is false or not configured, THE Script_Executor SHALL NOT pass `runtime="nvidia"` or `NVIDIA_VISIBLE_DEVICES` to the container, and Execution_Containers SHALL have no GPU access
 
 ### Requirement 6: Output Polling Endpoint
 
@@ -424,6 +435,11 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 19. WHEN ALLOW_NO_TPM is false (or not configured) and NitroTPM is unavailable, THE GHA_Server SHALL log an error indicating that NitroTPM is required for production operation and exit
 20. THE GHA_Server SHALL NOT silently degrade to serving without attestation capability in production; the failure mode SHALL be explicit and visible
 21. THE test suite SHALL include regression tests that verify: (a) startup fails when NitroTPM is unavailable and ALLOW_NO_TPM is false, (b) startup succeeds with a warning when NitroTPM is unavailable and ALLOW_NO_TPM is true, (c) startup succeeds normally when NitroTPM is available regardless of ALLOW_NO_TPM value
+22. THE GHA_Server SHALL support an optional ENABLE_GPU configuration flag (boolean, default false) that enables GPU passthrough to Execution_Containers; this flag SHALL use the same strict boolean parsing as other boolean configuration values (see criteria 13-15)
+23. THE GHA_Server SHALL support an optional GPU_DEVICES configuration value (string, default `all`) that specifies which GPU devices to expose to Execution_Containers; valid values include `all`, a comma-separated list of GPU indices (e.g., `0,1`), or specific GPU UUIDs
+24. THE GHA_Server SHALL support an optional NVIDIA_DRIVER_CAPABILITIES configuration value (string, default `compute,utility`) that specifies which NVIDIA driver capabilities to expose to Execution_Containers
+25. WHEN ENABLE_GPU is true, THE GHA_Server SHALL verify at startup that the NVIDIA Container Toolkit is available by checking that the `nvidia` runtime is registered with the Docker daemon; IF the nvidia runtime is not available, THEN THE GHA_Server SHALL fail to start with a descriptive error message
+26. WHEN ENABLE_GPU is true, THE GHA_Server SHALL verify at startup that CDI device specifications exist (e.g., by running `nvidia-ctk cdi list` or checking for `/var/run/cdi/nvidia.yaml`); IF no CDI specifications are found, THEN THE GHA_Server SHALL log a warning indicating GPU access may not function correctly
 
 ### Requirement 10: Health and Monitoring
 
@@ -703,6 +719,10 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 13. THE KIWI image SHALL include an `/etc/ld.so.conf.d/usr-local-lib64.conf` file that adds `/usr/local/lib64` to the dynamic linker search path, and config.sh SHALL run `ldconfig` to refresh the linker cache so that `libslirp.so` (compiled from source) is discoverable at runtime
 14. THE config.sh script SHALL verify that `dockerd-rootless.sh` is present and executable at `/usr/local/bin/` alongside the other rootless Docker binaries
 15. THE KIWI image SHALL include a udev rules file (`/etc/udev/rules.d/99-tpm.rules`) that sets ownership of `/dev/tpm[0-9]*` and `/dev/tpmrm[0-9]*` to the `gha-executor` user with mode 0600, so the service can access the NitroTPM device without running as root
+16. THE KIWI image build SHALL conditionally include the NVIDIA Container Toolkit when building for GPU-equipped instance types (controlled by a build-time flag such as `--enable-gpu`); when included, the toolkit SHALL be installed from the official NVIDIA RPM repository (`nvidia-container-toolkit` package) at a pinned version
+17. WHEN the NVIDIA Container Toolkit is included, THE config.sh script SHALL configure the toolkit for rootless Docker by running `nvidia-ctk runtime configure --runtime=docker --config=$HOME/.config/docker/daemon.json` (targeting the gha-executor user's rootless Docker config), `nvidia-ctk config --set nvidia-container-cli.no-cgroups --in-place` (retained for backward compatibility with toolkit versions prior to v1.18; on v1.18+ with `--runtime=nvidia` this setting is not consulted), and `nvidia-ctk config --in-place --set nvidia-container-runtime.mode=cdi` (to explicitly enable CDI mode so that simple device identifiers in `NVIDIA_VISIBLE_DEVICES` are expanded to fully-qualified CDI device names)
+18. WHEN the NVIDIA Container Toolkit is included, THE config.sh script SHALL generate CDI specifications by running `nvidia-ctk cdi generate --output=/var/run/cdi/nvidia.yaml` during first boot (via a systemd oneshot service that runs after the NVIDIA driver is loaded), or SHALL enable the `nvidia-cdi-refresh` systemd service that automatically regenerates CDI specs when drivers are installed or the system reboots
+19. WHEN the NVIDIA Container Toolkit is included, THE KIWI image SHALL include the NVIDIA GPU driver appropriate for the target instance type; the driver SHALL be installed from the official NVIDIA repository or pre-baked into the AMI using the AWS-provided NVIDIA driver packages for AL2023
 
 ### Requirement 34: Pull Container Image at Server Startup
 
@@ -975,6 +995,7 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 8. THE Deploy_Terraform SHALL set the IMDSv2 http_put_response_hop_limit to 1
 9. THE Deploy_Terraform SHALL use the aws_region variable with default value us-east-1
 10. THE Deploy_Terraform SHALL use the AWS provider version ~> 5.0
+11. THE Deploy_Terraform SHALL support GPU-equipped instance types (e.g., G4dn, G5, G6, G6e, P5) as values for the instance_type variable; these instance types support both NitroTPM and NVIDIA GPUs, enabling attestable GPU workloads
 
 ### Requirement 25: Deployment Outputs
 
@@ -1302,3 +1323,53 @@ The build process does NOT use the Remote Executor itself (since you can't use s
 7. WHEN the time window expires, THE attestation budget for the Execution_ID SHALL reset, allowing new attestation generations
 8. THE GHA_Server SHALL read MAX_OUTPUT_ATTESTATIONS_PER_WINDOW and OUTPUT_ATTESTATION_WINDOW_SECONDS from configuration at startup
 9. THE test suite SHALL include regression tests that verify: (a) output attestation is generated normally within the rate limit, (b) after exceeding the rate limit, output is returned without a new attestation and `output_attestation_document` is null, (c) the rate-limited response includes `attestation_rate_limited: true`, (d) the budget resets after the time window expires
+
+## GPU Passthrough Requirements
+
+### Requirement 56: GPU Passthrough for Execution Containers
+
+**User Story:** As a GitHub Actions workflow running GPU-accelerated workloads (e.g., ML training, CUDA builds, inference), I want the Remote Executor to expose host GPU devices to Execution_Containers when deployed on a GPU-equipped EC2 instance, so that scripts can utilize GPU hardware for computation
+
+#### Acceptance Criteria
+
+##### Configuration
+
+1. THE GHA_Server SHALL support an optional ENABLE_GPU configuration flag (boolean, default false) that controls whether GPU devices are exposed to Execution_Containers
+2. THE GHA_Server SHALL support an optional GPU_DEVICES configuration value (string, default `all`) specifying which GPUs to expose; valid values are `all` (all available GPUs), a comma-separated list of GPU indices (e.g., `0,1,2`), or specific GPU UUIDs
+3. THE GHA_Server SHALL support an optional NVIDIA_DRIVER_CAPABILITIES configuration value (string, default `compute,utility`) specifying which NVIDIA driver capabilities to expose; valid values include `compute`, `utility`, `graphics`, `video`, `display`, or `all`
+4. ALL GPU configuration flags SHALL use the same strict boolean parsing as other boolean configuration values (see Requirement 9 criteria 13-15) where applicable
+
+##### Runtime Behavior
+
+5. WHEN ENABLE_GPU is true, THE Script_Executor SHALL create each Execution_Container with `runtime="nvidia"` passed to the Docker SDK `containers.create()` call, activating the NVIDIA Container Runtime which handles CDI-based device injection
+6. WHEN ENABLE_GPU is true, THE Script_Executor SHALL set the `NVIDIA_VISIBLE_DEVICES` environment variable in the Execution_Container to the configured GPU_DEVICES value (default `all`), instructing the NVIDIA runtime which GPUs to inject via CDI
+7. WHEN ENABLE_GPU is true, THE Script_Executor SHALL set the `NVIDIA_DRIVER_CAPABILITIES` environment variable in the Execution_Container to the configured NVIDIA_DRIVER_CAPABILITIES value (default `compute,utility`), controlling which driver libraries are mounted
+8. WHEN ENABLE_GPU is false or not configured, THE Script_Executor SHALL NOT pass `runtime="nvidia"` or any `NVIDIA_VISIBLE_DEVICES` / `NVIDIA_DRIVER_CAPABILITIES` environment variables to the container; Execution_Containers SHALL have no GPU access
+9. THE GPU environment variables (`NVIDIA_VISIBLE_DEVICES`, `NVIDIA_DRIVER_CAPABILITIES`) SHALL be injected by the Script_Executor independently of the caller-provided `script_env` dictionary; IF the caller's `script_env` contains `NVIDIA_VISIBLE_DEVICES` or `NVIDIA_DRIVER_CAPABILITIES`, THE server-configured values SHALL take precedence (caller values are overridden) to prevent callers from escalating GPU access beyond the configured policy
+10. THE Script_Env_Deny_List SHALL be extended to include `NVIDIA_VISIBLE_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES` so that callers cannot override the server's GPU access policy via the `script_env` field
+
+##### Startup Verification
+
+11. WHEN ENABLE_GPU is true, THE GHA_Server SHALL verify at startup that the `nvidia` runtime is registered with the Docker daemon by inspecting the daemon's runtime configuration; IF the nvidia runtime is not available, THEN THE GHA_Server SHALL fail to start with a descriptive error message indicating that ENABLE_GPU requires the NVIDIA Container Toolkit
+12. WHEN ENABLE_GPU is true, THE GHA_Server SHALL verify at startup that CDI device specifications are available (by checking for the existence of `/var/run/cdi/nvidia.yaml` or equivalent CDI spec path); IF no CDI specifications are found, THEN THE GHA_Server SHALL log a warning indicating that GPU access may not function correctly until CDI specs are generated
+13. WHEN ENABLE_GPU is true, THE GHA_Server SHALL attempt to create and immediately remove a test container with `runtime="nvidia"` and `NVIDIA_VISIBLE_DEVICES=all` at startup to verify GPU access is functional; IF the test container fails, THEN THE GHA_Server SHALL fail to start with a descriptive error
+
+##### KIWI Image Provisioning
+
+14. THE Build_Workflow SHALL support an optional `--enable-gpu` flag for the KIWI image build that includes GPU support packages in the image
+15. WHEN `--enable-gpu` is passed to the build, THE appliance.kiwi package definition SHALL include the `nvidia-container-toolkit` package (pinned to a specific version) from the official NVIDIA RPM repository
+16. WHEN `--enable-gpu` is passed to the build, THE KIWI image SHALL include the NVIDIA GPU driver packages appropriate for the target GPU instance family (e.g., `nvidia-driver-latest-dkms` or the AWS-provided NVIDIA driver for AL2023)
+17. WHEN `--enable-gpu` is passed to the build, THE config.sh script SHALL configure the NVIDIA Container Toolkit for rootless Docker by running: (a) `nvidia-ctk runtime configure --runtime=docker --config=/var/lib/gha-executor/.config/docker/daemon.json` to register the nvidia runtime with the rootless Docker daemon, (b) `nvidia-ctk config --set nvidia-container-cli.no-cgroups --in-place` to disable cgroup-based device management (required for rootless mode on toolkit versions prior to v1.18; on v1.18+ with `--runtime=nvidia` this setting is not consulted, but is retained for backward compatibility), and (c) `nvidia-ctk config --in-place --set nvidia-container-runtime.mode=cdi` to explicitly enable CDI mode so that simple device identifiers like `all` or `0,1` in `NVIDIA_VISIBLE_DEVICES` are automatically expanded to fully-qualified CDI device names
+18. WHEN `--enable-gpu` is passed to the build, THE config.sh script SHALL enable the `nvidia-cdi-refresh` systemd service (or equivalent) so that CDI specifications at `/var/run/cdi/nvidia.yaml` are automatically generated and updated when the NVIDIA driver loads or the system reboots
+19. WHEN `--enable-gpu` is NOT passed to the build, THE KIWI image SHALL NOT include the NVIDIA Container Toolkit, NVIDIA drivers, or any GPU-related packages; the image SHALL remain minimal for non-GPU instance types
+
+##### Security Constraints
+
+20. ALL existing container security constraints SHALL remain enforced when GPU access is enabled: cap_drop=ALL with minimal cap_add, no-new-privileges, memory/CPU limits, pids_limit, ephemeral container lifecycle, and read-only repository bind mounts; GPU access SHALL NOT require relaxing any of these constraints because CDI mode handles device injection at the runtime level without requiring additional Linux capabilities
+21. THE `runtime="nvidia"` parameter SHALL be the only Docker-level change when GPU is enabled; the Script_Executor SHALL NOT add `/dev/nvidia*` device mappings manually, SHALL NOT add `SYS_ADMIN` capability, and SHALL NOT use `--privileged` mode
+22. THE CDI-based approach SHALL be used exclusively (not the legacy `device_requests` / `--gpus` Docker flag approach) because CDI provides better compatibility with rootless Docker and does not require cgroup device controller access
+
+##### Attestation
+
+23. WHEN ENABLE_GPU is true, THE Attestation_Document user_data SHALL include a `gpu_enabled: true` field so that consumers can verify the execution environment had GPU access available
+24. WHEN ENABLE_GPU is false, THE Attestation_Document user_data SHALL include a `gpu_enabled: false` field (or omit the field entirely; the schema documentation SHALL specify the behavior)
