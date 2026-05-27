@@ -10,7 +10,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
 
 - [ ] 192. GPU passthrough for Execution Containers via NVIDIA Container Toolkit in CDI mode
 
-  - [ ] 192.1 Add GPU configuration to ServerConfig
+  - [x] 192.1 Add GPU configuration to ServerConfig
     - In `src/config.py`, add `enable_gpu: bool` field; read from `ENABLE_GPU` env var; default to `false`; use the same strict boolean parsing as other boolean config values
     - Add `gpu_devices: str` field; read from `GPU_DEVICES` env var; default to `"all"`
     - Add `nvidia_driver_capabilities: str` field; read from `NVIDIA_DRIVER_CAPABILITIES` env var; default to `"compute,utility"`

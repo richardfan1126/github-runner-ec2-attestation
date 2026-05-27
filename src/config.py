@@ -102,6 +102,11 @@ class ServerConfig:
         "BASH_LOADABLES_PATH",
     ])
 
+    # GPU Passthrough Configuration
+    enable_gpu: bool = False
+    gpu_devices: str = "all"
+    nvidia_driver_capabilities: str = "compute,utility"
+
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
     require_protected_ref: bool = False
@@ -236,6 +241,16 @@ class ServerConfig:
         # Parse optional ALLOW_NO_TPM (boolean, default False)
         allow_no_tpm_raw = os.getenv("ALLOW_NO_TPM", "false")
         allow_no_tpm = parse_strict_bool(allow_no_tpm_raw, "ALLOW_NO_TPM")
+
+        # Parse optional ENABLE_GPU (boolean, default False)
+        enable_gpu_raw = os.getenv("ENABLE_GPU", "false")
+        enable_gpu = parse_strict_bool(enable_gpu_raw, "ENABLE_GPU")
+
+        # Parse optional GPU_DEVICES (default "all")
+        gpu_devices = os.getenv("GPU_DEVICES", "all")
+
+        # Parse optional NVIDIA_DRIVER_CAPABILITIES (default "compute,utility")
+        nvidia_driver_capabilities = os.getenv("NVIDIA_DRIVER_CAPABILITIES", "compute,utility")
         
         # Parse optional MAX_OUTPUT_SIZE_BYTES (default 10MB)
         max_output_size_bytes_raw = os.getenv("MAX_OUTPUT_SIZE_BYTES")
@@ -291,6 +306,9 @@ class ServerConfig:
             max_output_attestations_per_window=max_output_attestations_per_window,
             output_attestation_window_seconds=output_attestation_window_seconds,
             allow_no_tpm=allow_no_tpm,
+            enable_gpu=enable_gpu,
+            gpu_devices=gpu_devices,
+            nvidia_driver_capabilities=nvidia_driver_capabilities,
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,
@@ -388,6 +406,12 @@ class ServerConfig:
             errors.append(
                 "container_image_digest is required: set CONTAINER_IMAGE_DIGEST or use a "
                 "digest-pinned image reference (e.g., image@sha256:...)"
+            )
+        
+        # GPU configuration validation
+        if self.enable_gpu and not self.gpu_devices.strip():
+            errors.append(
+                "gpu_devices cannot be empty when enable_gpu is true"
             )
         
         if errors:
