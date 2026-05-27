@@ -31,7 +31,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - This prevents callers from overriding the server's GPU access policy via the `script_env` field in execution requests
     - _Requirements: 56.10_
 
-  - [ ] 192.4 Wire GPU config to ScriptExecutor in create_app()
+  - [x] 192.4 Wire GPU config to ScriptExecutor in create_app()
     - In `src/server.py` `create_app()`, pass `enable_gpu=config.enable_gpu`, `gpu_devices=config.gpu_devices`, `nvidia_driver_capabilities=config.nvidia_driver_capabilities` to the request-handling ScriptExecutor constructor
     - _Requirements: 56.5_
 

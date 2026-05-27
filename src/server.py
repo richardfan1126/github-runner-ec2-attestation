@@ -320,6 +320,9 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
         temp_storage_path=config.temp_storage_path,
         container_image_digest=config.container_image_digest,
         container_pids_limit=config.container_pids_limit,
+        enable_gpu=config.enable_gpu,
+        gpu_devices=config.gpu_devices,
+        nvidia_driver_capabilities=config.nvidia_driver_capabilities,
     )
     request_validator = RequestValidator(
         allowed_repositories=config.allowed_repositories,
