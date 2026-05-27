@@ -141,10 +141,11 @@ echo "✓ All rootless Docker binaries verified"
 
 ################################
 # NVIDIA Container Toolkit     #
+# and GPU Driver               #
 # (GPU builds only)            #
 ################################
 if [ "${ENABLE_GPU}" = "true" ]; then
-    echo "=== Installing NVIDIA Container Toolkit (GPU mode) ==="
+    echo "=== Installing NVIDIA GPU Driver and Container Toolkit (GPU mode) ==="
 
     # Add the official NVIDIA Container Toolkit RPM repository.
     # The repo URL is stable and provides packages for RHEL/CentOS/AL2023.
@@ -159,6 +160,85 @@ gpgkey=https://nvidia.github.io/libnvidia-container/gpgkey
 sslverify=1
 sslcacert=/etc/pki/tls/certs/ca-bundle.crt
 NVIDIA_REPO
+
+    # Add the official NVIDIA CUDA RPM repository for GPU driver packages.
+    # This provides the kernel-mode and user-mode NVIDIA driver components.
+    # Using the RHEL 9 repository which is compatible with AL2023 (both are
+    # glibc 2.34+ / kernel 6.1+ based).
+    cat > /etc/yum.repos.d/nvidia-cuda.repo << 'NVIDIA_CUDA_REPO'
+[nvidia-cuda]
+name=nvidia-cuda
+baseurl=https://developer.download.nvidia.com/compute/cuda/repos/rhel9/$basearch
+gpgcheck=1
+enabled=1
+gpgkey=https://developer.download.nvidia.com/compute/cuda/repos/rhel9/$basearch/D42D0685.pub
+sslverify=1
+sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+NVIDIA_CUDA_REPO
+
+    ################################
+    # NVIDIA GPU Driver            #
+    ################################
+    # Install the NVIDIA open kernel module and user-mode driver libraries.
+    #
+    # Driver version choice: 570.x branch (Long-Lived Branch for data center use)
+    # - 570.x is the current Long-Lived Branch (LLB) recommended for data center use
+    # - Supports all GPU instance families used with this project:
+    #   G4dn (T4), G5 (A10G), G6/G6e (L4/L40S), P5 (H100)
+    # - Uses the open-source kernel module (nvidia-driver-open) which is required
+    #   for Turing+ GPUs and recommended by NVIDIA for data center deployments
+    #
+    # Installation method: DNF module streams (per NVIDIA Driver Installation Guide
+    # for Amazon Linux 2023). The CUDA repo provides modularity streams that manage
+    # driver version pinning and dependency resolution.
+    #
+    # Package breakdown (pulled in by the module stream):
+    # - kmod-nvidia-open-dkms: Open-source kernel module (nvidia.ko, nvidia-uvm.ko)
+    #   compiled via DKMS against the installed kernel headers
+    # - nvidia-driver-cuda: User-mode compute libraries (libcuda.so, libnvidia-ml.so)
+    # - nvidia-persistenced: Keeps driver state loaded between GPU operations
+    #
+    # To update the driver version:
+    #   1. Check the latest LLB release at:
+    #      https://docs.nvidia.com/datacenter/tesla/tesla-release-notes/index.html
+    #   2. Update the module stream below (e.g., 570-open -> 580-open)
+    #   3. Verify the stream is available:
+    #      dnf module list nvidia-driver
+    #   4. Verify compatibility with the NVIDIA Container Toolkit version
+    #      (NVIDIA_CTK_VERSION in this file) — generally any toolkit >= 1.14
+    #      supports any driver >= 470.x
+    #   5. Test on a GPU instance (G4dn.xlarge is cheapest) to confirm:
+    #      - nvidia-smi shows the GPU
+    #      - Container GPU access works (docker run --runtime=nvidia nvidia/cuda:12.x-base nvidia-smi)
+    #
+    NVIDIA_DRIVER_STREAM="570-open"
+    echo "Installing NVIDIA GPU driver (module stream: ${NVIDIA_DRIVER_STREAM})..."
+
+    # Install kernel-devel for the kernel that will be in the image.
+    # DKMS needs kernel headers to compile the nvidia kernel module.
+    # During KIWI build, the kernel is installed but not running, so we
+    # find the installed kernel version from the package database.
+    INSTALLED_KERNEL=$(rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | tail -1)
+    echo "Installed kernel: ${INSTALLED_KERNEL}"
+    dnf install -y "kernel-devel-${INSTALLED_KERNEL}" "kernel-headers-${INSTALLED_KERNEL}" || {
+        echo "WARNING: Could not install kernel-devel for ${INSTALLED_KERNEL}, trying without version pin..."
+        dnf install -y kernel-devel kernel-headers
+    }
+    echo "✓ Kernel development headers installed"
+
+    # Enable the NVIDIA driver module stream and install compute-only packages.
+    # Using the open kernel module flavor (required for Turing+ GPUs).
+    dnf module enable -y "nvidia-driver:${NVIDIA_DRIVER_STREAM}"
+    echo "✓ nvidia-driver:${NVIDIA_DRIVER_STREAM} module stream enabled"
+
+    dnf install -y nvidia-driver-cuda kmod-nvidia-open-dkms nvidia-persistenced
+    echo "✓ NVIDIA GPU driver installed (compute-only, open kernel modules)"
+
+    # Enable nvidia-persistenced so the driver stays loaded between operations.
+    # This reduces GPU initialization latency for container workloads.
+    echo "Enabling nvidia-persistenced service..."
+    systemctl enable nvidia-persistenced
+    echo "✓ nvidia-persistenced enabled"
 
     # Install NVIDIA Container Toolkit at a pinned version for reproducibility.
     # To update: change the version below and verify compatibility with the
@@ -209,9 +289,9 @@ NVIDIA_REPO
     chown -R gha-executor:gha-executor "${GHA_DOCKER_CONFIG}"
     echo "✓ Docker config ownership set to gha-executor"
 
-    echo "=== NVIDIA Container Toolkit installation complete ==="
+    echo "=== NVIDIA GPU Driver and Container Toolkit installation complete ==="
 else
-    echo "GPU support disabled (default) — skipping NVIDIA Container Toolkit installation"
+    echo "GPU support disabled (default) — skipping NVIDIA driver and Container Toolkit installation"
 fi
 
 ################################

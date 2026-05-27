@@ -80,6 +80,15 @@ if [ "${ENABLE_SSH}" = "true" ]; then
     echo "✓ SSH packages will be included in the image"
 fi
 
+# Conditionally increase image size for GPU builds.
+# The NVIDIA GPU driver and Container Toolkit add ~1.5GB to the image.
+# The base image is 4GB which is insufficient for GPU builds.
+if [ "${ENABLE_GPU}" = "true" ]; then
+    echo "=== GPU Build: Increasing image size to 8GB ==="
+    sed -i 's/<size unit="G">4<\/size>/<size unit="G">8<\/size>/' "${TEMP_IMAGE_DIR}/appliance.kiwi"
+    echo "✓ Image size increased to 8GB for GPU driver packages"
+fi
+
 # Copy pyproject.toml and uv.lock to the image description directory
 echo "Copying pyproject.toml and uv.lock..."
 if [ ! -f "${GITHUB_WORKSPACE}/pyproject.toml" ]; then

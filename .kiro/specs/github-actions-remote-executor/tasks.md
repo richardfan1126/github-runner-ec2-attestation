@@ -60,7 +60,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - When `--enable-gpu` is NOT passed, skip all NVIDIA-related installation
     - _Requirements: 56.14, 56.17, 56.18, 56.19, 33.16, 33.17, 33.18, 33.19_
 
-  - [ ] 192.8 Add NVIDIA GPU driver to KIWI image (GPU builds only)
+  - [x] 192.8 Add NVIDIA GPU driver to KIWI image (GPU builds only)
     - When `--enable-gpu` is passed, include NVIDIA GPU driver packages in the KIWI image (e.g., from the official NVIDIA repository or AWS-provided packages for AL2023)
     - Document the driver version choice and how to update it
     - _Requirements: 56.15, 56.16_
