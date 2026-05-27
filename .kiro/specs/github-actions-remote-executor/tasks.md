@@ -78,7 +78,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - **Startup verification tests** (mock-based): Verify startup fails when `enable_gpu=True` but nvidia runtime is not registered; verify warning is logged when CDI specs are missing; verify startup fails when test container creation fails
     - _Requirements: 56.5-56.13, 56.20-56.24_
 
-- [ ] 193. Checkpoint - Ensure all GPU passthrough tests pass
+- [x] 193. Checkpoint - Ensure all GPU passthrough tests pass
   - Run the full test suite and verify all new tests from 192.10 pass
   - Verify no regressions in existing tests
 

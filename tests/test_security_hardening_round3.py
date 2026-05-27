@@ -735,6 +735,7 @@ class TestNitroTPMEnforcement:
             config.container_cpu_limit = 1.0
             config.container_image_digest = "sha256:" + "a" * 64
             config.allow_no_tpm = True
+            config.enable_gpu = False
             mock_config.return_value = config
 
             mock_gen_instance = Mock()
@@ -790,6 +791,7 @@ class TestNitroTPMEnforcement:
             config.container_cpu_limit = 1.0
             config.container_image_digest = "sha256:" + "a" * 64
             config.allow_no_tpm = False  # Even with False, should succeed if TPM is available
+            config.enable_gpu = False
             mock_config.return_value = config
 
             mock_gen_instance = Mock()
