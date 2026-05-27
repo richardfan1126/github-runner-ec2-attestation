@@ -65,7 +65,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Document the driver version choice and how to update it
     - _Requirements: 56.15, 56.16_
 
-  - [ ] 192.9 Update Terraform deploy to support GPU instance types
+  - [x] 192.9 Update Terraform deploy to support GPU instance types
     - In `terraform/deploy/`, ensure the `instance_type` variable accepts GPU instance types (G4dn, G5, G6, G6e, P5) without additional configuration changes (NitroTPM is auto-enabled via the AMI)
     - Add a comment in the Terraform variables documentation noting GPU-compatible instance types
     - _Requirements: 24.11_
