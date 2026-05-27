@@ -35,7 +35,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - In `src/server.py` `create_app()`, pass `enable_gpu=config.enable_gpu`, `gpu_devices=config.gpu_devices`, `nvidia_driver_capabilities=config.nvidia_driver_capabilities` to the request-handling ScriptExecutor constructor
     - _Requirements: 56.5_
 
-  - [ ] 192.5 Add GPU startup verification
+  - [x] 192.5 Add GPU startup verification
     - In `src/main.py` (or `src/server.py` startup), when `config.enable_gpu` is True:
       - Verify the `nvidia` runtime is registered with the Docker daemon by inspecting `docker_client.info()["Runtimes"]` for an `nvidia` key; fail to start if not found
       - Check for CDI specification existence at `/var/run/cdi/nvidia.yaml` (or equivalent); log a warning if not found (non-fatal)

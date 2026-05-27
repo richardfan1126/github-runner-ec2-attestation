@@ -109,6 +109,70 @@ def main() -> int:
                 "Ensure rootless Docker is running for the service user."
             )
         
+        # GPU startup verification (when enabled)
+        if config.enable_gpu:
+            logger.info("GPU passthrough enabled — verifying NVIDIA runtime...")
+
+            # 1. Verify the 'nvidia' runtime is registered with the Docker daemon
+            try:
+                docker_info = docker_client.info()
+                runtimes = docker_info.get("Runtimes", {})
+                if "nvidia" not in runtimes:
+                    logger.error(
+                        "NVIDIA runtime not registered with Docker daemon. "
+                        f"Available runtimes: {list(runtimes.keys())}. "
+                        "Ensure NVIDIA Container Toolkit is installed and configured."
+                    )
+                    return 1
+                logger.info("NVIDIA runtime is registered with Docker daemon")
+            except docker.errors.APIError as e:
+                logger.error(f"Failed to query Docker daemon info for GPU verification: {e}")
+                return 1
+
+            # 2. Check for CDI specification existence (non-fatal warning)
+            cdi_spec_paths = [
+                "/var/run/cdi/nvidia.yaml",
+                "/etc/cdi/nvidia.yaml",
+            ]
+            cdi_found = any(os.path.exists(p) for p in cdi_spec_paths)
+            if not cdi_found:
+                logger.warning(
+                    "CDI specification not found at any of: "
+                    f"{', '.join(cdi_spec_paths)}. "
+                    "GPU access may still work via legacy mode, but CDI mode is recommended."
+                )
+            else:
+                logger.info("CDI specification found")
+
+            # 3. Create and immediately remove a test container to verify GPU access
+            logger.info("Running GPU access verification container...")
+            try:
+                test_container = docker_client.containers.create(
+                    image=config.container_image,
+                    command=["true"],
+                    runtime="nvidia",
+                    environment={"NVIDIA_VISIBLE_DEVICES": "all"},
+                    detach=True,
+                )
+                # Remove the test container immediately
+                test_container.remove(force=True)
+                logger.info("GPU access verification succeeded — test container created and removed")
+            except docker.errors.APIError as e:
+                logger.error(
+                    f"GPU access verification failed: could not create test container "
+                    f"with runtime='nvidia': {e}. "
+                    "Ensure NVIDIA drivers are installed and GPUs are accessible."
+                )
+                return 1
+            except docker.errors.ImageNotFound as e:
+                logger.error(
+                    f"GPU access verification failed: container image not found: {e}. "
+                    f"Ensure '{config.container_image}' is available locally."
+                )
+                return 1
+        else:
+            logger.info("GPU passthrough disabled (ENABLE_GPU=false)")
+
         # Clean up any dangling execution containers from previous runs
         logger.info("Cleaning up dangling execution containers...")
         from src.execution_manager import ExecutionManager

@@ -113,6 +113,7 @@ class TestMainStartupRootlessSocket:
             config.container_image = "myorg/myimage:latest"
             config.container_memory_limit = "512m"
             config.container_cpu_limit = 1.0
+            config.enable_gpu = False
             mock_load_config.return_value = config
 
             # Docker client mock
