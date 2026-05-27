@@ -140,6 +140,81 @@ done
 echo "✓ All rootless Docker binaries verified"
 
 ################################
+# NVIDIA Container Toolkit     #
+# (GPU builds only)            #
+################################
+if [ "${ENABLE_GPU}" = "true" ]; then
+    echo "=== Installing NVIDIA Container Toolkit (GPU mode) ==="
+
+    # Add the official NVIDIA Container Toolkit RPM repository.
+    # The repo URL is stable and provides packages for RHEL/CentOS/AL2023.
+    cat > /etc/yum.repos.d/nvidia-container-toolkit.repo << 'NVIDIA_REPO'
+[nvidia-container-toolkit]
+name=nvidia-container-toolkit
+baseurl=https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch
+repo_gpgcheck=1
+gpgcheck=0
+enabled=1
+gpgkey=https://nvidia.github.io/libnvidia-container/gpgkey
+sslverify=1
+sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+NVIDIA_REPO
+
+    # Install NVIDIA Container Toolkit at a pinned version for reproducibility.
+    # To update: change the version below and verify compatibility with the
+    # NVIDIA driver version installed in task 192.8.
+    # Using v1.18.2 because it includes the nvidia-cdi-refresh systemd service
+    # (introduced in v1.18.0) which automatically regenerates CDI specs at boot.
+    NVIDIA_CTK_VERSION="1.18.2-1"
+    echo "Installing nvidia-container-toolkit-${NVIDIA_CTK_VERSION}..."
+    dnf install -y "nvidia-container-toolkit-${NVIDIA_CTK_VERSION}"
+    echo "✓ nvidia-container-toolkit ${NVIDIA_CTK_VERSION} installed"
+
+    # Configure the NVIDIA runtime for rootless Docker.
+    # The daemon.json lives under the gha-executor user's config directory
+    # because rootless Docker reads its config from $HOME/.config/docker/daemon.json.
+    GHA_DOCKER_CONFIG="/home/gha-executor/.config/docker"
+
+    echo "Configuring NVIDIA runtime for rootless Docker..."
+    nvidia-ctk runtime configure --runtime=docker --config="${GHA_DOCKER_CONFIG}/daemon.json"
+    echo "✓ NVIDIA runtime configured in ${GHA_DOCKER_CONFIG}/daemon.json"
+
+    # Disable cgroup device access (required for rootless Docker which cannot
+    # access the cgroup device controller). This setting is retained for backward
+    # compatibility with toolkit versions prior to v1.18.
+    echo "Configuring nvidia-container-cli no-cgroups..."
+    nvidia-ctk config --set nvidia-container-cli.no-cgroups --in-place
+    echo "✓ no-cgroups configured"
+
+    # Set CDI mode for the container runtime. CDI (Container Device Interface)
+    # is the officially recommended approach for rootless GPU access.
+    echo "Configuring CDI mode..."
+    nvidia-ctk config --in-place --set nvidia-container-runtime.mode=cdi
+    echo "✓ CDI mode configured"
+
+    # Enable the nvidia-cdi-refresh systemd units so CDI specs are regenerated
+    # at boot when the GPU hardware is available. As of v1.18.0, the toolkit
+    # ships nvidia-cdi-refresh.path (monitors for driver changes) and
+    # nvidia-cdi-refresh.service (generates /var/run/cdi/nvidia.yaml).
+    echo "Enabling nvidia-cdi-refresh systemd units..."
+    systemctl enable nvidia-cdi-refresh.path || {
+        echo "WARNING: nvidia-cdi-refresh.path not found"
+    }
+    systemctl enable nvidia-cdi-refresh.service || {
+        echo "WARNING: nvidia-cdi-refresh.service not found"
+    }
+    echo "✓ nvidia-cdi-refresh units enabled"
+
+    # Ensure correct ownership of the Docker config directory
+    chown -R gha-executor:gha-executor "${GHA_DOCKER_CONFIG}"
+    echo "✓ Docker config ownership set to gha-executor"
+
+    echo "=== NVIDIA Container Toolkit installation complete ==="
+else
+    echo "GPU support disabled (default) — skipping NVIDIA Container Toolkit installation"
+fi
+
+################################
 # Conditional sshd Enablement  #
 ################################
 if [ "${ENABLE_SSH}" = "true" ]; then

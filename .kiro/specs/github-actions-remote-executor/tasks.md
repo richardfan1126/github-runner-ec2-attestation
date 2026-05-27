@@ -48,7 +48,7 @@ This implementation plan breaks down the GitHub Actions Remote Executor into dis
     - Update the attestation user_data schema documentation to include `gpu_enabled` field
     - _Requirements: 56.23, 56.24_
 
-  - [ ] 192.7 Add --enable-gpu flag to KIWI image build
+  - [x] 192.7 Add --enable-gpu flag to KIWI image build
     - In `.github/scripts/build-kiwi-image.sh`, accept an optional `--enable-gpu` flag
     - When `--enable-gpu` is passed, set `ENABLE_GPU=true` environment variable for the KIWI builder Docker container
     - In `kiwi-descriptions/config.sh`, when `ENABLE_GPU=true`:

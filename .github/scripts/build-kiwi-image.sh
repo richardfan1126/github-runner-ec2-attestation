@@ -20,10 +20,15 @@ set -e -o pipefail
 
 # Parse command-line arguments
 ENABLE_SSH="false"
+ENABLE_GPU="false"
 while [ $# -gt 0 ]; do
     case "$1" in
         --enable-ssh)
             ENABLE_SSH="true"
+            shift
+            ;;
+        --enable-gpu)
+            ENABLE_GPU="true"
             shift
             ;;
         *)
@@ -457,6 +462,7 @@ if ! docker run --rm \
     -v "${TEMP_IMAGE_DIR}:/workspace" \
     -v "${BUILD_OUTPUT_DIR}:/output" \
     -e "ENABLE_SSH=${ENABLE_SSH}" \
+    -e "ENABLE_GPU=${ENABLE_GPU}" \
     kiwi-builder:latest \
     bash -c "cd /workspace && kiwi-ng system build --description . --target-dir /output"; then
     echo "::error::KIWI NG build failed. Check the build logs above for details."
