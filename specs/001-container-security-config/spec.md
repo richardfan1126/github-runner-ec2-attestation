@@ -8,6 +8,14 @@
 
 **Input**: User description: "Expose container security configuration via environment variables with secure-by-default values — add eight new operator-facing configuration options to the GitHub Actions Remote Executor so the security posture of execution containers can be tuned per-deployment without code changes, each defaulting to the secure choice, with every effective value observable for attestation and invalid combinations failing fast at startup."
 
+## Clarifications
+
+### Session 2026-06-13
+
+- Q: When `CONTAINER_TMPFS_SIZE` is non-empty but `CONTAINER_READ_ONLY_ROOTFS=false`, how should the system behave so the attested posture matches reality? → A: Mount the tmpfs at the execution scratch path whenever `CONTAINER_TMPFS_SIZE` is non-empty, independent of the rootfs read-only setting; attestation reports the configured size, which is then always the effective value (Option A). The tmpfs mount is governed solely by `CONTAINER_TMPFS_SIZE`, not by `CONTAINER_READ_ONLY_ROOTFS`.
+- Q: How should SC-006 ("relaxation lets a job that needs it run") be validated, given the suite is mock-Docker only? → A: Add a real-Docker integration test that actually runs a job under a relaxed setting, gated to environments with a Docker daemon (and NitroTPM where required) and skipped in standard CI (Option B).
+- Q: Where should the attested `container_allow_root` value be sourced from? → A: Directly from `ServerConfig` at the attestation call sites (Option A). `CONTAINER_ALLOW_ROOT` is a startup root-gate only and does not affect container creation, so it is NOT threaded through the executor — only the seven settings that shape `containers.create()` are; `container_allow_root` is still attested in `user_data` per FR-027.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Hardened sandbox by default (Priority: P1)
@@ -110,7 +118,7 @@ A relying party or operator needs to confirm what security posture a given execu
 #### Flow-through to container creation
 
 - **FR-021**: The resolved effective value of every option MUST flow through to the execution-container creation path so that each running container reflects the configured user, capability set, no-new-privileges setting, root-filesystem read-only setting, tmpfs scratch mount, workspace mount mode, and network mode.
-- **FR-022**: When `CONTAINER_READ_ONLY_ROOTFS` is `true` and `CONTAINER_TMPFS_SIZE` is non-empty, the system MUST mount a writable in-memory scratch area of the configured size so jobs retain temporary space despite the read-only root filesystem.
+- **FR-022**: When `CONTAINER_TMPFS_SIZE` is non-empty, the system MUST mount a writable in-memory scratch area of the configured size at the execution scratch path, **independent of `CONTAINER_READ_ONLY_ROOTFS`**, so jobs retain temporary space (including under a read-only root filesystem). When `CONTAINER_TMPFS_SIZE` is empty, no tmpfs is mounted. Because the mount is governed solely by `CONTAINER_TMPFS_SIZE`, the attested `container_tmpfs_size` (FR-027) is always the effective value.
 - **FR-023**: The capability set actually applied to a container MUST be exactly the resolved `CONTAINER_CAP_ADD` set on top of dropping all capabilities — no broader.
 
 #### Documentation
@@ -141,7 +149,7 @@ A relying party or operator needs to confirm what security posture a given execu
 - **SC-003**: An operator can change any single security setting to a valid non-default value and have it take effect on the next server start with no code changes.
 - **SC-004**: For any execution, a relying party can determine the effective value of all eight security settings from the attestation/audit surface, and a relaxed default is always distinguishable from the secure default.
 - **SC-005**: The example environment configuration documents all eight variables, each with its default and security rationale, and explicitly states the backward-compatibility and network-default trade-offs.
-- **SC-006**: A deployment that explicitly relaxes a default (e.g., enables network, makes the workspace writable, or runs as root with the escape hatch) successfully runs a job that requires that relaxation.
+- **SC-006**: A deployment that explicitly relaxes a default (e.g., enables network, makes the workspace writable, or runs as root with the escape hatch) successfully runs a job that requires that relaxation — verified end to end in a container-runtime-capable environment, with the relaxed value additionally shown to flow through to container creation in the standard test suite.
 
 ## Assumptions
 
