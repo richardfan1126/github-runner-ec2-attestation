@@ -7,7 +7,30 @@ import os
 import pytest
 from contextlib import contextmanager
 from hypothesis import given, strategies as st, settings, HealthCheck
-from src.config import ServerConfig
+from src.config import ServerConfig, CONTAINER_CAP_ALLOWLIST
+
+
+def _security_config(**overrides) -> ServerConfig:
+    """Build a valid (digest-pinned) ServerConfig, then apply security-field overrides."""
+    base = dict(
+        port=8080,
+        max_concurrent_executions=10,
+        execution_timeout_seconds=300,
+        max_script_size_bytes=1048576,
+        rate_limit_per_ip=100,
+        rate_limit_window_seconds=60,
+        temp_storage_path="/tmp/gha-executor",
+        output_retention_hours=24,
+        tpm_attest_path="/dev/nsm",
+        allowed_repositories=["owner/repo"],
+        expected_audience="https://example.com",
+        container_image="python:3.11-slim",
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
+        container_image_digest="sha256:" + "a" * 64,
+    )
+    base.update(overrides)
+    return ServerConfig(**base)
 
 
 @contextmanager
@@ -511,5 +534,116 @@ def test_property_empty_path_validation(empty_path):
     
     with pytest.raises(ValueError) as exc_info:
         config.validate()
-    
+
     assert "temp_storage_path cannot be empty" in str(exc_info.value)
+
+
+# ===========================================================================
+# US2: Container-security validation properties (T012)
+# ===========================================================================
+
+_ENUM_FIELDS = {
+    "workspace_mount_mode": {"ro", "rw"},
+    "container_network_mode": {"none", "bridge", "host"},
+}
+
+
+@given(
+    field=st.sampled_from(sorted(_ENUM_FIELDS)),
+    value=st.text(min_size=1, max_size=12),
+)
+@settings(max_examples=50)
+def test_property_enum_outside_set_rejected(field, value):
+    """Any enum value outside its accepted set is rejected; the message names the var."""
+    accepted = _ENUM_FIELDS[field]
+    config = _security_config(**{field: value})
+    if value in accepted:
+        config.validate()  # well-formed value passes
+    else:
+        with pytest.raises(ValueError) as exc_info:
+            config.validate()
+        assert field.upper() in str(exc_info.value)
+
+
+@given(uid=st.integers(min_value=1, max_value=65535), gid=st.integers(min_value=0, max_value=65535))
+@settings(max_examples=30)
+def test_property_well_formed_user_passes(uid, gid):
+    """Any well-formed non-root uid:gid pair passes validation."""
+    config = _security_config(container_user=f"{uid}:{gid}")
+    config.validate()
+
+
+@given(
+    bad_user=st.one_of(
+        st.integers(min_value=0, max_value=99999).map(str),          # bare uid, no gid
+        st.integers(min_value=0, max_value=99999).map(lambda u: f"{u}:"),  # empty gid
+        st.integers(min_value=1, max_value=99999).map(lambda u: f"-{u}:0"),  # negative uid
+        st.integers(min_value=1, max_value=99999).map(lambda g: f"0:-{g}"),  # negative gid
+        st.sampled_from(["root:root", "a:b", "1000:x", "x:1000", "1000:1000:1000", ""]),
+    ),
+)
+@settings(max_examples=50)
+def test_property_malformed_user_rejected(bad_user):
+    """Any uid:gid with a missing/negative/non-integer part is rejected, naming CONTAINER_USER."""
+    config = _security_config(container_user=bad_user)
+    with pytest.raises(ValueError) as exc_info:
+        config.validate()
+    assert "CONTAINER_USER" in str(exc_info.value)
+
+
+@given(caps=st.lists(st.sampled_from(sorted(CONTAINER_CAP_ALLOWLIST)), max_size=14, unique=True))
+@settings(max_examples=30)
+def test_property_cap_subset_passes(caps):
+    """Any subset of the 14-cap allow-list passes validation."""
+    config = _security_config(container_cap_add=caps)
+    config.validate()
+
+
+@given(
+    good=st.lists(st.sampled_from(sorted(CONTAINER_CAP_ALLOWLIST)), max_size=5),
+    bad=st.one_of(
+        st.sampled_from([c.lower() for c in CONTAINER_CAP_ALLOWLIST]),   # wrong case
+        st.sampled_from(["SYS_ADMIN", "NET_ADMIN", "CAP_CHOWN", "ALL", "SYS_PTRACE"]),
+        st.text(alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ_", min_size=1, max_size=12),
+    ),
+)
+@settings(max_examples=50)
+def test_property_cap_outside_allowlist_rejected(good, bad):
+    """Any capability outside the allow-list (case-sensitive) is rejected, naming CONTAINER_CAP_ADD."""
+    if bad in CONTAINER_CAP_ALLOWLIST:
+        return  # the random token happened to be valid; nothing to assert
+    config = _security_config(container_cap_add=good + [bad])
+    with pytest.raises(ValueError) as exc_info:
+        config.validate()
+    assert "CONTAINER_CAP_ADD" in str(exc_info.value)
+
+
+@given(
+    n=st.integers(min_value=1, max_value=1_000_000),
+    unit=st.sampled_from(["b", "k", "m", "g"]),
+)
+@settings(max_examples=30)
+def test_property_valid_tmpfs_size_passes(n, unit):
+    """Any positive-int + b/k/m/g unit passes validation."""
+    config = _security_config(container_tmpfs_size=f"{n}{unit}")
+    config.validate()
+
+
+@given(
+    bad_size=st.one_of(
+        st.integers(min_value=1, max_value=99999).map(str),                  # no unit
+        st.sampled_from(["0m", "0k", "00g"]),                                # zero
+        st.integers(min_value=1, max_value=9999).map(lambda n: f"-{n}m"),     # negative
+        st.integers(min_value=1, max_value=9999).map(lambda n: f"{n}mb"),     # bad unit
+        st.integers(min_value=1, max_value=9999).map(lambda n: f" {n}m"),     # leading ws
+        st.integers(min_value=1, max_value=9999).map(lambda n: f"{n}m "),     # trailing ws
+        st.sampled_from(["big", "m", "256M", "256 m"]),
+    ),
+)
+@settings(max_examples=50)
+def test_property_invalid_tmpfs_size_rejected(bad_size):
+    """Any 0/negative/no-unit/whitespace-padded/bad-unit tmpfs string is rejected."""
+    config = _security_config(container_tmpfs_size=bad_size)
+    with pytest.raises(ValueError) as exc_info:
+        config.validate()
+    assert "CONTAINER_TMPFS_SIZE" in str(exc_info.value)

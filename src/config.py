@@ -1,5 +1,6 @@
 """Configuration management for GitHub Actions Remote Executor"""
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -50,6 +51,14 @@ CONTAINER_CAP_ALLOWLIST = frozenset({
 CONTAINER_DEFAULT_CAP_ADD = [
     "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL",
 ]
+
+# Accepted enum values and grammars for the container-security settings.
+WORKSPACE_MOUNT_MODES = frozenset({"ro", "rw"})
+CONTAINER_NETWORK_MODES = frozenset({"none", "bridge", "host"})
+# uid:gid — exactly two non-negative integer parts, both present.
+_CONTAINER_USER_RE = re.compile(r"^\d+:\d+$")
+# Positive integer + required unit b/k/m/g (e.g. "256m"); zero is rejected below.
+_TMPFS_SIZE_RE = re.compile(r"^(\d+)([bkmg])$")
 
 
 @dataclass
@@ -478,7 +487,61 @@ class ServerConfig:
             errors.append(
                 "gpu_devices cannot be empty when enable_gpu is true"
             )
-        
+
+        # --- Container security configuration validation (FR-013 – FR-020) ---
+        # Enum: workspace mount mode
+        if self.workspace_mount_mode not in WORKSPACE_MOUNT_MODES:
+            errors.append(
+                f"Invalid WORKSPACE_MOUNT_MODE value: '{self.workspace_mount_mode}'. "
+                f"Accepted values: ro, rw"
+            )
+
+        # Enum: container network mode
+        if self.container_network_mode not in CONTAINER_NETWORK_MODES:
+            errors.append(
+                f"Invalid CONTAINER_NETWORK_MODE value: '{self.container_network_mode}'. "
+                f"Accepted values: none, bridge, host"
+            )
+
+        # Format: container_user must be 'uid:gid', both non-negative integers, both present.
+        resolved_uid = None
+        if _CONTAINER_USER_RE.match(self.container_user):
+            resolved_uid = int(self.container_user.split(":", 1)[0])
+        else:
+            errors.append(
+                f"Invalid CONTAINER_USER value: '{self.container_user}'. "
+                f"Expected format 'uid:gid' with both non-negative integers (e.g. '65534:65534')"
+            )
+
+        # Capability allow-list: every requested cap must be in the 14-cap set (case-sensitive).
+        # None means "use the default set" and is not validated here.
+        if self.container_cap_add is not None:
+            invalid_caps = [c for c in self.container_cap_add if c not in CONTAINER_CAP_ALLOWLIST]
+            if invalid_caps:
+                allowed = ", ".join(sorted(CONTAINER_CAP_ALLOWLIST))
+                offenders = ", ".join(repr(c) for c in invalid_caps)
+                errors.append(
+                    f"Invalid CONTAINER_CAP_ADD value(s): {offenders}. "
+                    f"Allowed capabilities (case-sensitive, no CAP_ prefix): {allowed}"
+                )
+
+        # Size grammar: tmpfs size when non-empty (empty = no tmpfs, which is valid).
+        if self.container_tmpfs_size:
+            m = _TMPFS_SIZE_RE.match(self.container_tmpfs_size)
+            if not m or int(m.group(1)) < 1:
+                errors.append(
+                    f"Invalid CONTAINER_TMPFS_SIZE value: '{self.container_tmpfs_size}'. "
+                    f"Expected a positive integer with a unit b/k/m/g (e.g. '256m'), "
+                    f"or empty for no tmpfs"
+                )
+
+        # Cross-field root-user gate: running as root requires an explicit opt-in.
+        if resolved_uid == 0 and not self.container_allow_root:
+            errors.append(
+                "CONTAINER_USER resolves to root (uid 0) but CONTAINER_ALLOW_ROOT is false. "
+                "Set CONTAINER_ALLOW_ROOT=true to permit running as root."
+            )
+
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")
 
