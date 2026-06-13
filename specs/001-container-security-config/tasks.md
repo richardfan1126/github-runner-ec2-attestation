@@ -121,6 +121,15 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 
 ---
 
+## Phase 7: Doc-Conformance Fixes (post-implementation review)
+
+**Purpose**: Two defects surfaced by checking the implementation against the official Docker SDK / Docker Engine tmpfs docs and the AWS NitroTPM `nitro-tpm-attest` docs. Both affect the hardened-default path.
+
+- [ ] T024 Fix the `/tmp` tmpfs so the non-root default user can write to it. In `src/script_executor.py` (~L275) change the tmpfs option string from `{"/tmp": f"size={self._tmpfs_size}"}` to `{"/tmp": f"size={self._tmpfs_size},mode=1777"}`. Docker docs claim tmpfs defaults to mode 1777, but runc 1.1+/Docker 20.10.7+ actually bring an option-less tmpfs up root-owned `0755`, so the hardened default (`CONTAINER_USER=65534:65534` + `CONTAINER_READ_ONLY_ROOTFS=true`) leaves jobs unable to write `/tmp` (EACCES) — which defeats research.md Decision 5 (the `/tmp` scratch is what makes a hardened-default job succeed). Refs: [docker/docs#15594](https://github.com/docker/docs/issues/15594), [runc#4971](https://github.com/opencontainers/runc/issues/4971). Then update the tests that pin the exact tmpfs string to expect `size=<value>,mode=1777`: `tests/test_docker_script_executor.py` (~L197, L236), `tests/test_docker_container_properties.py` (~L260, L634), `tests/test_security_config_integration.py` (~L189), `tests/test_script_executor.py` (~L1027). Confirm `.venv/bin/pytest -q` is green.
+- [ ] T025 Guard the attestation `user_data` against the AWS NitroTPM 1024-byte field limit. The eight new container-security keys (T017) materially grow the `/execute` and `/output` `user_data`; with a long `repository_url` + `script_path` and an operator-expanded `CONTAINER_CAP_ADD`, the JSON can cross the documented **0–1024 byte** `user_data` cap, causing `nitro-tpm-attest` to reject the request and `/execute` + `/output` to fail with only a generic non-zero exit. In `src/attestation.py`, before invoking `nitro-tpm-attest` in both `generate_attestation()` and `generate_output_attestation()`, validate `len(user_data_json.encode("utf-8")) <= 1024` and return a clear `AttestationError` / error string naming the limit when exceeded (or shrink the payload — e.g. omit security keys equal to their documented default, or carry `container_cap_add` as a short token — while preserving SC-004 "relaxation stays visible"). Refs: [Get the NitroTPM Attestation Document](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/attestation-get-doc.html). Add a regression assertion in `tests/test_attestation_user_data_regression.py` that the serialized `user_data` stays within 1024 bytes (and that an oversize input is rejected with the limit-naming error), so this can't regress silently. Depends on T017.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
