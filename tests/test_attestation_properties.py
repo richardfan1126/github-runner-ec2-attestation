@@ -811,3 +811,127 @@ def test_script_env_hash_deterministic_regardless_of_insertion_order(
         user_data = json.loads(captured_user_data.decode('utf-8'))
         assert user_data['script_env_hash'] == expected_hash, \
             "Attestation user_data script_env_hash must match canonical computation"
+
+
+# ---------------------------------------------------------------------------
+# Property tests: container-security values round-trip into user_data (US3, T016)
+# ---------------------------------------------------------------------------
+
+CAP_ALLOWLIST = [
+    "CHOWN", "DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW",
+    "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE",
+    "SYS_CHROOT", "KILL", "AUDIT_WRITE",
+]
+
+
+@st.composite
+def security_config(draw):
+    """Generate a valid effective container-security posture (resolved values)."""
+    uid = draw(st.integers(min_value=0, max_value=70000))
+    gid = draw(st.integers(min_value=0, max_value=70000))
+    cap_add = draw(st.lists(st.sampled_from(CAP_ALLOWLIST), unique=True, max_size=14))
+    tmpfs = draw(st.sampled_from(["", "256m", "64m", "1g", "512k"]))
+    return dict(
+        container_user=f"{uid}:{gid}",
+        container_allow_root=draw(st.booleans()),
+        container_cap_add=cap_add,
+        no_new_privileges=draw(st.booleans()),
+        container_read_only_rootfs=draw(st.booleans()),
+        container_tmpfs_size=tmpfs,
+        workspace_mount_mode=draw(st.sampled_from(["ro", "rw"])),
+        container_network_mode=draw(st.sampled_from(["none", "bridge", "host"])),
+    )
+
+
+def _capture_user_data_side_effect(captured):
+    """subprocess.run side effect that records the user_data JSON written to disk."""
+    def side_effect(cmd, **kwargs):
+        if "--user-data" in cmd:
+            path = cmd[cmd.index("--user-data") + 1]
+            with open(path, "r") as f:
+                captured.append(json.load(f))
+        result = Mock()
+        result.returncode = 0
+        result.stdout = b"mock_cbor"
+        result.stderr = b""
+        return result
+    return side_effect
+
+
+SECURITY_KEYS = {
+    "container_user", "container_allow_root", "container_cap_add",
+    "no_new_privileges", "container_read_only_rootfs", "container_tmpfs_size",
+    "workspace_mount_mode", "container_network_mode",
+}
+
+
+@settings(max_examples=50, deadline=None)
+@given(cfg=security_config())
+def test_execute_attestation_security_values_round_trip(cfg):
+    """For any valid config, the eight user_data values equal the resolved config values."""
+    generator = AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
+    captured = []
+
+    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(captured)):
+        doc, error = generator.generate_attestation(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="a" * 40,
+            script_path="build.sh",
+            **cfg,
+        )
+
+    assert error is None
+    assert captured, "user_data should have been written"
+    user_data = captured[0]
+    for key, value in cfg.items():
+        assert user_data[key] == value, f"{key} must round-trip to the resolved value"
+
+
+@settings(max_examples=50, deadline=None)
+@given(cfg=security_config())
+def test_output_attestation_security_values_round_trip(cfg):
+    """The output attestation carries the same eight resolved values."""
+    generator = AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
+    captured = []
+
+    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(captured)):
+        attestation_bytes, error_msg = generator.generate_output_attestation(
+            script_output="stdout:x\nstderr:\nexit_code:0",
+            execution_id="exec-1",
+            **cfg,
+        )
+
+    assert error_msg is None
+    assert captured, "user_data should have been written"
+    user_data = captured[0]
+    for key, value in cfg.items():
+        assert user_data[key] == value
+
+
+@settings(max_examples=50, deadline=None)
+@given(cfg=security_config())
+def test_execute_and_output_attestations_carry_identical_security_values(cfg):
+    """For a given execution the execute-time and output-time attestations agree on all eight."""
+    generator = AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
+
+    execute_captured = []
+    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(execute_captured)):
+        generator.generate_attestation(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="a" * 40,
+            script_path="build.sh",
+            execution_id="exec-1",
+            **cfg,
+        )
+
+    output_captured = []
+    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(output_captured)):
+        generator.generate_output_attestation(
+            script_output="stdout:x\nstderr:\nexit_code:0",
+            execution_id="exec-1",
+            **cfg,
+        )
+
+    execute_security = {k: execute_captured[0][k] for k in SECURITY_KEYS}
+    output_security = {k: output_captured[0][k] for k in SECURITY_KEYS}
+    assert execute_security == output_security

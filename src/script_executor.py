@@ -112,6 +112,11 @@ class ScriptExecutor:
         self._active_containers = {}
         self._container_lock = threading.Lock()
 
+    @property
+    def cap_add(self) -> "list[str]":
+        """The resolved capability set added on top of cap_drop=ALL (the attested list)."""
+        return list(self._cap_add)
+
     def _compute_immutable_image_ref(self, container_image: str, container_image_digest: "str | None") -> str:
         """
         Compute an immutable image reference from the container image and digest.

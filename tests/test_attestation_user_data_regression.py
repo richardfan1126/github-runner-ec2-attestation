@@ -319,6 +319,153 @@ class TestBothFieldsPresent:
         )
 
 
+# The eight container-security values bound into user_data (hardened defaults).
+# See specs/001-container-security-config/contracts/attestation-user-data-contract.md
+SECURITY_KWARGS = dict(
+    container_user="65534:65534",
+    container_allow_root=False,
+    container_cap_add=[
+        "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID",
+        "NET_BIND_SERVICE", "KILL",
+    ],
+    no_new_privileges=True,
+    container_read_only_rootfs=True,
+    container_tmpfs_size="256m",
+    workspace_mount_mode="ro",
+    container_network_mode="none",
+)
+
+SECURITY_KEYS = set(SECURITY_KWARGS.keys())
+
+
+class TestSecurityFieldsPresentInExecuteAttestation:
+    """Pin the eight container-security keys in generate_attestation user_data (SC-004)."""
+
+    def test_all_eight_security_fields_present(self, generator, mock_successful_attestation):
+        """All eight container-security keys must be present with their effective values."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="build.sh",
+                **SECURITY_KWARGS,
+            )
+
+        assert error is None
+        user_data = captured["user_data"]
+        for key, value in SECURITY_KWARGS.items():
+            assert key in user_data, f"{key} must be present in attestation user_data"
+            assert user_data[key] == value, f"{key} must carry its effective value"
+
+    def test_container_cap_add_is_array(self, generator, mock_successful_attestation):
+        """container_cap_add must serialize as a JSON array, not a string."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="b" * 40,
+                script_path="build.sh",
+                **SECURITY_KWARGS,
+            )
+
+        cap_add = captured["user_data"]["container_cap_add"]
+        assert isinstance(cap_add, list)
+        assert cap_add == SECURITY_KWARGS["container_cap_add"]
+
+    def test_empty_cap_add_distinct_from_default(self, generator, mock_successful_attestation):
+        """An explicitly empty cap_add ([]) must be distinguishable from the default set."""
+        captured, side_effect = mock_successful_attestation
+
+        kwargs = {**SECURITY_KWARGS, "container_cap_add": []}
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="c" * 40,
+                script_path="build.sh",
+                **kwargs,
+            )
+
+        assert captured["user_data"]["container_cap_add"] == []
+
+    def test_relaxed_value_distinguishable_from_default(
+        self, generator, mock_successful_attestation
+    ):
+        """A relaxed setting (network=bridge) is distinguishable from the hardened default."""
+        captured, side_effect = mock_successful_attestation
+
+        kwargs = {**SECURITY_KWARGS, "container_network_mode": "bridge"}
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="d" * 40,
+                script_path="build.sh",
+                **kwargs,
+            )
+
+        assert captured["user_data"]["container_network_mode"] == "bridge"
+        assert captured["user_data"]["container_network_mode"] != "none"
+
+
+class TestSecurityFieldsPresentInOutputAttestation:
+    """Pin the eight container-security keys in generate_output_attestation user_data."""
+
+    def test_all_eight_security_fields_present(self, generator, mock_successful_attestation):
+        """All eight keys must be present in the output attestation user_data."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-123",
+                **SECURITY_KWARGS,
+            )
+
+        assert error_msg is None
+        user_data = captured["user_data"]
+        for key, value in SECURITY_KWARGS.items():
+            assert key in user_data, f"{key} must be present in output attestation user_data"
+            assert user_data[key] == value
+
+    def test_relaxed_value_distinguishable_from_default(
+        self, generator, mock_successful_attestation
+    ):
+        """A relaxed setting flows into the output attestation too."""
+        captured, side_effect = mock_successful_attestation
+
+        kwargs = {**SECURITY_KWARGS, "workspace_mount_mode": "rw"}
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-456",
+                **kwargs,
+            )
+
+        assert captured["user_data"]["workspace_mount_mode"] == "rw"
+
+
+class TestSecurityFieldsAbsentWhenNotProvided:
+    """Backward compatibility: the eight keys are omitted when no security config is passed."""
+
+    def test_execute_user_data_unchanged_without_security_kwargs(
+        self, generator, mock_successful_attestation
+    ):
+        """Without security kwargs, user_data keeps exactly its original field set."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="build.sh",
+                script_env={"X": "1"},
+            )
+
+        assert SECURITY_KEYS.isdisjoint(captured["user_data"].keys())
+
+
 class TestFieldRemovalCausesFailure:
     """Tests that verify removing script_path or script_env_hash would cause failure.
 

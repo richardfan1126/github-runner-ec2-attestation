@@ -835,7 +835,7 @@ def add_routes(app: FastAPI) -> None:
                 # Generate attestation with execution_id in user_data
                 attestation_start = time.time()
                 attestation_gen = request.app.state.attestation_generator
-                
+                sec_config = request.app.state.config
                 attestation_doc, attestation_error = attestation_gen.generate_attestation(
                     body['repository_url'],
                     body['commit_hash'],
@@ -843,7 +843,15 @@ def add_routes(app: FastAPI) -> None:
                     nonce=body.get('nonce'),
                     script_env=script_env,
                     execution_id=execution_record.execution_id,
-                    gpu_enabled=request.app.state.config.enable_gpu,
+                    gpu_enabled=sec_config.enable_gpu,
+                    container_user=sec_config.container_user,
+                    container_allow_root=sec_config.container_allow_root,
+                    container_cap_add=request.app.state.script_executor.cap_add,
+                    no_new_privileges=sec_config.no_new_privileges,
+                    container_read_only_rootfs=sec_config.container_read_only_rootfs,
+                    container_tmpfs_size=sec_config.container_tmpfs_size,
+                    workspace_mount_mode=sec_config.workspace_mount_mode,
+                    container_network_mode=sec_config.container_network_mode,
                 )
                 
                 if attestation_error:
@@ -1156,10 +1164,19 @@ def add_routes(app: FastAPI) -> None:
             output_attestation_limiter = request.app.state.output_attestation_rate_limiter
             if output_attestation_limiter.check_and_record(execution_id):
                 attestation_gen = request.app.state.attestation_generator
+                sec_config = request.app.state.config
                 attestation_bytes, attestation_error_msg = (
                     attestation_gen.generate_output_attestation(
                         script_output, nonce=nonce, execution_id=execution_id,
-                        gpu_enabled=request.app.state.config.enable_gpu,
+                        gpu_enabled=sec_config.enable_gpu,
+                        container_user=sec_config.container_user,
+                        container_allow_root=sec_config.container_allow_root,
+                        container_cap_add=request.app.state.script_executor.cap_add,
+                        no_new_privileges=sec_config.no_new_privileges,
+                        container_read_only_rootfs=sec_config.container_read_only_rootfs,
+                        container_tmpfs_size=sec_config.container_tmpfs_size,
+                        workspace_mount_mode=sec_config.workspace_mount_mode,
+                        container_network_mode=sec_config.container_network_mode,
                     )
                 )
 
