@@ -46,7 +46,7 @@ Configuration is resolved once at startup (`ServerConfig.from_env()` → `valida
 | `container_cap_add` (None → default 7; [] → []) | `cap_drop=["ALL"]`, `cap_add=<resolved list>` |
 | `no_new_privileges` | `security_opt=["no-new-privileges"]` if True, else omit |
 | `container_read_only_rootfs` | `read_only=<bool>` |
-| `container_tmpfs_size` (non-empty) | `tmpfs={"/tmp/execution": "size=<value>"}` — mounted whenever size is non-empty, **independent of read-only rootfs** (FR-022) |
+| `container_tmpfs_size` (non-empty) | `tmpfs={"/tmp": "size=<value>"}` — mounted at the container's standard temp dir whenever size is non-empty, **independent of read-only rootfs** (FR-022) |
 | `workspace_mount_mode` | `volumes={host_repo_path: {"bind": "/workspace", "mode": <ro|rw>}}` |
 | `container_network_mode` | `network_mode=<value>` |
 

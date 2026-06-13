@@ -41,13 +41,13 @@ All NEEDS CLARIFICATION items from the spec were resolved during `/speckit-clari
 - `CONTAINER_CAP_ADD` → `cap_drop=["ALL"]` + `cap_add=[…resolved set…]` (empty list when explicitly empty)
 - `NO_NEW_PRIVILEGES` → `security_opt=["no-new-privileges"]` when true, omitted when false
 - `CONTAINER_READ_ONLY_ROOTFS` → `read_only=True/False`
-- `CONTAINER_TMPFS_SIZE` (non-empty) → `tmpfs={"/tmp/execution": "size=<value>"}` (existing scratch mount path; see `script_executor.py` tmpfs readiness check ~L390)
+- `CONTAINER_TMPFS_SIZE` (non-empty) → `tmpfs={"/tmp": "size=<value>"}` (the container's standard temp directory, so jobs using `$TMPDIR`/`mktemp`/`tempfile` write to the scratch mount under a read-only rootfs — see Clarifications 2026-06-13)
 - `WORKSPACE_MOUNT_MODE` → workspace volume bind `mode` (`ro`/`rw`) at the `/workspace` mount (currently hard-coded `ro`, `script_executor.py:249`)
 - `CONTAINER_NETWORK_MODE` → `network_mode="none"|"bridge"|"host"`
 
 **Rationale**: These are the exact kwargs the Docker SDK exposes; the executor already sets `security_opt`, `cap_drop`, `cap_add`, and the `ro` workspace bind, so this is a parameterization of existing literals rather than new machinery.
 
-**Open implementation note**: confirm the current scratch/tmpfs mount path used by the executor's readiness retry (`/tmp/execution`) so `CONTAINER_TMPFS_SIZE` targets the same path the rest of the code expects. (Resolved against `script_executor.py` during Phase 1 data-model.)
+**Resolved implementation note**: the tmpfs is mounted at `/tmp` (Clarifications 2026-06-13). An earlier draft targeted `/tmp/execution`, but that path is referenced only by `_copy_script_to_container`, which is **dead code** (never called — the live flow runs `bash /workspace/{script_path}` from the read-only workspace). Mounting the scratch at the conventional `/tmp` is what makes a hardened-default local-compute job actually succeed, since standard tooling writes temp files to `/tmp`, not a sub-path.
 
 ## Decision 6 — Attestation/audit surface
 

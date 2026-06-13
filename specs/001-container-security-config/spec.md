@@ -15,6 +15,7 @@
 - Q: When `CONTAINER_TMPFS_SIZE` is non-empty but `CONTAINER_READ_ONLY_ROOTFS=false`, how should the system behave so the attested posture matches reality? → A: Mount the tmpfs at the execution scratch path whenever `CONTAINER_TMPFS_SIZE` is non-empty, independent of the rootfs read-only setting; attestation reports the configured size, which is then always the effective value (Option A). The tmpfs mount is governed solely by `CONTAINER_TMPFS_SIZE`, not by `CONTAINER_READ_ONLY_ROOTFS`.
 - Q: How should SC-006 ("relaxation lets a job that needs it run") be validated, given the suite is mock-Docker only? → A: Add a real-Docker integration test that actually runs a job under a relaxed setting, gated to environments with a Docker daemon (and NitroTPM where required) and skipped in standard CI (Option B).
 - Q: Where should the attested `container_allow_root` value be sourced from? → A: Directly from `ServerConfig` at the attestation call sites (Option A). `CONTAINER_ALLOW_ROOT` is a startup root-gate only and does not affect container creation, so it is NOT threaded through the executor — only the seven settings that shape `containers.create()` are; `container_allow_root` is still attested in `user_data` per FR-027.
+- Q: At what path should the `CONTAINER_TMPFS_SIZE` scratch mount be mounted, so a hardened-default job that writes to the conventional temp directory still works under a read-only root filesystem? → A: Mount the tmpfs at `/tmp`, the container's standard temporary directory (Option A). This ensures tools that use `$TMPDIR`/`mktemp`/`tempfile` (which default to `/tmp`) land on the in-memory scratch rather than failing against the read-only rootfs. The mount path is `/tmp`, not a sub-path such as `/tmp/execution`.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -29,7 +30,7 @@ An operator deploys the executor without setting any of the new container-securi
 **Acceptance Scenarios**:
 
 1. **Given** no container-security variables are set, **When** the server starts and runs a job, **Then** the container process runs as a non-root user (uid:gid `65534:65534`) rather than the image's default user.
-2. **Given** no container-security variables are set, **When** a job runs, **Then** the container root filesystem is mounted read-only and a bounded in-memory writable scratch mount (default `256m`) is available for temporary files.
+2. **Given** no container-security variables are set, **When** a job runs, **Then** the container root filesystem is mounted read-only and a bounded in-memory writable scratch mount (default `256m`) is available at `/tmp` for temporary files.
 3. **Given** no container-security variables are set, **When** a job runs, **Then** the cloned-repository workspace is mounted read-only.
 4. **Given** no container-security variables are set, **When** a job runs, **Then** privilege escalation is disabled (no-new-privileges is on), all Linux capabilities are dropped except the established minimal working set, and the container has no network access.
 5. **Given** no container-security variables are set, **When** the server starts, **Then** startup succeeds without error using the secure defaults.
@@ -95,7 +96,7 @@ A relying party or operator needs to confirm what security posture a given execu
 - **FR-005**: `CONTAINER_CAP_ADD` MUST default to the capability set that preserves today's working behavior — the seven capabilities currently granted by the executor: `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`, `KILL`. Operators MAY set any subset or superset within the allow-list (FR-015), and the granted set is always applied on top of dropping all capabilities. The system MUST distinguish unset from empty: when `CONTAINER_CAP_ADD` is unset the default seven-capability set is applied, whereas when it is set to an empty value no capabilities are added on top of `drop ALL`. This distinction MUST be testable and reflected in the surfaced effective value (FR-027).
 - **FR-006**: `NO_NEW_PRIVILEGES` MUST default to `true`, keeping the no-new-privileges protection on unless the operator explicitly opts out.
 - **FR-007**: `CONTAINER_READ_ONLY_ROOTFS` MUST default to `true`, mounting the container root filesystem read-only.
-- **FR-008**: `CONTAINER_TMPFS_SIZE` MUST default to a bounded size (`256m`) providing a writable in-memory scratch mount; an empty/unset value MUST mean no tmpfs is mounted.
+- **FR-008**: `CONTAINER_TMPFS_SIZE` MUST default to a bounded size (`256m`) providing a writable in-memory scratch mount at `/tmp`; an empty/unset value MUST mean no tmpfs is mounted.
 - **FR-009**: `WORKSPACE_MOUNT_MODE` MUST default to `ro` for the cloned-repository workspace mount and MUST accept `rw` as the only other valid value.
 - **FR-010**: `CONTAINER_NETWORK_MODE` MUST default to `none`, MUST accept `none`, `bridge`, and `host` as the only valid values, and MUST give the sandbox no outbound network access under the default.
 
@@ -118,7 +119,7 @@ A relying party or operator needs to confirm what security posture a given execu
 #### Flow-through to container creation
 
 - **FR-021**: The resolved effective value of every option MUST flow through to the execution-container creation path so that each running container reflects the configured user, capability set, no-new-privileges setting, root-filesystem read-only setting, tmpfs scratch mount, workspace mount mode, and network mode.
-- **FR-022**: When `CONTAINER_TMPFS_SIZE` is non-empty, the system MUST mount a writable in-memory scratch area of the configured size at the execution scratch path, **independent of `CONTAINER_READ_ONLY_ROOTFS`**, so jobs retain temporary space (including under a read-only root filesystem). When `CONTAINER_TMPFS_SIZE` is empty, no tmpfs is mounted. Because the mount is governed solely by `CONTAINER_TMPFS_SIZE`, the attested `container_tmpfs_size` (FR-027) is always the effective value.
+- **FR-022**: When `CONTAINER_TMPFS_SIZE` is non-empty, the system MUST mount a writable in-memory scratch area of the configured size at `/tmp` (the container's standard temporary directory), **independent of `CONTAINER_READ_ONLY_ROOTFS`**, so jobs retain temporary space (including under a read-only root filesystem). When `CONTAINER_TMPFS_SIZE` is empty, no tmpfs is mounted. Because the mount is governed solely by `CONTAINER_TMPFS_SIZE`, the attested `container_tmpfs_size` (FR-027) is always the effective value.
 - **FR-023**: The capability set actually applied to a container MUST be exactly the resolved `CONTAINER_CAP_ADD` set on top of dropping all capabilities — no broader.
 
 #### Documentation

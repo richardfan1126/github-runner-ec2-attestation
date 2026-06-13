@@ -28,7 +28,7 @@ Runnable scenarios that prove the feature works end to end. See [data-model.md](
 1. Load config with none of the eight variables set (only the existing required vars).
 2. Build a container create-spec via `ScriptExecutor`.
 3. **Expect** the `containers.create()` kwargs to show:
-   `user="65534:65534"`, `read_only=True`, `tmpfs` mounting `/tmp/execution` at `size=256m`,
+   `user="65534:65534"`, `read_only=True`, `tmpfs` mounting `/tmp` at `size=256m`,
    `volumes[...]["mode"]=="ro"`, `security_opt==["no-new-privileges"]`,
    `cap_drop==["ALL"]`, `cap_add==[CHOWN,DAC_OVERRIDE,FOWNER,SETUID,SETGID,NET_BIND_SERVICE,KILL]`,
    `network_mode=="none"`.
