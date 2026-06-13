@@ -148,7 +148,7 @@ class TestContainerCreationAndSecurity:
             assert call["nano_cpus"] == int(2.0 * 1e9)
 
     def test_container_root_user(self):
-        """Container runs as root user (Docker default) (Req 8.3)."""
+        """Container runs as the non-root default user 65534:65534 (FR-001)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_client = create_mock_docker_client()
             manager = ExecutionManager(output_retention_hours=1)
@@ -159,12 +159,12 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert "user" not in call, (
-                f"Container must run as root (no 'user' param), got user='{call.get('user')}'"
+            assert call.get("user") == "65534:65534", (
+                f"Container must run as non-root 65534:65534, got user='{call.get('user')}'"
             )
 
-    def test_container_internet_access_enabled(self):
-        """Container has internet access enabled (Req 8.4)."""
+    def test_container_network_isolated_by_default(self):
+        """Container is network-isolated by default (network_mode=none) (FR-008)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_client = create_mock_docker_client()
             manager = ExecutionManager(output_retention_hours=1)
@@ -175,12 +175,12 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert call.get("network_mode") != "none", (
-                "Container should not have network_mode='none'; internet access must be enabled"
+            assert call.get("network_mode") == "none", (
+                f"Container must be network-isolated by default, got '{call.get('network_mode')}'"
             )
 
-    def test_container_writable_root_fs(self):
-        """Container has writable root filesystem (Req 8.5)."""
+    def test_container_read_only_root_fs(self):
+        """Container has a read-only root filesystem with a /tmp tmpfs scratch (FR-005/FR-006)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             mock_client = create_mock_docker_client()
             manager = ExecutionManager(output_retention_hours=1)
@@ -191,11 +191,11 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert call.get("read_only") is not True, (
-                "Container root filesystem must be writable (read_only should not be True)"
+            assert call.get("read_only") is True, (
+                "Container root filesystem must be read-only by default"
             )
-            assert "tmpfs" not in call, (
-                "Container should not have tmpfs when root filesystem is writable"
+            assert call.get("tmpfs") == {"/tmp": "size=256m"}, (
+                f"Container must mount a /tmp tmpfs scratch, got {call.get('tmpfs')!r}"
             )
 
     def test_container_no_privilege_escalation(self):
@@ -224,17 +224,17 @@ class TestContainerCreationAndSecurity:
             assert wait_for_completion(manager, eid)
 
             call = mock_client.containers._creation_calls[0]
-            assert "user" not in call, (
-                f"Container must run as root (no 'user' param), got user='{call.get('user')}'"
+            assert call.get("user") == "65534:65534", (
+                f"Container must run as non-root 65534:65534, got user='{call.get('user')}'"
             )
-            assert call.get("network_mode") != "none", (
-                "Container should not have network_mode='none'; internet access must be enabled"
+            assert call.get("network_mode") == "none", (
+                f"Container must be network-isolated by default, got '{call.get('network_mode')}'"
             )
-            assert call.get("read_only") is not True, (
-                "Container root filesystem must be writable (read_only should not be True)"
+            assert call.get("read_only") is True, (
+                "Container root filesystem must be read-only by default"
             )
-            assert "tmpfs" not in call, (
-                "Container should not have tmpfs when root filesystem is writable"
+            assert call.get("tmpfs") == {"/tmp": "size=256m"}, (
+                f"Container must mount a /tmp tmpfs scratch, got {call.get('tmpfs')!r}"
             )
             assert "no-new-privileges" in call["security_opt"]
             assert call["mem_limit"] == "512m"

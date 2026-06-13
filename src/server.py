@@ -323,6 +323,13 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
         enable_gpu=config.enable_gpu,
         gpu_devices=config.gpu_devices,
         nvidia_driver_capabilities=config.nvidia_driver_capabilities,
+        user=config.container_user,
+        cap_add=config.container_cap_add,
+        no_new_privileges=config.no_new_privileges,
+        read_only_rootfs=config.container_read_only_rootfs,
+        tmpfs_size=config.container_tmpfs_size,
+        workspace_mount_mode=config.workspace_mount_mode,
+        network_mode=config.container_network_mode,
     )
     request_validator = RequestValidator(
         allowed_repositories=config.allowed_repositories,

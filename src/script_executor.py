@@ -1,10 +1,8 @@
 """Script execution for GitHub Actions Remote Executor using Docker SDK"""
 import contextvars
-import io
 import os
 import shutil
 import subprocess
-import tarfile
 import time
 import threading
 import logging
@@ -13,6 +11,7 @@ from typing import Optional
 import docker
 import docker.errors
 
+from src.config import CONTAINER_DEFAULT_CAP_ADD
 from src.execution_manager import ExecutionManager
 from src.output_collector import OutputCollector
 from src.models import ExecutionStatus
@@ -45,6 +44,13 @@ class ScriptExecutor:
         enable_gpu: bool = False,
         gpu_devices: str = "all",
         nvidia_driver_capabilities: str = "compute,utility",
+        user: str = "65534:65534",
+        cap_add: "list[str] | None" = None,
+        no_new_privileges: bool = True,
+        read_only_rootfs: bool = True,
+        tmpfs_size: str = "256m",
+        workspace_mount_mode: str = "ro",
+        network_mode: str = "none",
     ):
         """
         Initialize script executor with Docker SDK.
@@ -65,6 +71,14 @@ class ScriptExecutor:
             enable_gpu: Whether to enable GPU passthrough via NVIDIA Container Toolkit CDI mode
             gpu_devices: NVIDIA_VISIBLE_DEVICES value (e.g. "all", "0", "0,1")
             nvidia_driver_capabilities: NVIDIA_DRIVER_CAPABILITIES value (e.g. "compute,utility")
+            user: Container user as "uid:gid" (default unprivileged 65534:65534)
+            cap_add: Capabilities to add on top of cap_drop=ALL. None applies the default
+                7-cap working set; [] adds no capabilities.
+            no_new_privileges: Apply the no-new-privileges security option when True
+            read_only_rootfs: Mount the container root filesystem read-only when True
+            tmpfs_size: Size of the /tmp tmpfs scratch mount (e.g. "256m"); empty = no tmpfs
+            workspace_mount_mode: Bind mode for the /workspace volume ("ro" or "rw")
+            network_mode: Container network mode ("none", "bridge", or "host")
         """
         if docker_client is _UNSET:
             uid = os.getuid()
@@ -84,6 +98,14 @@ class ScriptExecutor:
         self._enable_gpu = enable_gpu
         self._gpu_devices = gpu_devices
         self._nvidia_driver_capabilities = nvidia_driver_capabilities
+        self._user = user
+        # Resolve cap_add: unset (None) -> default 7-cap set; [] -> no caps added.
+        self._cap_add = list(CONTAINER_DEFAULT_CAP_ADD) if cap_add is None else list(cap_add)
+        self._no_new_privileges = no_new_privileges
+        self._read_only_rootfs = read_only_rootfs
+        self._tmpfs_size = tmpfs_size
+        self._workspace_mount_mode = workspace_mount_mode
+        self._network_mode = network_mode
         self._immutable_image_ref = self._compute_immutable_image_ref(
             container_image, container_image_digest
         )
@@ -238,6 +260,15 @@ class ScriptExecutor:
             if self._enable_gpu:
                 create_kwargs["runtime"] = "nvidia"
 
+            # no-new-privileges: include the security option only when enabled.
+            if self._no_new_privileges:
+                create_kwargs["security_opt"] = ["no-new-privileges"]
+
+            # tmpfs scratch at the container's standard temp dir whenever a size is
+            # configured — independent of the read-only rootfs setting.
+            if self._tmpfs_size:
+                create_kwargs["tmpfs"] = {"/tmp": f"size={self._tmpfs_size}"}
+
             container = self._docker_client.containers.create(
                 image=self._immutable_image_ref,
                 name=container_name,
@@ -245,13 +276,15 @@ class ScriptExecutor:
                 mem_limit=self._memory_limit,
                 nano_cpus=nano_cpus,
                 pids_limit=self._container_pids_limit,
+                user=self._user,
                 volumes={
-                    host_repo_path: {"bind": "/workspace", "mode": "ro"},
+                    host_repo_path: {"bind": "/workspace", "mode": self._workspace_mount_mode},
                 },
                 working_dir="/workspace",
-                security_opt=["no-new-privileges"],
+                read_only=self._read_only_rootfs,
                 cap_drop=["ALL"],
-                cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"],
+                cap_add=self._cap_add,
+                network_mode=self._network_mode,
                 detach=True,
                 environment=container_env,
                 **create_kwargs,
@@ -381,37 +414,6 @@ class ScriptExecutor:
             logger.warning(
                 f"Error streaming {stream_name} for execution {execution_id}: {e}"
             )
-
-    def _copy_script_to_container(self, container, script_path: str) -> None:
-        """
-        Copy a script file into the container using Docker SDK put_archive.
-
-        Retries briefly to handle the race between container.start() returning
-        and the tmpfs mount at /tmp/execution actually being available.
-
-        Args:
-            container: Docker container object
-            script_path: Local path to the script file
-        """
-        tar_stream = io.BytesIO()
-        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-            tar.add(script_path, arcname="script.sh")
-        tar_stream.seek(0)
-
-        max_attempts = 5
-        for attempt in range(max_attempts):
-            try:
-                container.put_archive("/tmp/execution", tar_stream)
-                return
-            except (docker.errors.NotFound, docker.errors.APIError) as exc:
-                if attempt < max_attempts - 1:
-                    logger.debug(
-                        f"Container tmpfs not ready yet, retrying ({attempt + 1}/{max_attempts}): {exc}"
-                    )
-                    time.sleep(0.5 * (attempt + 1))
-                    tar_stream.seek(0)
-                else:
-                    raise
 
     def _capture_container_logs(self, execution_id: str, container) -> None:
         """
