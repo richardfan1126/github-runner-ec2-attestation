@@ -37,6 +37,21 @@ def parse_strict_bool(value: str, key_name: str) -> bool:
     )
 
 
+# Closed allow-list of Linux capabilities an operator may grant via CONTAINER_CAP_ADD.
+# This is the Docker default-bounding 14-cap set: case-sensitive, upper-case, no "CAP_" prefix.
+CONTAINER_CAP_ALLOWLIST = frozenset({
+    "CHOWN", "DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW",
+    "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE",
+    "SYS_CHROOT", "KILL", "AUDIT_WRITE",
+})
+
+# Default granted capability set when CONTAINER_CAP_ADD is unset (the existing 7-cap
+# working set). Applied on top of cap_drop=["ALL"]; order matches the prior hard-coded list.
+CONTAINER_DEFAULT_CAP_ADD = [
+    "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL",
+]
+
+
 @dataclass
 class ServerConfig:
     """Server configuration loaded from environment variables"""
@@ -108,6 +123,16 @@ class ServerConfig:
     enable_gpu: bool = False
     gpu_devices: str = "all"
     nvidia_driver_capabilities: str = "compute,utility"
+
+    # Container Security Configuration (all optional; defaults are the hardened choice)
+    container_user: str = "65534:65534"
+    container_allow_root: bool = False
+    container_cap_add: list[str] | None = None
+    no_new_privileges: bool = True
+    container_read_only_rootfs: bool = True
+    container_tmpfs_size: str = "256m"
+    workspace_mount_mode: str = "ro"
+    container_network_mode: str = "none"
 
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
@@ -253,7 +278,37 @@ class ServerConfig:
 
         # Parse optional NVIDIA_DRIVER_CAPABILITIES (default "compute,utility")
         nvidia_driver_capabilities = os.getenv("NVIDIA_DRIVER_CAPABILITIES", "compute,utility")
-        
+
+        # --- Container security configuration (eight optional vars, hardened defaults) ---
+        # Raw strings for CONTAINER_USER / WORKSPACE_MOUNT_MODE / CONTAINER_NETWORK_MODE
+        # are validated in validate(); the three booleans parse strictly here.
+        container_user = os.getenv("CONTAINER_USER", "65534:65534")
+
+        container_allow_root_raw = os.getenv("CONTAINER_ALLOW_ROOT", "false")
+        container_allow_root = parse_strict_bool(container_allow_root_raw, "CONTAINER_ALLOW_ROOT")
+
+        # CONTAINER_CAP_ADD: unset -> None (default 7-cap set applied later);
+        # empty string -> [] (no caps added on top of drop ALL); else comma-separated names.
+        container_cap_add_raw = os.getenv("CONTAINER_CAP_ADD")
+        container_cap_add = None
+        if container_cap_add_raw is not None:
+            container_cap_add = [c.strip() for c in container_cap_add_raw.split(",") if c.strip()]
+
+        no_new_privileges_raw = os.getenv("NO_NEW_PRIVILEGES", "true")
+        no_new_privileges = parse_strict_bool(no_new_privileges_raw, "NO_NEW_PRIVILEGES")
+
+        container_read_only_rootfs_raw = os.getenv("CONTAINER_READ_ONLY_ROOTFS", "true")
+        container_read_only_rootfs = parse_strict_bool(
+            container_read_only_rootfs_raw, "CONTAINER_READ_ONLY_ROOTFS"
+        )
+
+        # CONTAINER_TMPFS_SIZE: empty string preserved as "no tmpfs"; validated when non-empty.
+        container_tmpfs_size = os.getenv("CONTAINER_TMPFS_SIZE", "256m")
+
+        workspace_mount_mode = os.getenv("WORKSPACE_MOUNT_MODE", "ro")
+
+        container_network_mode = os.getenv("CONTAINER_NETWORK_MODE", "none")
+
         # Parse optional MAX_OUTPUT_SIZE_BYTES (default 10MB)
         max_output_size_bytes_raw = os.getenv("MAX_OUTPUT_SIZE_BYTES")
         max_output_size_bytes = 10_485_760  # 10MB default
@@ -311,6 +366,14 @@ class ServerConfig:
             enable_gpu=enable_gpu,
             gpu_devices=gpu_devices,
             nvidia_driver_capabilities=nvidia_driver_capabilities,
+            container_user=container_user,
+            container_allow_root=container_allow_root,
+            container_cap_add=container_cap_add,
+            no_new_privileges=no_new_privileges,
+            container_read_only_rootfs=container_read_only_rootfs,
+            container_tmpfs_size=container_tmpfs_size,
+            workspace_mount_mode=workspace_mount_mode,
+            container_network_mode=container_network_mode,
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,
