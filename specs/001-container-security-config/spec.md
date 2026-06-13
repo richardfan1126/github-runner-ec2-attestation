@@ -84,7 +84,7 @@ A relying party or operator needs to confirm what security posture a given execu
 - **FR-002**: Each option MUST default to the secure choice when unset, such that a deployment with none of these options set produces a hardened sandbox without operator action.
 - **FR-003**: `CONTAINER_USER` MUST default to a non-root user `65534:65534`; when unset, containers MUST NOT run as the image's default user.
 - **FR-004**: `CONTAINER_ALLOW_ROOT` MUST default to `false`.
-- **FR-005**: `CONTAINER_CAP_ADD` MUST default to the capability set that preserves today's working behavior; operators MAY set a narrower subset, and the granted set is always applied on top of dropping all capabilities.
+- **FR-005**: `CONTAINER_CAP_ADD` MUST default to the capability set that preserves today's working behavior — the seven capabilities currently granted by the executor: `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`, `KILL`. Operators MAY set any subset or superset within the allow-list (FR-015), and the granted set is always applied on top of dropping all capabilities. The system MUST distinguish unset from empty: when `CONTAINER_CAP_ADD` is unset the default seven-capability set is applied, whereas when it is set to an empty value no capabilities are added on top of `drop ALL`. This distinction MUST be testable and reflected in the surfaced effective value (FR-027).
 - **FR-006**: `NO_NEW_PRIVILEGES` MUST default to `true`, keeping the no-new-privileges protection on unless the operator explicitly opts out.
 - **FR-007**: `CONTAINER_READ_ONLY_ROOTFS` MUST default to `true`, mounting the container root filesystem read-only.
 - **FR-008**: `CONTAINER_TMPFS_SIZE` MUST default to a bounded size (`256m`) providing a writable in-memory scratch mount; an empty/unset value MUST mean no tmpfs is mounted.
@@ -93,12 +93,12 @@ A relying party or operator needs to confirm what security posture a given execu
 
 #### Validation at startup
 
-- **FR-011**: The system MUST validate all eight options at startup and MUST fail fast with a clear, specific error — consistent with existing configuration-validation behavior — when any value is invalid, before serving any request.
+- **FR-011**: The system MUST validate all eight options at startup and MUST fail fast when any value is invalid, before serving any request. "Fail fast" is observable as: the process exits with a non-zero status during configuration loading and never binds its listen port or accepts a connection, emitting a clear, specific error — consistent with existing configuration-validation behavior.
 - **FR-012**: Boolean options (`CONTAINER_ALLOW_ROOT`, `NO_NEW_PRIVILEGES`, `CONTAINER_READ_ONLY_ROOTFS`) MUST be parsed with the same strict boolean rules already used for existing boolean settings, rejecting unrecognized values.
 - **FR-013**: Enumerated options MUST reject any value outside their allowed set: `WORKSPACE_MOUNT_MODE` ∈ {`ro`, `rw`}; `CONTAINER_NETWORK_MODE` ∈ {`none`, `bridge`, `host`}.
-- **FR-014**: `CONTAINER_USER` MUST be validated against the `uid:gid` format, where both parts are non-negative integers; malformed values MUST be rejected at startup.
-- **FR-015**: `CONTAINER_CAP_ADD` MUST be validated against a defined allow-list of permitted capabilities; any requested capability outside the allow-list MUST be rejected at startup.
-- **FR-016**: `CONTAINER_TMPFS_SIZE`, when non-empty, MUST be validated against the accepted size format (a positive number with a recognized size unit); malformed values MUST be rejected at startup.
+- **FR-014**: `CONTAINER_USER` MUST be validated against the `uid:gid` format, where both parts are present and are non-negative integers; a bare uid with no gid (e.g. `1000`), a missing part, or non-integer/negative parts MUST be rejected at startup.
+- **FR-015**: `CONTAINER_CAP_ADD` MUST be validated against a defined allow-list of permitted capabilities; any requested capability outside the allow-list MUST be rejected at startup. The allow-list is the Docker default-bounding capability set (a superset of the FR-005 default working set): `CHOWN`, `DAC_OVERRIDE`, `FSETID`, `FOWNER`, `MKNOD`, `NET_RAW`, `SETGID`, `SETUID`, `SETFCAP`, `SETPCAP`, `NET_BIND_SERVICE`, `SYS_CHROOT`, `KILL`, `AUDIT_WRITE`. Capability names are matched case-sensitively in upper case without a `CAP_` prefix.
+- **FR-016**: `CONTAINER_TMPFS_SIZE`, when non-empty, MUST be validated against the accepted size format: a positive integer optionally followed by a single unit suffix `b`, `k`, `m`, or `g` (bytes/kibibytes/mebibytes/gibibytes, matching the size grammar the container runtime accepts for tmpfs). A value of `0`, a negative number, a missing/unknown unit, or surrounding whitespace MUST be rejected at startup.
 - **FR-017**: Each validation error message MUST name the offending variable and state the accepted values or format.
 
 #### Root-user gate interaction
@@ -117,17 +117,18 @@ A relying party or operator needs to confirm what security posture a given execu
 
 - **FR-024**: Each of the eight variables MUST be documented in the example environment configuration with its default value and a brief security rationale.
 - **FR-025**: The documentation MUST call out, as explicit trade-offs, (a) the backward-compatibility impact of the hardened defaults and (b) specifically that the default `none` network mode breaks jobs relying on outbound network until an operator opts in.
+- **FR-029**: Each breaking default MUST be paired with its named opt-out and the documentation MUST state, per breaking default, the symptom an affected job exhibits and the variable change that restores prior behavior: non-root user (`65534:65534`) → set `CONTAINER_USER` (with `CONTAINER_ALLOW_ROOT=true` if root is required); read-only root filesystem → set `CONTAINER_READ_ONLY_ROOTFS=false` (or size a tmpfs via `CONTAINER_TMPFS_SIZE`); `none` network → set `CONTAINER_NETWORK_MODE=bridge`; writable-workspace needs → set `WORKSPACE_MOUNT_MODE=rw`. (The cloned-repository workspace is already mounted `ro` today, so its default is not a behavior change.)
 
 #### Observability / attestation
 
 - **FR-026**: The effective value of every security-relevant setting MUST be observable, so that an operator who relaxes a default does so explicitly and visibly, never silently.
-- **FR-027**: The effective security-relevant values MUST be surfaced through the system's attestation/audit surface for an execution, consistent with how existing security-relevant settings are surfaced there.
+- **FR-027**: The effective security-relevant values MUST be surfaced through the system's attestation/audit surface for an execution — specifically, threaded into the attestation `user_data` via the attestation generator the same way the existing `gpu_enabled` setting is, so all eight effective values (`CONTAINER_USER`, `CONTAINER_ALLOW_ROOT`, the resolved `CONTAINER_CAP_ADD` set, `NO_NEW_PRIVILEGES`, `CONTAINER_READ_ONLY_ROOTFS`, `CONTAINER_TMPFS_SIZE`, `WORKSPACE_MOUNT_MODE`, `CONTAINER_NETWORK_MODE`) are bound to the attestation document for that execution.
 - **FR-028**: The effective values of all eight settings MUST be recorded in startup output so the running posture is inspectable independent of any individual execution.
 
 ### Key Entities *(include if feature involves data)*
 
 - **Container security configuration**: The set of eight operator-facing settings governing the execution-container sandbox (process user, root escape-hatch flag, added capability set, no-new-privileges flag, read-only-root-filesystem flag, scratch mount size, workspace mount mode, network mode). Each has a secure default, a defined accepted form, and an effective resolved value used for container creation and surfaced for attestation.
-- **Capability allow-list**: The closed set of Linux capabilities an operator is permitted to grant via `CONTAINER_CAP_ADD`; requests outside it are rejected.
+- **Capability allow-list**: The closed set of Linux capabilities an operator is permitted to grant via `CONTAINER_CAP_ADD` — the Docker default-bounding set (`CHOWN`, `DAC_OVERRIDE`, `FSETID`, `FOWNER`, `MKNOD`, `NET_RAW`, `SETGID`, `SETUID`, `SETFCAP`, `SETPCAP`, `NET_BIND_SERVICE`, `SYS_CHROOT`, `KILL`, `AUDIT_WRITE`); requests outside it are rejected. The default working set is the seven-capability subset listed in FR-005.
 - **Execution container**: The ephemeral sandbox in which a job runs; its effective security posture is determined by the resolved container security configuration.
 - **Attestation/audit surface**: The observable record tying an execution to the effective security-relevant values under which it ran.
 
@@ -145,7 +146,7 @@ A relying party or operator needs to confirm what security posture a given execu
 ## Assumptions
 
 - The hardened defaults are a deliberate breaking change relative to today's behavior; existing jobs that depend on root, a writable root filesystem, a writable workspace, or outbound network will require explicit opt-in after this change, and this is accepted.
-- The default capability set that "preserves today's working behavior" is the capability set currently granted by the executor; the allow-list for `CONTAINER_CAP_ADD` is at least that set and is the closed set of capabilities operators may request.
+- The default capability set that "preserves today's working behavior" is the seven capabilities currently granted by the executor (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`, `KILL`). The allow-list for `CONTAINER_CAP_ADD` is the broader Docker default-bounding set enumerated in FR-015 (a superset of the default), and is the closed set of capabilities operators may request — capabilities outside it (e.g. `SYS_ADMIN`, `SYS_PTRACE`) cannot be granted without a code change.
 - The non-root default user `65534:65534` (nobody/nogroup) is appropriate for the supported base images; images requiring a specific non-root uid:gid are configured explicitly via `CONTAINER_USER`.
 - The tmpfs scratch mount default size of `256m` and its mount location are reasonable defaults for typical jobs; operators needing more set `CONTAINER_TMPFS_SIZE` explicitly.
 - "Surfaced for attestation/audit" reuses the existing mechanism by which security-relevant settings are already included in the execution attestation surface, rather than introducing a separate channel.
