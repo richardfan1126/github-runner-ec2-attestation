@@ -48,6 +48,45 @@ class AttestationGenerator:
             self.tpm_attest_path, os.X_OK
         )
     
+    @staticmethod
+    def _build_security_user_data(
+        container_user: Optional[str],
+        container_allow_root: Optional[bool],
+        container_cap_add: Optional[list],
+        no_new_privileges: Optional[bool],
+        container_read_only_rootfs: Optional[bool],
+        container_tmpfs_size: Optional[str],
+        workspace_mount_mode: Optional[str],
+        container_network_mode: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Build the container-security subset of user_data from resolved config values.
+
+        Each field is included only when provided (not None), so callers that do not
+        supply security configuration (e.g. /attest) leave user_data unchanged. Empty
+        but meaningful values are preserved verbatim: an empty container_cap_add ([])
+        is distinct from the default set, and an empty container_tmpfs_size ("") means
+        no tmpfs — both are attested as-is so any relaxation stays visible (SC-004).
+        """
+        fields: Dict[str, Any] = {}
+        if container_user is not None:
+            fields["container_user"] = container_user
+        if container_allow_root is not None:
+            fields["container_allow_root"] = container_allow_root
+        if container_cap_add is not None:
+            fields["container_cap_add"] = list(container_cap_add)
+        if no_new_privileges is not None:
+            fields["no_new_privileges"] = no_new_privileges
+        if container_read_only_rootfs is not None:
+            fields["container_read_only_rootfs"] = container_read_only_rootfs
+        if container_tmpfs_size is not None:
+            fields["container_tmpfs_size"] = container_tmpfs_size
+        if workspace_mount_mode is not None:
+            fields["workspace_mount_mode"] = workspace_mount_mode
+        if container_network_mode is not None:
+            fields["container_network_mode"] = container_network_mode
+        return fields
+
     def _compute_script_env_hash(self, script_env: Optional[Dict[str, str]]) -> str:
         """
         Compute SHA-256 hex digest of canonicalized script_env.
@@ -78,6 +117,14 @@ class AttestationGenerator:
         script_env: Optional[Dict[str, str]] = None,
         execution_id: Optional[str] = None,
         gpu_enabled: Optional[bool] = None,
+        container_user: Optional[str] = None,
+        container_allow_root: Optional[bool] = None,
+        container_cap_add: Optional[list] = None,
+        no_new_privileges: Optional[bool] = None,
+        container_read_only_rootfs: Optional[bool] = None,
+        container_tmpfs_size: Optional[str] = None,
+        workspace_mount_mode: Optional[str] = None,
+        container_network_mode: Optional[str] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
         """
         Generate an attestation document using NitroTPM attestation.
@@ -145,8 +192,34 @@ class AttestationGenerator:
                     user_data["execution_id"] = execution_id
                 if gpu_enabled is not None:
                     user_data["gpu_enabled"] = gpu_enabled
+                user_data.update(self._build_security_user_data(
+                    container_user, container_allow_root, container_cap_add,
+                    no_new_privileges, container_read_only_rootfs, container_tmpfs_size,
+                    workspace_mount_mode, container_network_mode,
+                ))
                 user_data_json = json.dumps(user_data)
-                
+
+                # NitroTPM caps user_data at 1024 bytes; a long repository_url +
+                # script_path plus an operator-expanded CONTAINER_CAP_ADD can cross
+                # it. Reject up front with a clear, limit-naming error rather than
+                # letting nitro-tpm-attest fail with a generic non-zero exit.
+                user_data_size = len(user_data_json.encode("utf-8"))
+                if user_data_size > 1024:
+                    logger.error(
+                        f"Attestation user_data is {user_data_size} bytes, "
+                        f"exceeding the NitroTPM 1024-byte limit"
+                    )
+                    return None, AttestationError(
+                        command=" ".join(cmd),
+                        exit_code=-1,
+                        stdout="",
+                        stderr="",
+                        context=(
+                            f"Attestation user_data is {user_data_size} bytes, "
+                            f"exceeding the NitroTPM 1024-byte user_data limit"
+                        ),
+                    )
+
                 # Write user_data to temporary file
                 user_data_fd, user_data_path = tempfile.mkstemp(
                     prefix="attestation_user_data_", suffix=".json"
@@ -287,6 +360,14 @@ class AttestationGenerator:
         nonce: Optional[str] = None,
         execution_id: Optional[str] = None,
         gpu_enabled: Optional[bool] = None,
+        container_user: Optional[str] = None,
+        container_allow_root: Optional[bool] = None,
+        container_cap_add: Optional[list] = None,
+        no_new_privileges: Optional[bool] = None,
+        container_read_only_rootfs: Optional[bool] = None,
+        container_tmpfs_size: Optional[str] = None,
+        workspace_mount_mode: Optional[str] = None,
+        container_network_mode: Optional[str] = None,
     ) -> tuple[Optional[bytes], Optional[str]]:
         """
         Generate an output attestation document for a completed script execution.
@@ -321,7 +402,26 @@ class AttestationGenerator:
                 user_data["execution_id"] = execution_id
             if gpu_enabled is not None:
                 user_data["gpu_enabled"] = gpu_enabled
+            user_data.update(self._build_security_user_data(
+                container_user, container_allow_root, container_cap_add,
+                no_new_privileges, container_read_only_rootfs, container_tmpfs_size,
+                workspace_mount_mode, container_network_mode,
+            ))
             user_data_content = json.dumps(user_data)
+
+            # NitroTPM caps user_data at 1024 bytes; the added container-security
+            # keys can push an otherwise-small output user_data over the edge.
+            # Reject with a clear, limit-naming error rather than a generic failure.
+            user_data_size = len(user_data_content.encode("utf-8"))
+            if user_data_size > 1024:
+                logger.error(
+                    f"Output attestation user_data is {user_data_size} bytes, "
+                    f"exceeding the NitroTPM 1024-byte limit"
+                )
+                return None, (
+                    f"Output attestation user_data is {user_data_size} bytes, "
+                    f"exceeding the NitroTPM 1024-byte user_data limit"
+                )
 
             # Write user_data to temporary file
             user_data_fd, user_data_path = tempfile.mkstemp(

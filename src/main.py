@@ -60,7 +60,19 @@ def main() -> int:
         logger.info(f"Container image: {config.container_image}")
         logger.info(f"Container memory limit: {config.container_memory_limit}")
         logger.info(f"Container CPU limit: {config.container_cpu_limit}")
-        
+        # Effective container-security posture (relaxations are never silent — FR-028)
+        logger.info(f"Container user: {config.container_user}")
+        logger.info(f"Container allow root: {config.container_allow_root}")
+        logger.info(
+            "Container cap_add: "
+            f"{config.container_cap_add if config.container_cap_add is not None else 'default (7-cap set)'}"
+        )
+        logger.info(f"No new privileges: {config.no_new_privileges}")
+        logger.info(f"Container read-only rootfs: {config.container_read_only_rootfs}")
+        logger.info(f"Container tmpfs size: {config.container_tmpfs_size or '(no tmpfs)'}")
+        logger.info(f"Workspace mount mode: {config.workspace_mount_mode}")
+        logger.info(f"Container network mode: {config.container_network_mode}")
+
         # Verify NitroTPM device availability
         logger.info("Verifying NitroTPM device availability...")
         attestation_generator = AttestationGenerator(config.tpm_attest_path)

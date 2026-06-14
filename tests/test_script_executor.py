@@ -12,10 +12,53 @@ from threading import Thread
 import pytest
 
 from src.script_executor import ScriptExecutor
+from src.config import ServerConfig, CONTAINER_DEFAULT_CAP_ADD
 from src.execution_manager import ExecutionManager
 from src.output_collector import OutputCollector
 from src.models import ExecutionStatus
 from tests.mock_docker import create_mock_docker_client
+
+
+def _default_server_config(**overrides) -> ServerConfig:
+    """Build a ServerConfig with all required fields set, security fields at defaults."""
+    base = dict(
+        port=8080,
+        max_concurrent_executions=1,
+        execution_timeout_seconds=1800,
+        max_script_size_bytes=1024,
+        rate_limit_per_ip=10,
+        rate_limit_window_seconds=60,
+        temp_storage_path="/tmp",
+        output_retention_hours=1,
+        tpm_attest_path="/usr/bin/nitro-tpm-attest",
+        allowed_repositories=["owner/repo"],
+        expected_audience="aud",
+        container_image="image@sha256:" + "a" * 64,
+        container_memory_limit="512m",
+        container_cpu_limit=1.0,
+    )
+    base.update(overrides)
+    return ServerConfig(**base)
+
+
+def _executor_from_config(config: ServerConfig, docker_client, manager, collector, temp_dir):
+    """Wire a ScriptExecutor from config exactly as server.py does (US1 seven seams)."""
+    return ScriptExecutor(
+        docker_client=docker_client,
+        container_image=config.container_image,
+        memory_limit=config.container_memory_limit,
+        cpu_limit=config.container_cpu_limit,
+        execution_manager=manager,
+        output_collector=collector,
+        temp_storage_path=temp_dir,
+        user=config.container_user,
+        cap_add=config.container_cap_add,
+        no_new_privileges=config.no_new_privileges,
+        read_only_rootfs=config.container_read_only_rootfs,
+        tmpfs_size=config.container_tmpfs_size,
+        workspace_mount_mode=config.workspace_mount_mode,
+        network_mode=config.container_network_mode,
+    )
 
 
 def create_test_script(temp_dir: str, script_content: str, filename: str = "test_script.sh") -> str:
@@ -948,3 +991,175 @@ def test_container_no_additional_capabilities():
             f"cap_add should contain exactly {expected_cap_add}, got {actual_cap_add}"
         assert len(creation_calls[0].get("cap_add", [])) == 7, \
             f"cap_add should have exactly 7 capabilities, got {len(creation_calls[0].get('cap_add', []))}"
+
+
+# ===========================================================================
+# User Story 1: Hardened sandbox by default (T006)
+# ===========================================================================
+
+def test_default_config_produces_hardened_container_kwargs():
+    """A ScriptExecutor built from a default ServerConfig hardens every container."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        config = _default_server_config()
+        executor = _executor_from_config(config, docker_client, manager, collector, temp_dir)
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="a" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo 'test'\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        creation_calls = docker_client.containers._creation_calls
+        assert len(creation_calls) == 1
+        call = creation_calls[0]
+
+        # Non-root user
+        assert call.get("user") == "65534:65534"
+        # Read-only rootfs + bounded /tmp tmpfs scratch
+        assert call.get("read_only") is True
+        assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}
+        # Read-only workspace bind
+        repo_mount = next(iter(call.get("volumes", {}).values()))
+        assert repo_mount["bind"] == "/workspace"
+        assert repo_mount["mode"] == "ro"
+        # no-new-privileges on
+        assert call.get("security_opt") == ["no-new-privileges"]
+        # cap_drop ALL + default 7-cap set on top
+        assert call.get("cap_drop") == ["ALL"]
+        assert call.get("cap_add") == list(CONTAINER_DEFAULT_CAP_ADD)
+        # Network isolated
+        assert call.get("network_mode") == "none"
+
+
+def test_default_cap_add_applied_on_top_of_cap_drop_all():
+    """With cap_add unset (None), the default 7-cap working set is granted over drop-ALL."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        config = _default_server_config()
+        assert config.container_cap_add is None  # unset -> resolves to default set
+        executor = _executor_from_config(config, docker_client, manager, collector, temp_dir)
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="b" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo 'test'\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        call = docker_client.containers._creation_calls[0]
+        assert call.get("cap_drop") == ["ALL"]
+        assert call.get("cap_add") == [
+            "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL",
+        ]
+
+
+def test_empty_cap_add_adds_no_capabilities():
+    """An explicitly empty cap_add ([]) grants no capabilities over drop-ALL."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        config = _default_server_config(container_cap_add=[])
+        executor = _executor_from_config(config, docker_client, manager, collector, temp_dir)
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="c" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo 'test'\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        call = docker_client.containers._creation_calls[0]
+        assert call.get("cap_drop") == ["ALL"]
+        assert call.get("cap_add") == []
+
+
+def test_no_new_privileges_disabled_omits_security_opt():
+    """When no_new_privileges is False, the security_opt is omitted entirely."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        config = _default_server_config(no_new_privileges=False)
+        executor = _executor_from_config(config, docker_client, manager, collector, temp_dir)
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="d" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo 'test'\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        call = docker_client.containers._creation_calls[0]
+        assert "security_opt" not in call
+
+
+def test_empty_tmpfs_size_omits_tmpfs_mount():
+    """An empty CONTAINER_TMPFS_SIZE means no tmpfs mount is configured."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        config = _default_server_config(container_tmpfs_size="")
+        executor = _executor_from_config(config, docker_client, manager, collector, temp_dir)
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="e" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo 'test'\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        call = docker_client.containers._creation_calls[0]
+        assert "tmpfs" not in call
+
+
+def test_relaxed_values_flow_through_to_container():
+    """Valid non-default values (rw workspace, bridge network) reach containers.create()."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        config = _default_server_config(
+            workspace_mount_mode="rw",
+            container_network_mode="bridge",
+            container_user="0:0",
+        )
+        executor = _executor_from_config(config, docker_client, manager, collector, temp_dir)
+
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="f" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo 'test'\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        call = docker_client.containers._creation_calls[0]
+        assert call.get("user") == "0:0"
+        assert call.get("network_mode") == "bridge"
+        repo_mount = next(iter(call.get("volumes", {}).values()))
+        assert repo_mount["mode"] == "rw"

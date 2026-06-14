@@ -9,6 +9,7 @@ import time
 
 from hypothesis import given, strategies as st, settings
 from src.script_executor import ScriptExecutor, CONTAINER_NAME_PREFIX
+from src.config import CONTAINER_CAP_ALLOWLIST, CONTAINER_DEFAULT_CAP_ADD
 from src.execution_manager import ExecutionManager
 from src.output_collector import OutputCollector
 from src.models import ExecutionStatus
@@ -216,12 +217,13 @@ def test_property_110_container_unique_naming(params):
 @settings(max_examples=20, deadline=10000)
 def test_property_111_docker_container_security_constraints(params):
     """
-    Property 111: For any Execution_Container, verify it is configured with:
-    root user, writable root filesystem, privilege escalation disabled
-    (no-new-privileges), memory limits, CPU limits, internet access enabled
-    (no network_mode restriction), and cap_drop=ALL.
+    Property 111: For any Execution_Container created from the hardened defaults,
+    verify it is configured with: non-root user (65534:65534), read-only root
+    filesystem with a bounded /tmp tmpfs scratch, read-only workspace, privilege
+    escalation disabled (no-new-privileges), memory limits, CPU limits, network
+    isolation (network_mode=none), cap_drop=ALL, and the default 7-cap working set.
 
-    **Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.17, 8.18**
+    **Validates: FR-001–FR-010, FR-021–FR-023 (hardened-by-default posture)**
     """
     with tempfile.TemporaryDirectory() as temp_dir:
         mock_client = create_mock_docker_client()
@@ -246,47 +248,53 @@ def test_property_111_docker_container_security_constraints(params):
         assert len(creation_calls) == 1
         call = creation_calls[0]
 
-        # Req 8.3: root user execution (Docker default when no user is specified)
-        assert "user" not in call, (
-            f"Container must run as root user (no 'user' param), got user='{call.get('user')}'"
+        # FR-001: non-root user by default
+        assert call.get("user") == "65534:65534", (
+            f"Container must run as non-root 65534:65534, got user='{call.get('user')}'"
         )
 
-        # Req 8.5: writable root filesystem
-        assert call.get("read_only") is not True, (
-            "Container root filesystem must be writable (read_only should not be True)"
+        # FR-005/FR-006: read-only root filesystem with a bounded /tmp tmpfs scratch
+        assert call.get("read_only") is True, (
+            "Container root filesystem must be read-only by default"
         )
-        assert "tmpfs" not in call, (
-            "Container should not have tmpfs when root filesystem is writable"
+        assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}, (
+            f"Container must mount a /tmp tmpfs scratch, got {call.get('tmpfs')!r}"
         )
 
-        # Req 8.6: privilege escalation disabled (no-new-privileges)
+        # FR-007: read-only workspace bind by default
+        repo_mount = next(iter(call.get("volumes", {}).values()))
+        assert repo_mount["mode"] == "ro", (
+            f"Workspace must be mounted read-only by default, got mode='{repo_mount['mode']}'"
+        )
+
+        # FR-004: privilege escalation disabled (no-new-privileges)
         security_opt = call.get("security_opt", [])
         assert "no-new-privileges" in security_opt, (
             f"Container must disable privilege escalation, got security_opt={security_opt}"
         )
 
-        # Req 8.1: memory limits configured
+        # Memory limits configured
         assert call.get("mem_limit") == "512m", (
             f"Container must have memory limit '512m', got '{call.get('mem_limit')}'"
         )
 
-        # Req 8.2: CPU limits configured
+        # CPU limits configured
         expected_nano_cpus = int(1.0 * 1e9)
         assert call.get("nano_cpus") == expected_nano_cpus, (
             f"Container must have CPU limit {expected_nano_cpus} nano_cpus, got {call.get('nano_cpus')}"
         )
 
-        # Req 8.4: internet access enabled (no network_mode restriction)
-        assert call.get("network_mode") != "none", (
-            f"Container must have internet access enabled (network_mode should not be 'none'), got '{call.get('network_mode')}'"
+        # FR-008: network isolation by default
+        assert call.get("network_mode") == "none", (
+            f"Container must be network-isolated by default, got '{call.get('network_mode')}'"
         )
 
-        # Req 8.17: cap_drop=ALL (all Linux capabilities dropped)
+        # FR-023: cap_drop=ALL (all Linux capabilities dropped)
         assert call.get("cap_drop") == ["ALL"], (
             f"Container must have cap_drop=['ALL'], got {call.get('cap_drop')!r}"
         )
 
-        # Req 8.18: cap_add contains exactly the 7 build-script capabilities
+        # FR-003: cap_add contains exactly the default 7-cap working set
         expected_cap_add = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL"]
         assert call.get("cap_add") == expected_cap_add, (
             f"Container must have cap_add={expected_cap_add!r}, got cap_add={call.get('cap_add')!r}"
@@ -536,3 +544,100 @@ def test_property_152_capability_dropping(params):
         assert call.get("cap_add") == expected_cap_add, (
             f"Container must have cap_add={expected_cap_add!r}, got cap_add={call.get('cap_add')!r}"
         )
+
+
+# ===========================================================================
+# Property 153: Container security kwargs reflect the resolved config (US1)
+# ===========================================================================
+
+@st.composite
+def security_config(draw):
+    """Generate an arbitrary valid container-security configuration."""
+    # cap_add: None (default set) or any subset of the allow-list (possibly empty)
+    cap_choice = draw(st.one_of(
+        st.none(),
+        st.lists(st.sampled_from(sorted(CONTAINER_CAP_ALLOWLIST)), max_size=14, unique=True),
+    ))
+    # tmpfs_size: empty (no mount) or a valid size string
+    tmpfs_size = draw(st.one_of(
+        st.just(""),
+        st.builds(lambda n, u: f"{n}{u}",
+                  st.integers(min_value=1, max_value=4096),
+                  st.sampled_from(["", "b", "k", "m", "g"])),
+    ))
+    return {
+        "user": draw(st.sampled_from(["65534:65534", "0:0", "1000:1000"])),
+        "cap_add": cap_choice,
+        "no_new_privileges": draw(st.booleans()),
+        "read_only_rootfs": draw(st.booleans()),
+        "tmpfs_size": tmpfs_size,
+        "workspace_mount_mode": draw(st.sampled_from(["ro", "rw"])),
+        "network_mode": draw(st.sampled_from(["none", "bridge", "host"])),
+    }
+
+
+@given(params=execution_params(), sec=security_config())
+@settings(max_examples=30, deadline=10000)
+def test_property_153_security_kwargs_reflect_config(params, sec):
+    """
+    Property 153: For ANY container-security configuration, the resolved values
+    map onto containers.create() such that:
+      - cap_drop is always exactly ["ALL"]
+      - the applied cap_add is exactly the resolved set, never broader (FR-023)
+      - read_only and network_mode reflect the config
+      - tmpfs is mounted at /tmp iff tmpfs_size is non-empty, independent of
+        the read-only rootfs setting (FR-022)
+      - no-new-privileges security_opt is present iff enabled
+
+    **Validates: FR-021–FR-023**
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mock_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=mock_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir,
+            **sec,
+        )
+
+        record = manager.create_execution(**params)
+        script_path = create_test_script(temp_dir, "echo ok\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        _wait_for_terminal(manager, record.execution_id)
+
+        creation_calls = mock_client.containers._creation_calls
+        assert len(creation_calls) == 1
+        call = creation_calls[0]
+
+        # cap_drop is always exactly ["ALL"]
+        assert call.get("cap_drop") == ["ALL"]
+
+        # Applied cap_add is exactly the resolved set, never broader.
+        expected_cap_add = (
+            list(CONTAINER_DEFAULT_CAP_ADD) if sec["cap_add"] is None else list(sec["cap_add"])
+        )
+        assert call.get("cap_add") == expected_cap_add
+        assert set(call.get("cap_add")) <= CONTAINER_CAP_ALLOWLIST
+
+        # read_only and network_mode reflect the config
+        assert call.get("read_only") == sec["read_only_rootfs"]
+        assert call.get("network_mode") == sec["network_mode"]
+
+        # workspace bind mode reflects the config
+        repo_mount = next(iter(call.get("volumes", {}).values()))
+        assert repo_mount["mode"] == sec["workspace_mount_mode"]
+
+        # tmpfs mounted at /tmp iff tmpfs_size non-empty (independent of read_only)
+        if sec["tmpfs_size"]:
+            assert call.get("tmpfs") == {"/tmp": f"size={sec['tmpfs_size']},mode=1777"}
+        else:
+            assert "tmpfs" not in call
+
+        # no-new-privileges present iff enabled
+        if sec["no_new_privileges"]:
+            assert call.get("security_opt") == ["no-new-privileges"]
+        else:
+            assert "security_opt" not in call

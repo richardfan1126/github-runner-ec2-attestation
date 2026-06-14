@@ -1,5 +1,6 @@
 """Configuration management for GitHub Actions Remote Executor"""
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -35,6 +36,29 @@ def parse_strict_bool(value: str, key_name: str) -> bool:
         f"Invalid boolean value for {key_name}: '{value}'. "
         f"Accepted values: true, 1, yes, false, 0, no"
     )
+
+
+# Closed allow-list of Linux capabilities an operator may grant via CONTAINER_CAP_ADD.
+# This is the Docker default-bounding 14-cap set: case-sensitive, upper-case, no "CAP_" prefix.
+CONTAINER_CAP_ALLOWLIST = frozenset({
+    "CHOWN", "DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW",
+    "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE",
+    "SYS_CHROOT", "KILL", "AUDIT_WRITE",
+})
+
+# Default granted capability set when CONTAINER_CAP_ADD is unset (the existing 7-cap
+# working set). Applied on top of cap_drop=["ALL"]; order matches the prior hard-coded list.
+CONTAINER_DEFAULT_CAP_ADD = [
+    "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "KILL",
+]
+
+# Accepted enum values and grammars for the container-security settings.
+WORKSPACE_MOUNT_MODES = frozenset({"ro", "rw"})
+CONTAINER_NETWORK_MODES = frozenset({"none", "bridge", "host"})
+# uid:gid — exactly two non-negative integer parts, both present.
+_CONTAINER_USER_RE = re.compile(r"^\d+:\d+$")
+# Positive integer + required unit b/k/m/g (e.g. "256m"); zero is rejected below.
+_TMPFS_SIZE_RE = re.compile(r"^(\d+)([bkmg])$")
 
 
 @dataclass
@@ -108,6 +132,16 @@ class ServerConfig:
     enable_gpu: bool = False
     gpu_devices: str = "all"
     nvidia_driver_capabilities: str = "compute,utility"
+
+    # Container Security Configuration (all optional; defaults are the hardened choice)
+    container_user: str = "65534:65534"
+    container_allow_root: bool = False
+    container_cap_add: list[str] | None = None
+    no_new_privileges: bool = True
+    container_read_only_rootfs: bool = True
+    container_tmpfs_size: str = "256m"
+    workspace_mount_mode: str = "ro"
+    container_network_mode: str = "none"
 
     # Optional OIDC Branch/Ref Restrictions
     allowed_branches: Optional[list[str]] = None
@@ -253,7 +287,37 @@ class ServerConfig:
 
         # Parse optional NVIDIA_DRIVER_CAPABILITIES (default "compute,utility")
         nvidia_driver_capabilities = os.getenv("NVIDIA_DRIVER_CAPABILITIES", "compute,utility")
-        
+
+        # --- Container security configuration (eight optional vars, hardened defaults) ---
+        # Raw strings for CONTAINER_USER / WORKSPACE_MOUNT_MODE / CONTAINER_NETWORK_MODE
+        # are validated in validate(); the three booleans parse strictly here.
+        container_user = os.getenv("CONTAINER_USER", "65534:65534")
+
+        container_allow_root_raw = os.getenv("CONTAINER_ALLOW_ROOT", "false")
+        container_allow_root = parse_strict_bool(container_allow_root_raw, "CONTAINER_ALLOW_ROOT")
+
+        # CONTAINER_CAP_ADD: unset -> None (default 7-cap set applied later);
+        # empty string -> [] (no caps added on top of drop ALL); else comma-separated names.
+        container_cap_add_raw = os.getenv("CONTAINER_CAP_ADD")
+        container_cap_add = None
+        if container_cap_add_raw is not None:
+            container_cap_add = [c.strip() for c in container_cap_add_raw.split(",") if c.strip()]
+
+        no_new_privileges_raw = os.getenv("NO_NEW_PRIVILEGES", "true")
+        no_new_privileges = parse_strict_bool(no_new_privileges_raw, "NO_NEW_PRIVILEGES")
+
+        container_read_only_rootfs_raw = os.getenv("CONTAINER_READ_ONLY_ROOTFS", "true")
+        container_read_only_rootfs = parse_strict_bool(
+            container_read_only_rootfs_raw, "CONTAINER_READ_ONLY_ROOTFS"
+        )
+
+        # CONTAINER_TMPFS_SIZE: empty string preserved as "no tmpfs"; validated when non-empty.
+        container_tmpfs_size = os.getenv("CONTAINER_TMPFS_SIZE", "256m")
+
+        workspace_mount_mode = os.getenv("WORKSPACE_MOUNT_MODE", "ro")
+
+        container_network_mode = os.getenv("CONTAINER_NETWORK_MODE", "none")
+
         # Parse optional MAX_OUTPUT_SIZE_BYTES (default 10MB)
         max_output_size_bytes_raw = os.getenv("MAX_OUTPUT_SIZE_BYTES")
         max_output_size_bytes = 10_485_760  # 10MB default
@@ -311,6 +375,14 @@ class ServerConfig:
             enable_gpu=enable_gpu,
             gpu_devices=gpu_devices,
             nvidia_driver_capabilities=nvidia_driver_capabilities,
+            container_user=container_user,
+            container_allow_root=container_allow_root,
+            container_cap_add=container_cap_add,
+            no_new_privileges=no_new_privileges,
+            container_read_only_rootfs=container_read_only_rootfs,
+            container_tmpfs_size=container_tmpfs_size,
+            workspace_mount_mode=workspace_mount_mode,
+            container_network_mode=container_network_mode,
             allowed_branches=allowed_branches,
             require_protected_ref=require_protected_ref,
             max_output_size_bytes=max_output_size_bytes,
@@ -415,7 +487,61 @@ class ServerConfig:
             errors.append(
                 "gpu_devices cannot be empty when enable_gpu is true"
             )
-        
+
+        # --- Container security configuration validation (FR-013 – FR-020) ---
+        # Enum: workspace mount mode
+        if self.workspace_mount_mode not in WORKSPACE_MOUNT_MODES:
+            errors.append(
+                f"Invalid WORKSPACE_MOUNT_MODE value: '{self.workspace_mount_mode}'. "
+                f"Accepted values: ro, rw"
+            )
+
+        # Enum: container network mode
+        if self.container_network_mode not in CONTAINER_NETWORK_MODES:
+            errors.append(
+                f"Invalid CONTAINER_NETWORK_MODE value: '{self.container_network_mode}'. "
+                f"Accepted values: none, bridge, host"
+            )
+
+        # Format: container_user must be 'uid:gid', both non-negative integers, both present.
+        resolved_uid = None
+        if _CONTAINER_USER_RE.match(self.container_user):
+            resolved_uid = int(self.container_user.split(":", 1)[0])
+        else:
+            errors.append(
+                f"Invalid CONTAINER_USER value: '{self.container_user}'. "
+                f"Expected format 'uid:gid' with both non-negative integers (e.g. '65534:65534')"
+            )
+
+        # Capability allow-list: every requested cap must be in the 14-cap set (case-sensitive).
+        # None means "use the default set" and is not validated here.
+        if self.container_cap_add is not None:
+            invalid_caps = [c for c in self.container_cap_add if c not in CONTAINER_CAP_ALLOWLIST]
+            if invalid_caps:
+                allowed = ", ".join(sorted(CONTAINER_CAP_ALLOWLIST))
+                offenders = ", ".join(repr(c) for c in invalid_caps)
+                errors.append(
+                    f"Invalid CONTAINER_CAP_ADD value(s): {offenders}. "
+                    f"Allowed capabilities (case-sensitive, no CAP_ prefix): {allowed}"
+                )
+
+        # Size grammar: tmpfs size when non-empty (empty = no tmpfs, which is valid).
+        if self.container_tmpfs_size:
+            m = _TMPFS_SIZE_RE.match(self.container_tmpfs_size)
+            if not m or int(m.group(1)) < 1:
+                errors.append(
+                    f"Invalid CONTAINER_TMPFS_SIZE value: '{self.container_tmpfs_size}'. "
+                    f"Expected a positive integer with a unit b/k/m/g (e.g. '256m'), "
+                    f"or empty for no tmpfs"
+                )
+
+        # Cross-field root-user gate: running as root requires an explicit opt-in.
+        if resolved_uid == 0 and not self.container_allow_root:
+            errors.append(
+                "CONTAINER_USER resolves to root (uid 0) but CONTAINER_ALLOW_ROOT is false. "
+                "Set CONTAINER_ALLOW_ROOT=true to permit running as root."
+            )
+
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")
 

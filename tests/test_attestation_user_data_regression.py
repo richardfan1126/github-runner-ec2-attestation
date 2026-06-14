@@ -319,6 +319,243 @@ class TestBothFieldsPresent:
         )
 
 
+# The eight container-security values bound into user_data (hardened defaults).
+# See specs/001-container-security-config/contracts/attestation-user-data-contract.md
+SECURITY_KWARGS = dict(
+    container_user="65534:65534",
+    container_allow_root=False,
+    container_cap_add=[
+        "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID",
+        "NET_BIND_SERVICE", "KILL",
+    ],
+    no_new_privileges=True,
+    container_read_only_rootfs=True,
+    container_tmpfs_size="256m",
+    workspace_mount_mode="ro",
+    container_network_mode="none",
+)
+
+SECURITY_KEYS = set(SECURITY_KWARGS.keys())
+
+
+class TestSecurityFieldsPresentInExecuteAttestation:
+    """Pin the eight container-security keys in generate_attestation user_data (SC-004)."""
+
+    def test_all_eight_security_fields_present(self, generator, mock_successful_attestation):
+        """All eight container-security keys must be present with their effective values."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="build.sh",
+                **SECURITY_KWARGS,
+            )
+
+        assert error is None
+        user_data = captured["user_data"]
+        for key, value in SECURITY_KWARGS.items():
+            assert key in user_data, f"{key} must be present in attestation user_data"
+            assert user_data[key] == value, f"{key} must carry its effective value"
+
+    def test_container_cap_add_is_array(self, generator, mock_successful_attestation):
+        """container_cap_add must serialize as a JSON array, not a string."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="b" * 40,
+                script_path="build.sh",
+                **SECURITY_KWARGS,
+            )
+
+        cap_add = captured["user_data"]["container_cap_add"]
+        assert isinstance(cap_add, list)
+        assert cap_add == SECURITY_KWARGS["container_cap_add"]
+
+    def test_empty_cap_add_distinct_from_default(self, generator, mock_successful_attestation):
+        """An explicitly empty cap_add ([]) must be distinguishable from the default set."""
+        captured, side_effect = mock_successful_attestation
+
+        kwargs = {**SECURITY_KWARGS, "container_cap_add": []}
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="c" * 40,
+                script_path="build.sh",
+                **kwargs,
+            )
+
+        assert captured["user_data"]["container_cap_add"] == []
+
+    def test_relaxed_value_distinguishable_from_default(
+        self, generator, mock_successful_attestation
+    ):
+        """A relaxed setting (network=bridge) is distinguishable from the hardened default."""
+        captured, side_effect = mock_successful_attestation
+
+        kwargs = {**SECURITY_KWARGS, "container_network_mode": "bridge"}
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="d" * 40,
+                script_path="build.sh",
+                **kwargs,
+            )
+
+        assert captured["user_data"]["container_network_mode"] == "bridge"
+        assert captured["user_data"]["container_network_mode"] != "none"
+
+
+class TestSecurityFieldsPresentInOutputAttestation:
+    """Pin the eight container-security keys in generate_output_attestation user_data."""
+
+    def test_all_eight_security_fields_present(self, generator, mock_successful_attestation):
+        """All eight keys must be present in the output attestation user_data."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-123",
+                **SECURITY_KWARGS,
+            )
+
+        assert error_msg is None
+        user_data = captured["user_data"]
+        for key, value in SECURITY_KWARGS.items():
+            assert key in user_data, f"{key} must be present in output attestation user_data"
+            assert user_data[key] == value
+
+    def test_relaxed_value_distinguishable_from_default(
+        self, generator, mock_successful_attestation
+    ):
+        """A relaxed setting flows into the output attestation too."""
+        captured, side_effect = mock_successful_attestation
+
+        kwargs = {**SECURITY_KWARGS, "workspace_mount_mode": "rw"}
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-456",
+                **kwargs,
+            )
+
+        assert captured["user_data"]["workspace_mount_mode"] == "rw"
+
+
+class TestSecurityFieldsAbsentWhenNotProvided:
+    """Backward compatibility: the eight keys are omitted when no security config is passed."""
+
+    def test_execute_user_data_unchanged_without_security_kwargs(
+        self, generator, mock_successful_attestation
+    ):
+        """Without security kwargs, user_data keeps exactly its original field set."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="build.sh",
+                script_env={"X": "1"},
+            )
+
+        assert SECURITY_KEYS.isdisjoint(captured["user_data"].keys())
+
+
+class TestUserDataWithinNitroTpmLimit:
+    """NitroTPM caps user_data at 1024 bytes; guard both surfaces (T025)."""
+
+    @pytest.fixture
+    def capture_raw_user_data(self):
+        """Mock subprocess.run capturing the raw user_data bytes written to disk."""
+        captured = {}
+
+        def capture_and_run(cmd, **kwargs):
+            if "--user-data" in cmd:
+                user_data_idx = cmd.index("--user-data")
+                with open(cmd[user_data_idx + 1], "rb") as f:
+                    captured["raw"] = f.read()
+            mock_result = Mock()
+            mock_result.returncode = 0
+            mock_result.stdout = b"mock_cbor_attestation"
+            mock_result.stderr = b""
+            return mock_result
+
+        return captured, capture_and_run
+
+    def test_execute_user_data_within_limit(self, generator, capture_raw_user_data):
+        """A hardened-default execute attestation stays within the 1024-byte cap."""
+        captured, side_effect = capture_raw_user_data
+
+        with patch("subprocess.run", side_effect=side_effect):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                execution_id="exec-123",
+                **SECURITY_KWARGS,
+            )
+
+        assert error is None
+        assert len(captured["raw"]) <= 1024, (
+            f"user_data must stay within the NitroTPM 1024-byte limit, "
+            f"got {len(captured['raw'])} bytes"
+        )
+
+    def test_output_user_data_within_limit(self, generator, capture_raw_user_data):
+        """A hardened-default output attestation stays within the 1024-byte cap."""
+        captured, side_effect = capture_raw_user_data
+
+        with patch("subprocess.run", side_effect=side_effect):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-123",
+                **SECURITY_KWARGS,
+            )
+
+        assert error_msg is None
+        assert len(captured["raw"]) <= 1024, (
+            f"output user_data must stay within the NitroTPM 1024-byte limit, "
+            f"got {len(captured['raw'])} bytes"
+        )
+
+    def test_oversize_execute_user_data_rejected(self, generator):
+        """An oversize execute user_data is rejected with a limit-naming error, no subprocess."""
+        run = Mock()
+        with patch("subprocess.run", run):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/" + "r" * 1100,
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                **SECURITY_KWARGS,
+            )
+
+        assert doc is None
+        assert error is not None
+        assert "1024" in error.context
+        run.assert_not_called()
+
+    def test_oversize_output_user_data_rejected(self, generator):
+        """An oversize output user_data is rejected with a limit-naming error, no subprocess."""
+        run = Mock()
+        oversize_cap_add = [f"CAP_{i:04d}" for i in range(120)]
+        with patch("subprocess.run", run):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-123",
+                **{**SECURITY_KWARGS, "container_cap_add": oversize_cap_add},
+            )
+
+        assert attestation_bytes is None
+        assert error_msg is not None
+        assert "1024" in error_msg
+        run.assert_not_called()
+
+
 class TestFieldRemovalCausesFailure:
     """Tests that verify removing script_path or script_env_hash would cause failure.
 
