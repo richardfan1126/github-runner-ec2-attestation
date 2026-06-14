@@ -65,3 +65,7 @@ workspace_mount_mode, container_network_mode
 The resolved `container_cap_add` list (not the raw env string) is surfaced so unset (default 7) vs empty ([]) is unambiguous to a relying party.
 
 `container_allow_root` is sourced **directly from `ServerConfig`** at the attestation call sites — it is a startup root-gate, not a container-creation kwarg (note its absence from the "Resolved → container creation kwargs" table above), so it is not threaded through `ScriptExecutor`. The other seven values, which do shape `containers.create()`, flow through the executor.
+
+## Build-time configuration snapshot (FR-030)
+
+FR-030 introduces **no new entity**. The build-workflow summary serializes the existing `ServerConfig` entity in full: `.github/scripts/print_config.py` (build tooling, outside `src/`) resolves the AMI's baked-in env file through `load_config()` and renders **every** `dataclasses.fields(ServerConfig)` field (a superset of the `.env.example` keys, including the eight security settings above) as a Markdown table. Fields absent from the env file resolve to their dataclass defaults; values are printed verbatim. Because the row set is read from the dataclass, the snapshot cannot drift from the schema (SC-007).

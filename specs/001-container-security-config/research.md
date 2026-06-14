@@ -62,3 +62,29 @@ All NEEDS CLARIFICATION items from the spec were resolved during `/speckit-clari
 **Decision**: Add `logger.info` lines in `main.py` after `load_config()` for all eight effective values, alongside the existing config log block (`main.py:52-62`).
 
 **Rationale**: Posture is inspectable independent of any execution; consistent with how every other config value is logged at startup.
+
+## Decision 8 — Build-time configuration dump mechanism (FR-030)
+
+**Decision**: Add a small read-only helper `.github/scripts/print_config.py` (run as `uv run python .github/scripts/print_config.py --env-file <path>` from the repo root) that loads the baked-in env file through the application's own `load_config()` and renders every `dataclasses.fields(ServerConfig)` entry as a Markdown table (`| Setting | Value |`). It imports only from `src.config`.
+
+**Location (Clarifications 2026-06-14)**: the helper lives in `.github/scripts/` (build-workflow tooling, alongside `build-kiwi-image.sh`), **not** under `src/`, which is reserved for the executor runtime. It still imports the executor's `load_config` so the executor stays the single source of truth; the repo root is the executor's uv project (`packages = ["src"]`), so `uv run` makes `src` importable regardless of the script's location. `scripts/` (repo root) was rejected — it is a separate self-contained uv project (boto3/terraform) that does not import `src`.
+
+**Rationale**: Resolving through `load_config()` makes the printed values the *exact* values the server would resolve — the single source of truth FR-030 requires. Generating the row set from `dataclasses.fields()` (rather than a hand-maintained list or echoing the env file) means the table cannot drift from the code and automatically covers every `.env.example` key plus any field not in the env file (e.g. the eight security settings, which fall back to their hardened defaults) — satisfying SC-007. Importing only `src.config` keeps it from binding a port, touching the TPM, or pulling in FastAPI/Docker.
+
+**Naming note (accepted tradeoff)**: the table labels are the `ServerConfig` attribute names (e.g. `port`, `container_user`), not the env-var spellings (`SERVER_PORT`). Favoring the dataclass field list keeps the output drift-proof; the small label/env-name divergence for a few keys is an accepted cosmetic cost.
+
+**Alternatives considered**: (a) Echo/parse the env file directly in YAML — rejected: would miss settings absent from the file (the eight defaults) and drift from real parsing. (b) Hand-maintained value list in the workflow — rejected by clarification (drift). (c) Boot the full server with a `--print-config` flag — rejected: needs TPM/port and heavyweight imports. (d) Place the helper under `src/` — rejected by clarification (2026-06-14): `src/` is the executor runtime; the helper is build tooling.
+
+## Decision 9 — Workflow placement & fail-fast (FR-030)
+
+**Decision**: Add a step *"Print effective configuration to summary"* to the **`build-and-publish`** job, immediately after *Build KIWI image* and before *Push artifact to GHCR*. It appends a heading and the `print_config.py` table to `$GITHUB_STEP_SUMMARY` via `uv run python .github/scripts/print_config.py`; if it exits non-zero the step emits `::error::` and `exit 1`, failing the run before any artifact is published.
+
+**Rationale**: `build-and-publish` already checks out the repo and installs `uv`, runs on every push (including `develop`), and reads the same env file baked into the image — so the summary reflects what ships with no extra setup. Placing the step before the GHCR push enforces FR-030's "fail before publishing": a loader rejection at build time is exactly the failure the server would hit at startup (FR-011), so catching it early is consistent with the system's fail-fast posture. GitHub's default `bash -eo pipefail` plus an explicit `if ! …; then exit 1` makes the failure deterministic.
+
+**Alternatives considered**: Placing it in `build-ami` — rejected: that job only runs on `main`/dispatch and would not surface the posture on `develop` pushes; the config baked in is identical either way.
+
+## Decision 10 — Baked env-file parsing
+
+**Decision**: Parse the env file with systemd-`EnvironmentFile`-compatible rules: ignore blank lines and lines beginning with `#`, split each remaining line on the first `=`, and set `os.environ[key]=value`. The committed file uses simple unquoted values, so no shell expansion or quote-stripping is required.
+
+**Rationale**: This matches how systemd actually loads the file at runtime (`EnvironmentFile=` in the unit), so the build-time resolution mirrors production. Keeping the parser minimal avoids reintroducing shell-quoting edge cases.

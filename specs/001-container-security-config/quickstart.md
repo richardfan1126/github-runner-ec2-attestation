@@ -59,6 +59,29 @@ CONTAINER_NETWORK_MODE=nat .venv/bin/python -c "from src.config import load_conf
 2. Inspect the `user_data` passed to `nitro-tpm-attest` (the regression test captures it).
 3. **Expect** all eight keys present with effective values; `container_network_mode=="bridge"` (relaxed), others at defaults; `container_cap_add` is the resolved list.
 
+## Scenario D — Build-workflow configuration summary (FR-030 / SC-007)
+
+Prove the effective configuration baked into the AMI is printed on the build summary
+and that an unresolvable configuration fails the build.
+
+```bash
+# 1. Resolve the actual baked-in env file (what ships in the image) → Markdown table.
+#    The helper is build tooling under .github/scripts/, run via uv from the repo root.
+uv run python .github/scripts/print_config.py \
+  --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env
+# Expect: exit 0; a "| Setting | Value |" table covering every ServerConfig field,
+#   including the eight security defaults (container_user=65534:65534, ... network_mode=none).
+
+# 2. Fail-fast: an invalid baked config aborts before publish.
+printf 'SERVER_PORT=8080\nCONTAINER_NETWORK_MODE=nat\n' > /tmp/bad.env
+uv run python .github/scripts/print_config.py --env-file /tmp/bad.env
+# Expect: non-zero exit; stderr names the offending variable (CONTAINER_NETWORK_MODE).
+```
+
+In CI: the `build-and-publish` job's *Print effective configuration to summary* step
+appends the table to `$GITHUB_STEP_SUMMARY`; a non-zero exit emits `::error::` and
+fails the run **before** *Push artifact to GHCR* (FR-030).
+
 ## Manual smoke (optional, requires real rootless Docker + NitroTPM)
 
 ```bash
@@ -74,4 +97,5 @@ CONTAINER_NETWORK_MODE=bridge .venv/bin/python -m src.main
 
 - All listed test files pass, including the new `test_security_config_integration.py`.
 - `test_attestation_user_data_regression.py` asserts the eight new keys.
+- `test_print_config.py` passes: the table covers all `ServerConfig` fields incl. the eight security defaults, a missing/invalid config exits non-zero, and the real baked env file resolves cleanly (FR-030 / SC-007).
 - `.env.example` documents all eight variables with defaults, rationale, and the backward-compat + network-default trade-off callouts.

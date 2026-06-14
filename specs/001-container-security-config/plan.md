@@ -1,6 +1,6 @@
 # Implementation Plan: Container Security Configuration via Environment Variables
 
-**Branch**: `001-container-security-config` | **Date**: 2026-06-13 | **Spec**: [spec.md](./spec.md)
+**Branch**: `001-container-security-config` | **Date**: 2026-06-13 (addendum 2026-06-14) | **Spec**: [spec.md](./spec.md)
 
 **Input**: Feature specification from `/specs/001-container-security-config/spec.md`
 
@@ -9,6 +9,8 @@
 Add eight operator-facing environment variables (`CONTAINER_USER`, `CONTAINER_ALLOW_ROOT`, `CONTAINER_CAP_ADD`, `NO_NEW_PRIVILEGES`, `CONTAINER_READ_ONLY_ROOTFS`, `CONTAINER_TMPFS_SIZE`, `WORKSPACE_MOUNT_MODE`, `CONTAINER_NETWORK_MODE`) that govern the execution-container security posture, each defaulting to the secure choice so a no-config deployment is hardened by default. Values are parsed and validated at startup following the existing `ServerConfig.from_env()` / `validate()` patterns (fail fast with a specific error before the server binds its port), flow through `ScriptExecutor` into the `docker.containers.create()` call, and the effective values are surfaced in startup logs and threaded into attestation `user_data` exactly as the existing `gpu_enabled` field is.
 
 Technical approach: extend the four existing seams — `config.py` (parse/validate), `script_executor.py` (constructor + container kwargs), `server.py` (wire config → executor and config → attestation call sites), `attestation.py` (add `user_data` fields) — plus `main.py` startup logging and `.env.example` docs. No new modules, no new dependencies.
+
+**Addendum (2026-06-14, FR-030):** Surface the full effective server configuration that the build bakes into the AMI on the `Build Attestable Image` workflow run summary. A small read-only helper (`.github/scripts/print_config.py` — build tooling, **not** under `src/`) loads the image's baked-in env file through the application's own `load_config()` (single source of truth) and renders every `ServerConfig` field as a Markdown table; a new workflow step runs it against `kiwi-descriptions/root/etc/github-actions-remote-executor/env`, appends the table to `$GITHUB_STEP_SUMMARY`, and fails the build before publishing if the configuration cannot be resolved. See the [FR-030 addendum](#addendum-fr-030--configuration-summary-on-the-build-workflow-2026-06-14) below.
 
 ## Technical Context
 
@@ -91,3 +93,43 @@ tests/
 ## Complexity Tracking
 
 > No Constitution Check violations. Section intentionally empty.
+
+## Addendum: FR-030 — Configuration summary on the build workflow (2026-06-14)
+
+The feature was reopened to add **FR-030 / SC-007**: the `Build Attestable Image` workflow must print, on its run summary, the full effective server configuration built into the AMI — every effective `ServerConfig` setting (a superset of the `.env.example` keys, including the eight container-security settings) — derived from the application's own config loader so it cannot drift, printed verbatim (no redaction), and the build must fail before publishing if the configuration cannot be resolved.
+
+### Approach
+
+1. **`.github/scripts/print_config.py` (new, read-only helper — build tooling, not `src/`)** — runnable as `uv run python .github/scripts/print_config.py --env-file <path>` from the repo root. It:
+   - Parses the baked-in env file with systemd-`EnvironmentFile`-compatible rules (skip blank/`#` lines; split on first `=`; the file uses unquoted simple values), populating `os.environ`.
+   - Calls the application's own `load_config()` (`from_env()` + `validate()`) — the **single source of truth**, so the printed values are exactly what the server would resolve (FR-030). It imports `from src.config import load_config, ServerConfig`; because the repo root is the executor's uv project (`packages = ["src"]`), `uv run` makes `src` importable from any location, so the helper lives outside `src/` while keeping the executor as the single source of truth (Clarifications 2026-06-14).
+   - On success, enumerates `dataclasses.fields(ServerConfig)` and emits a Markdown table (`| Setting | Value |`) covering **every** field — a superset of the `.env.example` keys, drift-proof because the field list is read from the dataclass, not hand-maintained. Values are printed verbatim.
+   - On any `ConfigurationError`/`ValueError`, writes the error to stderr and exits non-zero (FR-030 fail-fast). Imports only from `src.config`, so it pulls in no FastAPI/Docker/TPM machinery and does not bind a port or touch the TPM.
+
+2. **Workflow step (new, in the `build-and-publish` job)** — added immediately after *Build KIWI image* and **before** *Push artifact to GHCR*, so a resolution failure aborts the run before anything is published. It appends a heading + the `print_config.py` table to `$GITHUB_STEP_SUMMARY`; if the command exits non-zero it emits `::error::` and `exit 1`. Placed in `build-and-publish` (not `build-ami`) because that job already has the repo + `uv` set up, runs on every push, and reads the same env file that is baked into the image.
+
+### Source Code touched (addendum)
+
+```text
+.github/scripts/
+└── print_config.py          # NEW (build tooling, NOT src/): load baked env file via src.config.load_config();
+                             #   render all ServerConfig fields as Markdown; non-zero exit on failure
+
+.github/workflows/build-attestable-image.yml
+                             # ADD step "Print effective configuration to summary" in build-and-publish,
+                             #   after "Build KIWI image", before "Push artifact to GHCR"
+
+tests/
+└── test_print_config.py     # NEW: table covers all ServerConfig fields incl. 8 security defaults; non-zero exit on
+                             #      missing/invalid config; the real baked env file resolves cleanly (exit 0)
+```
+
+### Decisions (see research.md Decisions 8–10)
+
+- **Single source of truth via `load_config()`** — never re-list values in YAML; the table is generated from `dataclasses.fields()` so it cannot drift (SC-007).
+- **Verbatim, no redaction** — the baked env file is committed in the repo, so the summary discloses nothing new (spec Clarifications 2026-06-14).
+- **Fail before publish** — a loader rejection at build time is the same failure the server would hit at startup (FR-011); catching it early is consistent with the system's fail-fast posture.
+
+### Constitution / gate re-check (post-design)
+
+Still **PASS** — the constitution remains an unpopulated template. No new dependencies; the new module is read-only and import-light. Repository conventions upheld: single source of truth for config, fail-fast on invalid config, observability of effective posture.

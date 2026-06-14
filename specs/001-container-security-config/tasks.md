@@ -6,7 +6,7 @@ description: "Task list for Container Security Configuration via Environment Var
 
 **Input**: Design documents from `/specs/001-container-security-config/`
 
-**Prerequisites**: plan.md ✓, spec.md ✓, research.md ✓, data-model.md ✓, contracts/ ✓ (config-env-contract.md, attestation-user-data-contract.md), quickstart.md ✓
+**Prerequisites**: plan.md ✓, spec.md ✓, research.md ✓, data-model.md ✓, contracts/ ✓ (config-env-contract.md, attestation-user-data-contract.md, build-config-summary-contract.md), quickstart.md ✓
 
 **Tests**: INCLUDED. The spec and plan require parity with existing config options ("every existing config option has both unit and property tests; this feature adds matching coverage before/with implementation"). Test tasks are written before the implementation they cover within each story.
 
@@ -130,6 +130,27 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 
 ---
 
+## Phase 8: FR-030 — Build-workflow configuration summary (reopened 2026-06-14)
+
+**Purpose**: Print the full effective server configuration baked into the AMI on the `Build Attestable Image` run summary, derived from the application's own config loader (single source of truth, drift-proof), printed verbatim, failing the build before publishing if the configuration cannot be resolved (FR-030, SC-007). The helper is **build tooling under `.github/scripts/`, not `src/`** (which is reserved for the executor runtime — Clarifications 2026-06-14). No story label: this is a cross-cutting build-time observability addition, not one of the numbered runtime user stories.
+
+**Independent Test**: Run `uv run python .github/scripts/print_config.py --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env` and confirm exit 0 with a `| Setting | Value |` Markdown table covering every `ServerConfig` field (incl. the eight security defaults); run it against an env file with an invalid value and confirm a non-zero exit whose stderr names the offending variable (quickstart.md Scenario D).
+
+### Tests for FR-030 ⚠️ (write first, ensure they fail)
+
+- [ ] T026 [P] Add `tests/test_print_config.py` (write first): (a) given a minimal valid env file, invoking the helper exits 0 and stdout contains a Markdown table row for **every** `dataclasses.fields(ServerConfig)` name — including the eight security defaults (`container_user=65534:65534`, … `container_network_mode=none`) — so a dropped field can't regress silently; (b) a missing required var and an invalid value (e.g. `CONTAINER_NETWORK_MODE=nat`) each exit non-zero with stderr naming the offending variable; (c) the real baked file `kiwi-descriptions/root/etc/github-actions-remote-executor/env` resolves cleanly (exit 0). Invoke via `subprocess` against `.github/scripts/print_config.py` (or import its `main`) (build-config-summary-contract.md §1; FR-030; SC-007).
+
+### Implementation for FR-030
+
+- [ ] T027 Create `.github/scripts/print_config.py` (build tooling, **not** `src/`): `argparse` with `--env-file PATH`; parse the file with systemd-`EnvironmentFile`-compatible rules (skip blank lines and lines starting with `#`; split on the first `=`; values verbatim) and populate `os.environ`; call `from src.config import load_config` then `load_config()` (single source of truth); on success, enumerate `dataclasses.fields(ServerConfig)` and write a GitHub-Flavored Markdown table (`| Setting | Value |`) of **every** field to stdout, values verbatim (no redaction); on `ConfigurationError`/`ValueError` write the message to stderr and `sys.exit(1)`. Import only from `src.config` (no FastAPI/Docker/TPM; never binds a port). Run via `uv run` from the repo root so `src` is importable (research.md Decisions 8 & 10; build-config-summary-contract.md §1). Depends on T026.
+- [ ] T028 Add the step **"Print effective configuration to summary"** to the `build-and-publish` job in `.github/workflows/build-attestable-image.yml`, immediately after *Build KIWI image* and **before** *Push artifact to GHCR* (so a resolution failure aborts before publishing). The step appends a `### Effective Server Configuration (built into image)` heading and the helper's table to `$GITHUB_STEP_SUMMARY`, running `uv run python .github/scripts/print_config.py --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env`; guard with `if ! …; then echo "::error::…"; exit 1; fi` so a non-zero exit fails the run (FR-030 fail-fast; build-config-summary-contract.md §2; research.md Decision 9). Depends on T027.
+
+### Validation for FR-030
+
+- [ ] T029 Validate per quickstart.md Scenario D: confirm the real baked env file resolves to a full table (exit 0) and that `printf 'SERVER_PORT=8080\nCONTAINER_NETWORK_MODE=nat\n' > /tmp/bad.env; uv run python .github/scripts/print_config.py --env-file /tmp/bad.env` exits non-zero naming `CONTAINER_NETWORK_MODE`; run `.venv/bin/pytest -q tests/test_print_config.py` green; confirm the workflow YAML is well-formed and the new step sits before *Push artifact to GHCR* (SC-007). Depends on T028.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -138,6 +159,7 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 - **Foundational (Phase 2)**: Depends on Setup. BLOCKS all user stories. T003 → T004 → T005 (same file, sequential).
 - **User Stories (Phase 3–5)**: All depend on Foundational (specifically T005). Once T005 lands, US1/US2/US3 can proceed in parallel (different files): US1 in `script_executor.py`/`server.py` executor wiring, US2 in `config.py` `validate()`, US3 in `attestation.py`/`server.py` call sites/`main.py`.
 - **Polish (Phase 6)**: Depends on the user stories it validates (T021/T022 after US1–US3; T020 doc-only, can start any time after T005).
+- **FR-030 (Phase 8)**: Independent of the runtime user stories — it consumes the existing `ServerConfig`/`load_config()` (already implemented) and touches only `.github/scripts/print_config.py`, the build workflow, and a new test. Sequential within the phase: T026 (tests) → T027 (helper) → T028 (workflow step) → T029 (validation).
 
 ### User Story Dependencies
 
