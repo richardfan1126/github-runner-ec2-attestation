@@ -4,11 +4,19 @@
 
 **Created**: 2026-06-13
 
-**Status**: Implemented
+**Status**: Implemented; reopened 2026-06-14 to add FR-030 (build-workflow configuration summary)
 
 **Input**: User description: "Expose container security configuration via environment variables with secure-by-default values — add eight new operator-facing configuration options to the GitHub Actions Remote Executor so the security posture of execution containers can be tuned per-deployment without code changes, each defaulting to the secure choice, with every effective value observable for attestation and invalid combinations failing fast at startup."
 
 ## Clarifications
+
+### Session 2026-06-14
+
+- Q: Which configuration values should the `Build Attestable Image` workflow print on its run summary? → A: All server configuration options (the eight container-security settings together with the other server settings), not only the eight new ones.
+- Q: Given the workflow runs at build time (no deploy-time env vars present), what should the printed values represent? → A: The configuration actually built into the AMI — the values the image ships with (the baked-in environment configuration resolved through the application's own config loader), rather than abstract defaults.
+- Q: How should the workflow obtain the values to avoid drift from the code? → A: Derive them programmatically from the application's configuration at build time (single source of truth), so the summary cannot diverge from the values the image actually ships with.
+- Q: The summary's "all server configuration" scope includes non-security keys documented in `.env.example` (e.g. `ALLOWED_REPOSITORIES`, `EXPECTED_AUDIENCE`) and the run summary is public on public repos — how should those be handled? → A: Print every value verbatim, with no redaction; the baked-in environment file is itself committed to the repository, so the summary discloses nothing that is not already public.
+- Q: If the `Build Attestable Image` workflow cannot resolve/print the effective configuration at build time (e.g., the app's config loader rejects the baked-in env file), how should the workflow behave? → A: Fail the workflow before publishing the artifact; a config-loader failure means the baked-in env would also fail the server's fail-fast startup (FR-011), so catching it at build time is valuable and consistent with the system's fail-fast posture.
 
 ### Session 2026-06-13
 
@@ -82,6 +90,7 @@ A relying party or operator needs to confirm what security posture a given execu
 - **Empty vs. unset capability set**: `CONTAINER_CAP_ADD` empty means no capabilities are added on top of `drop ALL`; this differs from leaving it unset (which preserves the default working set). The two cases must be distinguishable.
 - **Malformed or out-of-range values**: non-numeric tmpfs size, tmpfs size missing a unit, uid:gid with non-numeric or negative parts, capability names with wrong casing or unknown names, enum values with surrounding whitespace or wrong case.
 - **Whole-host network exposure**: `CONTAINER_NETWORK_MODE=host` grants the container the host network namespace; it is an allowed value but represents the weakest network isolation and must be surfaced as such.
+- **Unresolvable configuration at build time**: if the `Build Attestable Image` workflow cannot resolve the effective configuration baked into the AMI (e.g., the configuration loader rejects the baked-in environment file), the workflow fails before publishing the artifact rather than publishing without the configuration summary (FR-030).
 
 ## Requirements *(mandatory)*
 
@@ -133,6 +142,7 @@ A relying party or operator needs to confirm what security posture a given execu
 - **FR-026**: The effective value of every security-relevant setting MUST be observable, so that an operator who relaxes a default does so explicitly and visibly, never silently.
 - **FR-027**: The effective security-relevant values MUST be surfaced through the system's attestation/audit surface for an execution — specifically, threaded into the attestation `user_data` via the attestation generator the same way the existing `gpu_enabled` setting is, so all eight effective values (`CONTAINER_USER`, `CONTAINER_ALLOW_ROOT`, the resolved `CONTAINER_CAP_ADD` set, `NO_NEW_PRIVILEGES`, `CONTAINER_READ_ONLY_ROOTFS`, `CONTAINER_TMPFS_SIZE`, `WORKSPACE_MOUNT_MODE`, `CONTAINER_NETWORK_MODE`) are bound to the attestation document for that execution.
 - **FR-028**: The effective values of all eight settings MUST be recorded in startup output so the running posture is inspectable independent of any individual execution.
+- **FR-030**: The `Build Attestable Image` GitHub Actions workflow MUST print, on its workflow run summary (GitHub Step Summary), the full server configuration built into the AMI artifact it produces — the complete set of effective server configuration values the image ships with, covering the eight container-security settings of FR-001 together with the other server configuration options (not only the eight new ones). The printed set MUST cover every configuration key documented in `.env.example` — server, execution, rate-limiting, storage, NitroTPM, OIDC authentication, container-execution, and the eight container-security settings. The printed values MUST represent the configuration actually built into the AMI, obtained by resolving the image's baked-in environment configuration (`/etc/github-actions-remote-executor/env`) through the application's own configuration loader, and MUST be derived programmatically at build time (single source of truth) so the summary cannot drift from the values the image actually ships with. All values MUST be printed verbatim with no redaction: the baked-in environment file is itself committed to the repository, so the summary discloses nothing that is not already public. If the effective configuration cannot be resolved at build time (e.g., the configuration loader rejects the baked-in environment file), the workflow MUST fail before publishing the artifact rather than publishing without the configuration summary — consistent with the server's fail-fast startup behavior (FR-011).
 
 ### Key Entities *(include if feature involves data)*
 
@@ -151,6 +161,7 @@ A relying party or operator needs to confirm what security posture a given execu
 - **SC-004**: For any execution, a relying party can determine the effective value of all eight security settings from the attestation/audit surface, and a relaxed default is always distinguishable from the secure default.
 - **SC-005**: The example environment configuration documents all eight variables, each with its default and security rationale, and explicitly states the backward-compatibility and network-default trade-offs.
 - **SC-006**: A deployment that explicitly relaxes a default (e.g., enables network, makes the workspace writable, or runs as root with the escape hatch) successfully runs a job that requires that relaxation — verified end to end in a container-runtime-capable environment, with the relaxed value additionally shown to flow through to container creation in the standard test suite.
+- **SC-007**: Every run of the `Build Attestable Image` workflow displays, on its run summary, the full effective server configuration built into the produced AMI — every configuration key documented in `.env.example`, including the eight container-security settings — with values printed verbatim that match what the image ships with and are derived from the application's configuration rather than a hand-maintained list, so the summary cannot silently drift from the code.
 
 ## Assumptions
 
