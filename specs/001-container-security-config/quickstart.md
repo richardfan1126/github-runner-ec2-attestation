@@ -69,8 +69,10 @@ and that an unresolvable configuration fails the build.
 #    The helper is build tooling under .github/scripts/, run via uv from the repo root.
 uv run python .github/scripts/print_config.py \
   --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env
-# Expect: exit 0; a "| Setting | Value |" table covering every ServerConfig field,
-#   including the eight security defaults (container_user=65534:65534, ... network_mode=none).
+# Expect: exit 0; "| Setting | Value |" tables grouped into per-category subsections
+#   (#### HTTP Server, #### Execution, ... #### Container Security, #### Other last),
+#   covering every ServerConfig field exactly once, including the eight security
+#   defaults (container_user=65534:65534, ... container_network_mode=none).
 
 # 2. Fail-fast: an invalid baked config aborts before publish.
 printf 'SERVER_PORT=8080\nCONTAINER_NETWORK_MODE=nat\n' > /tmp/bad.env
@@ -97,5 +99,5 @@ CONTAINER_NETWORK_MODE=bridge .venv/bin/python -m src.main
 
 - All listed test files pass, including the new `test_security_config_integration.py`.
 - `test_attestation_user_data_regression.py` asserts the eight new keys.
-- `test_print_config.py` passes: the table covers all `ServerConfig` fields incl. the eight security defaults, a missing/invalid config exits non-zero, and the real baked env file resolves cleanly (FR-030 / SC-007).
+- `test_print_config.py` passes: the output covers all `ServerConfig` fields incl. the eight security defaults — grouped into per-category subsections with the catch-all "Other" group last and every field present exactly once — a missing/invalid config exits non-zero, and the real baked env file resolves cleanly (FR-030 / SC-007).
 - `.env.example` documents all eight variables with defaults, rationale, and the backward-compat + network-default trade-off callouts.

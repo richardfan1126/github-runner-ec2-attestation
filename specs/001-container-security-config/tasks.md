@@ -169,6 +169,23 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 
 ---
 
+## Phase 10: FR-030 — Grouped-by-category configuration summary (reopened 2026-06-14)
+
+**Purpose**: The build summary currently renders one flat `| Setting | Value |` table; the 2026-06-14 clarifications require the settings to be **grouped by configuration category** into labeled subsections in a stable, map-defined order, with a catch-all **"Other"** group last so no field is ever dropped (FR-030, SC-007; spec Clarifications 2026-06-14; research.md Decision 11; build-config-summary-contract.md §1). This touches only `.github/scripts/print_config.py`, `tests/test_print_config.py`, and the already-updated contract — presentation-only, no `ServerConfig` schema change. No story label: cross-cutting build-time observability, like Phases 8–9.
+
+**Independent Test**: Run `uv run python .github/scripts/print_config.py --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env` and confirm exit 0 with output split into per-category `####` subsections (e.g. *HTTP Server*, *Execution*, … *Container Security*, *Other* last), each its own `| Setting | Value |` table, every `ServerConfig` field appearing exactly once including the eight security defaults (quickstart.md Scenario D).
+
+### Tests for Phase 10 ⚠️ (write first, ensure they fail)
+
+- [ ] T033 [P] Extend `tests/test_print_config.py` (write first): assert the helper's stdout is grouped into per-category subsections — (a) each non-empty category emits a `####` heading followed by its own `| Setting | Value |` table; (b) the eight container-security settings appear together under a `#### Container Security` subsection; (c) **every** `dataclasses.fields(ServerConfig)` name appears exactly once across all subsections (no field dropped, none duplicated); (d) any field not present in the `CONFIG_CATEGORIES` map renders under a catch-all `#### Other` subsection that appears **last** (cover this by asserting position/order is stable and map-defined); (e) the real baked file still resolves cleanly (exit 0). These should fail against the current flat-table render (build-config-summary-contract.md §1; FR-030; SC-007).
+
+### Implementation for Phase 10
+
+- [ ] T034 Refactor the render in `.github/scripts/print_config.py` from a single flat table to grouped subsections: add a module-level **ordered** `CONFIG_CATEGORIES: dict[str, list[str]]` mapping each category label (`HTTP Server`, `Execution`, `Rate Limiting`, `Storage`, `NitroTPM`, `OIDC Authentication`, `Container Execution`, `GPU`, `Container Security`, …) to its ordered `ServerConfig` field names; replace `render_table()` with a renderer that, for each category in map order containing at least one field, emits a `####` heading + that category's `| Setting | Value |` table, then renders a catch-all `#### Other` subsection (only when non-empty) for any `dataclasses.fields(ServerConfig)` field not listed in the map — so every field appears exactly once and a newly added field surfaces under "Other" rather than being dropped (drift-proof). Values stay verbatim. Update the module docstring to describe the grouped, map-driven, catch-all layout (research.md Decision 11; build-config-summary-contract.md §1). Depends on T033.
+- [ ] T035 Run `.venv/bin/pytest -q tests/test_print_config.py` green, then re-confirm Scenario D against the real baked env file (`uv run python .github/scripts/print_config.py --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env` → exit 0; output grouped into per-category subsections with "Other" last; every `ServerConfig` field present exactly once) so the change is behaviour-preserving on field coverage while adding grouping (SC-007). Depends on T034.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -179,6 +196,7 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 - **Polish (Phase 6)**: Depends on the user stories it validates (T021/T022 after US1–US3; T020 doc-only, can start any time after T005).
 - **FR-030 (Phase 8)**: Independent of the runtime user stories — it consumes the existing `ServerConfig`/`load_config()` (already implemented) and touches only `.github/scripts/print_config.py`, the build workflow, and a new test. Sequential within the phase: T026 (tests) → T027 (helper) → T028 (workflow step) → T029 (validation).
 - **Doc-Conformance Fix (Phase 9)**: Depends on Phase 8 (hardens `print_config.py`'s env parser). Touches only `.github/scripts/print_config.py`, `tests/test_print_config.py`, and build-config-summary-contract.md §1. Sequential: T030 (tests) → T031 (parser + wording) → T032 (validation).
+- **Grouped summary (Phase 10)**: Depends on Phase 8 (refactors `print_config.py`'s render to grouped subsections); independent of Phase 9 (different function — `render` vs `load_env_file`) but touches the same file, so coordinate if run concurrently. Touches only `.github/scripts/print_config.py` and `tests/test_print_config.py`. Sequential: T033 (tests) → T034 (grouped render + map) → T035 (validation).
 
 ### User Story Dependencies
 

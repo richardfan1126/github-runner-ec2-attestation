@@ -10,7 +10,7 @@ Add eight operator-facing environment variables (`CONTAINER_USER`, `CONTAINER_AL
 
 Technical approach: extend the four existing seams — `config.py` (parse/validate), `script_executor.py` (constructor + container kwargs), `server.py` (wire config → executor and config → attestation call sites), `attestation.py` (add `user_data` fields) — plus `main.py` startup logging and `.env.example` docs. No new modules, no new dependencies.
 
-**Addendum (2026-06-14, FR-030):** Surface the full effective server configuration that the build bakes into the AMI on the `Build Attestable Image` workflow run summary. A small read-only helper (`.github/scripts/print_config.py` — build tooling, **not** under `src/`) loads the image's baked-in env file through the application's own `load_config()` (single source of truth) and renders every `ServerConfig` field as a Markdown table; a new workflow step runs it against `kiwi-descriptions/root/etc/github-actions-remote-executor/env`, appends the table to `$GITHUB_STEP_SUMMARY`, and fails the build before publishing if the configuration cannot be resolved. See the [FR-030 addendum](#addendum-fr-030--configuration-summary-on-the-build-workflow-2026-06-14) below.
+**Addendum (2026-06-14, FR-030):** Surface the full effective server configuration that the build bakes into the AMI on the `Build Attestable Image` workflow run summary. A small read-only helper (`.github/scripts/print_config.py` — build tooling, **not** under `src/`) loads the image's baked-in env file through the application's own `load_config()` (single source of truth) and renders every `ServerConfig` field, **grouped by configuration category into labeled subsections** (Clarifications 2026-06-14); a new workflow step runs it against `kiwi-descriptions/root/etc/github-actions-remote-executor/env`, appends the grouped tables to `$GITHUB_STEP_SUMMARY`, and fails the build before publishing if the configuration cannot be resolved. See the [FR-030 addendum](#addendum-fr-030--configuration-summary-on-the-build-workflow-2026-06-14) below.
 
 ## Technical Context
 
@@ -103,7 +103,7 @@ The feature was reopened to add **FR-030 / SC-007**: the `Build Attestable Image
 1. **`.github/scripts/print_config.py` (new, read-only helper — build tooling, not `src/`)** — runnable as `uv run python .github/scripts/print_config.py --env-file <path>` from the repo root. It:
    - Parses the baked-in env file with systemd-`EnvironmentFile`-compatible rules (skip blank/`#` lines; split on first `=`; the file uses unquoted simple values), populating `os.environ`.
    - Calls the application's own `load_config()` (`from_env()` + `validate()`) — the **single source of truth**, so the printed values are exactly what the server would resolve (FR-030). It imports `from src.config import load_config, ServerConfig`; because the repo root is the executor's uv project (`packages = ["src"]`), `uv run` makes `src` importable from any location, so the helper lives outside `src/` while keeping the executor as the single source of truth (Clarifications 2026-06-14).
-   - On success, enumerates `dataclasses.fields(ServerConfig)` and emits a Markdown table (`| Setting | Value |`) covering **every** field — a superset of the `.env.example` keys, drift-proof because the field list is read from the dataclass, not hand-maintained. Values are printed verbatim.
+   - On success, enumerates `dataclasses.fields(ServerConfig)` and emits the values **grouped by configuration category** — one labeled subsection (a `####` heading + its own `| Setting | Value |` table) per category. Grouping is driven by a module-level ordered category→fields map (`CONFIG_CATEGORIES`); any enumerated `ServerConfig` field not listed in the map falls into a catch-all **"Other"** subsection rendered last, so every field still appears exactly once and no field is ever silently dropped (preserving the superset/no-drift guarantee even before a new field is categorized). Subsections appear in map order ("Other" last); settings within a subsection appear in the map's listed order. The full field set remains drift-proof because it is read from the dataclass, not hand-maintained. Values are printed verbatim.
    - On any `ConfigurationError`/`ValueError`, writes the error to stderr and exits non-zero (FR-030 fail-fast). Imports only from `src.config`, so it pulls in no FastAPI/Docker/TPM machinery and does not bind a port or touch the TPM.
 
 2. **Workflow step (new, in the `build-and-publish` job)** — added immediately after *Build KIWI image* and **before** *Push artifact to GHCR*, so a resolution failure aborts the run before anything is published. It appends a heading + the `print_config.py` table to `$GITHUB_STEP_SUMMARY`; if the command exits non-zero it emits `::error::` and `exit 1`. Placed in `build-and-publish` (not `build-ami`) because that job already has the repo + `uv` set up, runs on every push, and reads the same env file that is baked into the image.
@@ -113,22 +113,25 @@ The feature was reopened to add **FR-030 / SC-007**: the `Build Attestable Image
 ```text
 .github/scripts/
 └── print_config.py          # NEW (build tooling, NOT src/): load baked env file via src.config.load_config();
-                             #   render all ServerConfig fields as Markdown; non-zero exit on failure
+                             #   render all ServerConfig fields as Markdown, grouped by category (CONFIG_CATEGORIES
+                             #   map + catch-all "Other" last); non-zero exit on failure
 
 .github/workflows/build-attestable-image.yml
                              # ADD step "Print effective configuration to summary" in build-and-publish,
                              #   after "Build KIWI image", before "Push artifact to GHCR"
 
 tests/
-└── test_print_config.py     # NEW: table covers all ServerConfig fields incl. 8 security defaults; non-zero exit on
-                             #      missing/invalid config; the real baked env file resolves cleanly (exit 0)
+└── test_print_config.py     # NEW: output covers all ServerConfig fields incl. 8 security defaults, grouped into
+                             #      per-category subsections ("Other" last) with every field present exactly once;
+                             #      non-zero exit on missing/invalid config; real baked env file resolves cleanly (exit 0)
 ```
 
-### Decisions (see research.md Decisions 8–10)
+### Decisions (see research.md Decisions 8–11)
 
-- **Single source of truth via `load_config()`** — never re-list values in YAML; the table is generated from `dataclasses.fields()` so it cannot drift (SC-007).
+- **Single source of truth via `load_config()`** — never re-list values in YAML; the field set is generated from `dataclasses.fields()` so it cannot drift (SC-007).
 - **Verbatim, no redaction** — the baked env file is committed in the repo, so the summary discloses nothing new (spec Clarifications 2026-06-14).
 - **Fail before publish** — a loader rejection at build time is the same failure the server would hit at startup (FR-011); catching it early is consistent with the system's fail-fast posture.
+- **Grouped by category with a catch-all "Other"** (Decision 11) — settings are rendered in labeled per-category subsections in a stable, map-defined order; a maintained `CONFIG_CATEGORIES` map assigns fields to categories while an automatic "Other" group collects any unmapped field, so grouping improves readability without weakening the "every field, no drift" guarantee (spec Clarifications 2026-06-14).
 
 ### Constitution / gate re-check (post-design)
 

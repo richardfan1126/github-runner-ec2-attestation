@@ -32,28 +32,58 @@ uv run python .github/scripts/print_config.py --env-file <path-to-env-file>
 - Populates `os.environ` from the file, then calls the application's own
   `load_config()` (`ServerConfig.from_env()` + `.validate()`) — the single source
   of truth.
-- The set of rows is derived from `dataclasses.fields(ServerConfig)`, so it covers
+- The full field set is derived from `dataclasses.fields(ServerConfig)`, so it covers
   **every** field (a superset of the `.env.example` keys, including the eight
   container-security settings). Fields absent from the env file appear with their
   resolved defaults.
+- Settings are **grouped by configuration category** into labeled subsections, not a
+  single flat table (Clarifications 2026-06-14; research Decision 11). Grouping is
+  driven by an ordered `CONFIG_CATEGORIES` map (category label → ordered field names).
+  Each category renders as a `####` heading + its own `| Setting | Value |` table, in
+  map order. Any field not listed in the map falls into a catch-all **"Other"**
+  subsection rendered **last** (only when non-empty), so every field still appears
+  exactly once and no field is ever silently dropped — grouping stays drift-proof.
 - Values are printed **verbatim** — no redaction (the source file is committed in
   the repo; see Clarifications 2026-06-14).
 
-**Output (stdout)** — GitHub-Flavored Markdown table, e.g.:
+**Output (stdout)** — GitHub-Flavored Markdown, grouped subsections, e.g.:
 
 ```markdown
+#### HTTP Server
+
 | Setting | Value |
 |---|---|
 | port | 8080 |
+
+#### Execution
+
+| Setting | Value |
+|---|---|
 | max_concurrent_executions | 10 |
 | ... | ... |
+
+#### Container Security
+
+| Setting | Value |
+|---|---|
 | container_user | 65534:65534 |
 | container_allow_root | False |
 | container_cap_add | (default 7-cap set) |
+| no_new_privileges | True |
+| container_read_only_rootfs | True |
+| container_tmpfs_size | 256m |
+| workspace_mount_mode | ro |
 | container_network_mode | none |
+
+#### Other
+
+| Setting | Value |
+|---|---|
+| ... any field not yet assigned a category ... |
 ```
 
-(Labels are `ServerConfig` attribute names — drift-proof; see research Decision 8.)
+(Subsection headings are category labels; row labels are `ServerConfig` attribute
+names — drift-proof; see research Decisions 8 & 11.)
 
 **Exit codes**
 
@@ -87,6 +117,7 @@ Added to the **`build-and-publish`** job, after *Build KIWI image* and **before*
 **Contract guarantees**
 
 - Every run of `Build Attestable Image` shows the effective configuration baked
-  into the produced AMI on its summary (SC-007).
+  into the produced AMI on its summary (SC-007), grouped into per-category
+  subsections in a stable map-defined order with the catch-all "Other" group last.
 - If the configuration cannot be resolved, the run **fails before** any artifact is
   published (FR-030), consistent with the server's fail-fast startup (FR-011).
