@@ -257,7 +257,7 @@ def test_property_111_docker_container_security_constraints(params):
         assert call.get("read_only") is True, (
             "Container root filesystem must be read-only by default"
         )
-        assert call.get("tmpfs") == {"/tmp": "size=256m"}, (
+        assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}, (
             f"Container must mount a /tmp tmpfs scratch, got {call.get('tmpfs')!r}"
         )
 
@@ -632,7 +632,7 @@ def test_property_153_security_kwargs_reflect_config(params, sec):
 
         # tmpfs mounted at /tmp iff tmpfs_size non-empty (independent of read_only)
         if sec["tmpfs_size"]:
-            assert call.get("tmpfs") == {"/tmp": f"size={sec['tmpfs_size']}"}
+            assert call.get("tmpfs") == {"/tmp": f"size={sec['tmpfs_size']},mode=1777"}
         else:
             assert "tmpfs" not in call
 

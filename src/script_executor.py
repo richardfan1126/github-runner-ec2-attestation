@@ -271,8 +271,12 @@ class ScriptExecutor:
 
             # tmpfs scratch at the container's standard temp dir whenever a size is
             # configured — independent of the read-only rootfs setting.
+            # mode=1777 is set explicitly: runc 1.1+/Docker 20.10.7+ bring an
+            # option-less tmpfs up root-owned 0755 (despite the Docker docs'
+            # claim of 1777), which would leave the non-root default user unable
+            # to write /tmp (EACCES). See docker/docs#15594, runc#4971.
             if self._tmpfs_size:
-                create_kwargs["tmpfs"] = {"/tmp": f"size={self._tmpfs_size}"}
+                create_kwargs["tmpfs"] = {"/tmp": f"size={self._tmpfs_size},mode=1777"}
 
             container = self._docker_client.containers.create(
                 image=self._immutable_image_ref,

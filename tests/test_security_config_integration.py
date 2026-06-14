@@ -186,7 +186,7 @@ class TestDefaultsAreHardenedEndToEnd:
         assert kwargs["cap_add"] == DEFAULT_CAP_ADD
         assert kwargs["network_mode"] == "none"
         assert kwargs["security_opt"] == ["no-new-privileges"]
-        assert kwargs["tmpfs"] == {"/tmp": "size=256m"}
+        assert kwargs["tmpfs"] == {"/tmp": "size=256m,mode=1777"}
         # Workspace bind is read-only.
         bind_modes = [spec["mode"] for spec in kwargs["volumes"].values()]
         assert bind_modes == ["ro"]

@@ -198,7 +198,28 @@ class AttestationGenerator:
                     workspace_mount_mode, container_network_mode,
                 ))
                 user_data_json = json.dumps(user_data)
-                
+
+                # NitroTPM caps user_data at 1024 bytes; a long repository_url +
+                # script_path plus an operator-expanded CONTAINER_CAP_ADD can cross
+                # it. Reject up front with a clear, limit-naming error rather than
+                # letting nitro-tpm-attest fail with a generic non-zero exit.
+                user_data_size = len(user_data_json.encode("utf-8"))
+                if user_data_size > 1024:
+                    logger.error(
+                        f"Attestation user_data is {user_data_size} bytes, "
+                        f"exceeding the NitroTPM 1024-byte limit"
+                    )
+                    return None, AttestationError(
+                        command=" ".join(cmd),
+                        exit_code=-1,
+                        stdout="",
+                        stderr="",
+                        context=(
+                            f"Attestation user_data is {user_data_size} bytes, "
+                            f"exceeding the NitroTPM 1024-byte user_data limit"
+                        ),
+                    )
+
                 # Write user_data to temporary file
                 user_data_fd, user_data_path = tempfile.mkstemp(
                     prefix="attestation_user_data_", suffix=".json"
@@ -387,6 +408,20 @@ class AttestationGenerator:
                 workspace_mount_mode, container_network_mode,
             ))
             user_data_content = json.dumps(user_data)
+
+            # NitroTPM caps user_data at 1024 bytes; the added container-security
+            # keys can push an otherwise-small output user_data over the edge.
+            # Reject with a clear, limit-naming error rather than a generic failure.
+            user_data_size = len(user_data_content.encode("utf-8"))
+            if user_data_size > 1024:
+                logger.error(
+                    f"Output attestation user_data is {user_data_size} bytes, "
+                    f"exceeding the NitroTPM 1024-byte limit"
+                )
+                return None, (
+                    f"Output attestation user_data is {user_data_size} bytes, "
+                    f"exceeding the NitroTPM 1024-byte user_data limit"
+                )
 
             # Write user_data to temporary file
             user_data_fd, user_data_path = tempfile.mkstemp(

@@ -1024,7 +1024,7 @@ def test_default_config_produces_hardened_container_kwargs():
         assert call.get("user") == "65534:65534"
         # Read-only rootfs + bounded /tmp tmpfs scratch
         assert call.get("read_only") is True
-        assert call.get("tmpfs") == {"/tmp": "size=256m"}
+        assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}
         # Read-only workspace bind
         repo_mount = next(iter(call.get("volumes", {}).values()))
         assert repo_mount["bind"] == "/workspace"

@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-13
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "Expose container security configuration via environment variables with secure-by-default values — add eight new operator-facing configuration options to the GitHub Actions Remote Executor so the security posture of execution containers can be tuned per-deployment without code changes, each defaulting to the secure choice, with every effective value observable for attestation and invalid combinations failing fast at startup."
 

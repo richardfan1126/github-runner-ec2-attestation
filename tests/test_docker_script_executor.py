@@ -194,7 +194,7 @@ class TestContainerCreationAndSecurity:
             assert call.get("read_only") is True, (
                 "Container root filesystem must be read-only by default"
             )
-            assert call.get("tmpfs") == {"/tmp": "size=256m"}, (
+            assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}, (
                 f"Container must mount a /tmp tmpfs scratch, got {call.get('tmpfs')!r}"
             )
 
@@ -233,7 +233,7 @@ class TestContainerCreationAndSecurity:
             assert call.get("read_only") is True, (
                 "Container root filesystem must be read-only by default"
             )
-            assert call.get("tmpfs") == {"/tmp": "size=256m"}, (
+            assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}, (
                 f"Container must mount a /tmp tmpfs scratch, got {call.get('tmpfs')!r}"
             )
             assert "no-new-privileges" in call["security_opt"]

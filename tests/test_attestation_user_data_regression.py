@@ -466,6 +466,96 @@ class TestSecurityFieldsAbsentWhenNotProvided:
         assert SECURITY_KEYS.isdisjoint(captured["user_data"].keys())
 
 
+class TestUserDataWithinNitroTpmLimit:
+    """NitroTPM caps user_data at 1024 bytes; guard both surfaces (T025)."""
+
+    @pytest.fixture
+    def capture_raw_user_data(self):
+        """Mock subprocess.run capturing the raw user_data bytes written to disk."""
+        captured = {}
+
+        def capture_and_run(cmd, **kwargs):
+            if "--user-data" in cmd:
+                user_data_idx = cmd.index("--user-data")
+                with open(cmd[user_data_idx + 1], "rb") as f:
+                    captured["raw"] = f.read()
+            mock_result = Mock()
+            mock_result.returncode = 0
+            mock_result.stdout = b"mock_cbor_attestation"
+            mock_result.stderr = b""
+            return mock_result
+
+        return captured, capture_and_run
+
+    def test_execute_user_data_within_limit(self, generator, capture_raw_user_data):
+        """A hardened-default execute attestation stays within the 1024-byte cap."""
+        captured, side_effect = capture_raw_user_data
+
+        with patch("subprocess.run", side_effect=side_effect):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                execution_id="exec-123",
+                **SECURITY_KWARGS,
+            )
+
+        assert error is None
+        assert len(captured["raw"]) <= 1024, (
+            f"user_data must stay within the NitroTPM 1024-byte limit, "
+            f"got {len(captured['raw'])} bytes"
+        )
+
+    def test_output_user_data_within_limit(self, generator, capture_raw_user_data):
+        """A hardened-default output attestation stays within the 1024-byte cap."""
+        captured, side_effect = capture_raw_user_data
+
+        with patch("subprocess.run", side_effect=side_effect):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-123",
+                **SECURITY_KWARGS,
+            )
+
+        assert error_msg is None
+        assert len(captured["raw"]) <= 1024, (
+            f"output user_data must stay within the NitroTPM 1024-byte limit, "
+            f"got {len(captured['raw'])} bytes"
+        )
+
+    def test_oversize_execute_user_data_rejected(self, generator):
+        """An oversize execute user_data is rejected with a limit-naming error, no subprocess."""
+        run = Mock()
+        with patch("subprocess.run", run):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/" + "r" * 1100,
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                **SECURITY_KWARGS,
+            )
+
+        assert doc is None
+        assert error is not None
+        assert "1024" in error.context
+        run.assert_not_called()
+
+    def test_oversize_output_user_data_rejected(self, generator):
+        """An oversize output user_data is rejected with a limit-naming error, no subprocess."""
+        run = Mock()
+        oversize_cap_add = [f"CAP_{i:04d}" for i in range(120)]
+        with patch("subprocess.run", run):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-123",
+                **{**SECURITY_KWARGS, "container_cap_add": oversize_cap_add},
+            )
+
+        assert attestation_bytes is None
+        assert error_msg is not None
+        assert "1024" in error_msg
+        run.assert_not_called()
+
+
 class TestFieldRemovalCausesFailure:
     """Tests that verify removing script_path or script_env_hash would cause failure.
 
