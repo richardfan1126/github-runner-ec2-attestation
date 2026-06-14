@@ -101,6 +101,71 @@ def test_invalid_value_exits_nonzero_naming_variable(tmp_path):
     assert "CONTAINER_NETWORK_MODE" in result.stderr
 
 
+def test_double_quoted_value_is_unquoted(tmp_path):
+    """Phase 9: a double-quoted value resolves to the *unquoted* string (as systemd would set it)."""
+    env = dict(_REQUIRED_ENV)
+    env["EXPECTED_AUDIENCE"] = '"test-workflow"'  # operator wraps the value in quotes
+    env_file = _write_env(tmp_path / "dquote.env", env)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    # The surrounding quotes are stripped — matching what real systemd EnvironmentFile= does.
+    assert "| expected_audience | test-workflow |" in result.stdout
+    assert '"test-workflow"' not in result.stdout
+
+
+def test_single_quoted_value_is_unquoted(tmp_path):
+    """Phase 9: a single-quoted value resolves to the *unquoted* string."""
+    env = dict(_REQUIRED_ENV)
+    env["CONTAINER_MEMORY_LIMIT"] = "'4g'"
+    env_file = _write_env(tmp_path / "squote.env", env)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "| container_memory_limit | 4g |" in result.stdout
+    assert "'4g'" not in result.stdout
+
+
+def test_unbalanced_quotes_kept_verbatim(tmp_path):
+    """Phase 9: only a *matched* surrounding pair is stripped; a lone quote stays verbatim."""
+    env = dict(_REQUIRED_ENV)
+    env["EXPECTED_AUDIENCE"] = '"unbalanced'  # leading quote only
+    env_file = _write_env(tmp_path / "unbalanced.env", env)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert '| expected_audience | "unbalanced |' in result.stdout
+
+
+def test_semicolon_comment_line_ignored(tmp_path):
+    """Phase 9: a line whose first non-whitespace char is ';' is a comment and is not parsed."""
+    content = "".join(f"{k}={v}\n" for k, v in _REQUIRED_ENV.items())
+    # systemd treats ';' lines as comments; this one carries an '=' to prove it is skipped,
+    # not split into a variable.
+    content += "  ; CONTAINER_NETWORK_MODE=nat (a note, not a setting)\n"
+    env_file = tmp_path / "semicolon.env"
+    env_file.write_text(content)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    # The commented line must not relax the network mode away from its default.
+    assert "| container_network_mode | none |" in result.stdout
+
+
+def test_simple_and_hash_comment_behavior_unchanged(tmp_path):
+    """Phase 9: plain KEY=value and '#'-comments still behave as before."""
+    content = "# leading comment\n"
+    content += "".join(f"{k}={v}\n" for k, v in _REQUIRED_ENV.items())
+    content += "# CONTAINER_NETWORK_MODE=nat (commented out)\n"
+    env_file = tmp_path / "hash.env"
+    env_file.write_text(content)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "| expected_audience | test-workflow |" in result.stdout
+    assert "| container_network_mode | none |" in result.stdout
+
+
 @pytest.mark.skipif(not BAKED_ENV.exists(), reason="baked env file not present")
 def test_real_baked_env_file_resolves_cleanly():
     """(c) The real env file shipped in the AMI resolves to a full table (exit 0)."""

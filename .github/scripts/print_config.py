@@ -38,19 +38,29 @@ from src.config import ConfigurationError, ServerConfig, load_config  # noqa: E4
 def load_env_file(path: Path) -> None:
     """Populate ``os.environ`` from a systemd ``EnvironmentFile``-style file.
 
-    Rules (matching how systemd loads ``EnvironmentFile=``): blank lines and lines
-    starting with ``#`` are ignored; each remaining line is split on the first
-    ``=``; the value is taken verbatim (the committed file uses simple unquoted
-    values).
+    Implements a *practical subset* of systemd ``EnvironmentFile=`` rules: blank
+    lines and lines whose first non-whitespace character is ``#`` or ``;`` are
+    ignored as comments; each remaining line is split on the first ``=``; a single
+    matched pair of surrounding single or double quotes is stripped from the value
+    (unquoted and unbalanced values are kept verbatim). Backslash line-continuation
+    and in-value escapes are deliberately *not* handled (the committed file uses
+    simple values); they would need adding if the file ever relied on them.
     """
     for raw in path.read_text().splitlines():
         line = raw.strip()
-        if not line or line.startswith("#"):
+        if not line or line[0] in "#;":
             continue
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ[key.strip()] = value
+        os.environ[key.strip()] = _strip_surrounding_quotes(value)
+
+
+def _strip_surrounding_quotes(value: str) -> str:
+    """Strip one matched pair of surrounding single/double quotes; else return verbatim."""
+    if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
+        return value[1:-1]
+    return value
 
 
 def render_table(config: ServerConfig) -> str:

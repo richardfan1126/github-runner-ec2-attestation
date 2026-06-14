@@ -157,15 +157,15 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 
 ### Tests for Phase 9 ⚠️ (write first, ensure they fail)
 
-- [ ] T030 [P] Extend `tests/test_print_config.py` (write first): given an env file whose values are wrapped in double quotes (e.g. `EXPECTED_AUDIENCE="test-workflow"`) and single quotes, the resolved table row shows the **unquoted** value (matching what systemd would set), not the quoted literal; a line starting with `;` (containing an `=`) is ignored as a comment and does **not** create a config var; existing simple-`KEY=value` + `#`-comment behavior is unchanged. These should fail against the current verbatim parser.
+- [X] T030 [P] Extend `tests/test_print_config.py` (write first): given an env file whose values are wrapped in double quotes (e.g. `EXPECTED_AUDIENCE="test-workflow"`) and single quotes, the resolved table row shows the **unquoted** value (matching what systemd would set), not the quoted literal; a line starting with `;` (containing an `=`) is ignored as a comment and does **not** create a config var; existing simple-`KEY=value` + `#`-comment behavior is unchanged. These should fail against the current verbatim parser.
 
 ### Implementation for Phase 9
 
-- [ ] T031 Harden `load_env_file()` in `.github/scripts/print_config.py` to close the two realistic drift paths: (a) skip lines whose first non-whitespace character is `;` **or** `#` (currently only `#`); (b) after splitting on the first `=`, strip a single matched pair of surrounding `'…'` or `"…"` quotes from the value (leaving unquoted and unbalanced values verbatim). Do **not** add backslash line-continuation or in-value escape handling. Then correct the overstated claim: change the helper docstring and build-config-summary-contract.md §1 from "systemd-`EnvironmentFile`-compatible rules" to "a practical subset of systemd `EnvironmentFile=` rules (blank/`#`/`;` comment lines ignored; first-`=` split; surrounding quotes stripped; no backslash continuation/escapes)". Depends on T030.
+- [X] T031 Harden `load_env_file()` in `.github/scripts/print_config.py` to close the two realistic drift paths: (a) skip lines whose first non-whitespace character is `;` **or** `#` (currently only `#`); (b) after splitting on the first `=`, strip a single matched pair of surrounding `'…'` or `"…"` quotes from the value (leaving unquoted and unbalanced values verbatim). Do **not** add backslash line-continuation or in-value escape handling. Then correct the overstated claim: change the helper docstring and build-config-summary-contract.md §1 from "systemd-`EnvironmentFile`-compatible rules" to "a practical subset of systemd `EnvironmentFile=` rules (blank/`#`/`;` comment lines ignored; first-`=` split; surrounding quotes stripped; no backslash continuation/escapes)". Depends on T030.
 
 ### Validation for Phase 9
 
-- [ ] T032 Run `.venv/bin/pytest -q tests/test_print_config.py` green, then re-confirm Scenario D against the real baked env file (`uv run python .github/scripts/print_config.py --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env` → exit 0, full table unchanged) so the hardening is behaviour-preserving for the current file. Depends on T031.
+- [X] T032 Run `.venv/bin/pytest -q tests/test_print_config.py` green, then re-confirm Scenario D against the real baked env file (`uv run python .github/scripts/print_config.py --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env` → exit 0, full table unchanged) so the hardening is behaviour-preserving for the current file. Depends on T031.
 
 ---
 

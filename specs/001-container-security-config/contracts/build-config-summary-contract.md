@@ -20,10 +20,12 @@ uv run python .github/scripts/print_config.py --env-file <path-to-env-file>
 **Inputs**
 
 - `--env-file PATH` (required): an `EnvironmentFile`-style file (the AMI's baked-in
-  `kiwi-descriptions/root/etc/github-actions-remote-executor/env`). Parsed with
-  systemd-compatible rules: blank lines and lines starting with `#` are ignored;
-  each remaining line is split on the first `=`; values are taken verbatim
-  (the committed file uses simple unquoted values).
+  `kiwi-descriptions/root/etc/github-actions-remote-executor/env`). Parsed with a
+  practical subset of systemd `EnvironmentFile=` rules: blank lines and lines whose
+  first non-whitespace character is `#` or `;` are ignored as comments; each
+  remaining line is split on the first `=`; a single matched pair of surrounding
+  single or double quotes is stripped from the value (unquoted/unbalanced values
+  kept verbatim). Backslash line-continuation and in-value escapes are not handled.
 
 **Behavior**
 
