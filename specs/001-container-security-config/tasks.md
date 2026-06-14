@@ -151,6 +151,24 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 
 ---
 
+## Phase 9: Doc-Conformance Fix — systemd `EnvironmentFile=` parser subset (post-implementation review)
+
+**Purpose**: One defect surfaced by checking `print_config.py` against the official systemd.exec(5) `EnvironmentFile=` documentation. The helper's `load_env_file()` is documented as parsing with "systemd-`EnvironmentFile`-compatible rules" (build-config-summary-contract.md §1; helper docstring), but it is actually a strict *subset*: per systemd.exec(5), lines starting with `;` **or** `#` are comments, and single/double-quoted values have their surrounding quotes stripped (and escapes processed) — whereas the helper only skips `#` and takes values **verbatim, with quotes**. Because the AMI's running server resolves the same file through *real* systemd `EnvironmentFile=`, any quoted value (e.g. an operator writing `EXPECTED_AUDIENCE="test-workflow"`) or `;`-comment would make the build summary disagree with what the server actually resolves — silently defeating FR-030's "single source of truth / drift-proof" guarantee (SC-007). The committed env file is simple today (no quotes/`;`/continuation), so there is no drift yet; this hardens against the realistic future edit. Backslash line-continuation and in-value backslash escapes are deliberately left unhandled (rare for this file) — instead the wording is corrected so the claim matches the implementation. Ref: [systemd.exec(5) `EnvironmentFile=`](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html).
+
+### Tests for Phase 9 ⚠️ (write first, ensure they fail)
+
+- [ ] T030 [P] Extend `tests/test_print_config.py` (write first): given an env file whose values are wrapped in double quotes (e.g. `EXPECTED_AUDIENCE="test-workflow"`) and single quotes, the resolved table row shows the **unquoted** value (matching what systemd would set), not the quoted literal; a line starting with `;` (containing an `=`) is ignored as a comment and does **not** create a config var; existing simple-`KEY=value` + `#`-comment behavior is unchanged. These should fail against the current verbatim parser.
+
+### Implementation for Phase 9
+
+- [ ] T031 Harden `load_env_file()` in `.github/scripts/print_config.py` to close the two realistic drift paths: (a) skip lines whose first non-whitespace character is `;` **or** `#` (currently only `#`); (b) after splitting on the first `=`, strip a single matched pair of surrounding `'…'` or `"…"` quotes from the value (leaving unquoted and unbalanced values verbatim). Do **not** add backslash line-continuation or in-value escape handling. Then correct the overstated claim: change the helper docstring and build-config-summary-contract.md §1 from "systemd-`EnvironmentFile`-compatible rules" to "a practical subset of systemd `EnvironmentFile=` rules (blank/`#`/`;` comment lines ignored; first-`=` split; surrounding quotes stripped; no backslash continuation/escapes)". Depends on T030.
+
+### Validation for Phase 9
+
+- [ ] T032 Run `.venv/bin/pytest -q tests/test_print_config.py` green, then re-confirm Scenario D against the real baked env file (`uv run python .github/scripts/print_config.py --env-file kiwi-descriptions/root/etc/github-actions-remote-executor/env` → exit 0, full table unchanged) so the hardening is behaviour-preserving for the current file. Depends on T031.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -160,6 +178,7 @@ Single project: `src/` and `tests/` at repository root (per plan.md "Structure D
 - **User Stories (Phase 3–5)**: All depend on Foundational (specifically T005). Once T005 lands, US1/US2/US3 can proceed in parallel (different files): US1 in `script_executor.py`/`server.py` executor wiring, US2 in `config.py` `validate()`, US3 in `attestation.py`/`server.py` call sites/`main.py`.
 - **Polish (Phase 6)**: Depends on the user stories it validates (T021/T022 after US1–US3; T020 doc-only, can start any time after T005).
 - **FR-030 (Phase 8)**: Independent of the runtime user stories — it consumes the existing `ServerConfig`/`load_config()` (already implemented) and touches only `.github/scripts/print_config.py`, the build workflow, and a new test. Sequential within the phase: T026 (tests) → T027 (helper) → T028 (workflow step) → T029 (validation).
+- **Doc-Conformance Fix (Phase 9)**: Depends on Phase 8 (hardens `print_config.py`'s env parser). Touches only `.github/scripts/print_config.py`, `tests/test_print_config.py`, and build-config-summary-contract.md §1. Sequential: T030 (tests) → T031 (parser + wording) → T032 (validation).
 
 ### User Story Dependencies
 
