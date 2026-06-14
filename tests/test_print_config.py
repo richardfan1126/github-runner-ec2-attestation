@@ -12,6 +12,7 @@ GitHub-Flavored Markdown table. These tests pin FR-030 / SC-007:
 """
 import dataclasses
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +24,12 @@ from src.config import ServerConfig
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / ".github" / "scripts" / "print_config.py"
 BAKED_ENV = REPO_ROOT / "kiwi-descriptions" / "root" / "etc" / "github-actions-remote-executor" / "env"
+
+# Import the helper module itself so the grouping tests stay drift-proof: the
+# "Other" catch-all assertions are computed from the helper's own CONFIG_CATEGORIES
+# map rather than a hard-coded field list.
+sys.path.insert(0, str(REPO_ROOT / ".github" / "scripts"))
+import print_config  # noqa: E402
 
 # Minimal required vars (mirrors tests/test_config.py _set_base_env); digest-pinned so validate() passes.
 _REQUIRED_ENV = {
@@ -175,3 +182,116 @@ def test_real_baked_env_file_resolves_cleanly():
     assert "| Setting | Value |" in result.stdout
     for f in dataclasses.fields(ServerConfig):
         assert f"| {f.name} |" in result.stdout, f"missing table row for field {f.name!r}"
+
+
+# --- Phase 10: grouped-by-category summary (FR-030 / SC-007) ------------------
+
+
+def _parse_sections(stdout: str) -> list[tuple[str, list[str]]]:
+    """Parse grouped Markdown into [(heading, [field_names])] in document order.
+
+    A subsection is a `#### <label>` heading followed by a `| Setting | Value |`
+    table; field names are the first cell of each data row (lower-case attribute
+    names — the `Setting`/`Value` header and `|---|---|` separator don't match).
+    """
+    sections: list[tuple[str, list[str]]] = []
+    label: str | None = None
+    fields: list[str] = []
+    for line in stdout.splitlines():
+        heading = re.match(r"^####\s+(.+?)\s*$", line)
+        if heading:
+            if label is not None:
+                sections.append((label, fields))
+            label, fields = heading.group(1), []
+            continue
+        row = re.match(r"^\|\s*([a-z][a-z0-9_]*)\s*\|", line)
+        if label is not None and row:
+            fields.append(row.group(1))
+    if label is not None:
+        sections.append((label, fields))
+    return sections
+
+
+def test_output_is_grouped_into_per_category_subsections(tmp_path):
+    """(a) Each non-empty category emits a `####` heading + its own `| Setting | Value |` table."""
+    env_file = _write_env(tmp_path / "good.env", _REQUIRED_ENV)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    sections = _parse_sections(result.stdout)
+    assert sections, "expected grouped #### subsections, got none"
+    # Each emitted subsection carries at least one field row...
+    for label, fields in sections:
+        assert fields, f"category {label!r} emitted no field rows"
+    # ...and exactly one table header per subsection.
+    assert result.stdout.count("| Setting | Value |") == len(sections)
+    # Category order follows the map (with "Other" allowed only at the end).
+    map_order = list(print_config.CONFIG_CATEGORIES.keys())
+    emitted = [label for label, _ in sections]
+    emitted_mapped = [label for label in emitted if label != "Other"]
+    assert emitted_mapped == [label for label in map_order if label in emitted_mapped]
+
+
+def test_container_security_settings_grouped_together(tmp_path):
+    """(b) The eight container-security settings sit together under `#### Container Security`."""
+    env_file = _write_env(tmp_path / "good.env", _REQUIRED_ENV)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    sections = dict(_parse_sections(result.stdout))
+    assert "Container Security" in sections, "missing '#### Container Security' subsection"
+    security = sections["Container Security"]
+    for name in (
+        "container_user",
+        "container_allow_root",
+        "container_cap_add",
+        "no_new_privileges",
+        "container_read_only_rootfs",
+        "container_tmpfs_size",
+        "workspace_mount_mode",
+        "container_network_mode",
+    ):
+        assert name in security, f"{name!r} not grouped under Container Security"
+
+
+def test_every_field_appears_exactly_once_across_subsections(tmp_path):
+    """(c) Every ServerConfig field appears exactly once across all subsections."""
+    env_file = _write_env(tmp_path / "good.env", _REQUIRED_ENV)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    seen = [name for _, fields in _parse_sections(result.stdout) for name in fields]
+    expected = sorted(f.name for f in dataclasses.fields(ServerConfig))
+    assert sorted(seen) == expected  # no field dropped, none duplicated
+    assert len(seen) == len(set(seen)), "a field was rendered in more than one subsection"
+
+
+def test_unmapped_fields_render_under_other_last(tmp_path):
+    """(d) Any field not in CONFIG_CATEGORIES renders under a catch-all `#### Other` placed last."""
+    env_file = _write_env(tmp_path / "good.env", _REQUIRED_ENV)
+    result = _run(env_file)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    sections = _parse_sections(result.stdout)
+    labels = [label for label, _ in sections]
+    mapped = {name for names in print_config.CONFIG_CATEGORIES.values() for name in names}
+    all_fields = {f.name for f in dataclasses.fields(ServerConfig)}
+    unmapped = all_fields - mapped
+
+    if unmapped:
+        assert "Other" in labels, "unmapped fields exist but no '#### Other' subsection"
+        assert labels[-1] == "Other", "the 'Other' subsection must be rendered last"
+        assert set(dict(sections)["Other"]) == unmapped
+    else:
+        assert "Other" not in labels, "empty 'Other' subsection should not be rendered"
+
+
+@pytest.mark.skipif(not BAKED_ENV.exists(), reason="baked env file not present")
+def test_real_baked_env_file_is_grouped(tmp_path):
+    """(e) The real baked env file resolves to grouped subsections covering every field (exit 0)."""
+    result = _run(BAKED_ENV)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    seen = [name for _, fields in _parse_sections(result.stdout) for name in fields]
+    expected = sorted(f.name for f in dataclasses.fields(ServerConfig))
+    assert sorted(seen) == expected

@@ -4,7 +4,14 @@
 Loads an ``EnvironmentFile``-style env file (the image's baked-in
 ``kiwi-descriptions/root/etc/github-actions-remote-executor/env``) through the
 application's *own* ``load_config()`` — the single source of truth — and renders
-every ``ServerConfig`` field as a GitHub-Flavored Markdown table on stdout.
+every ``ServerConfig`` field on stdout as GitHub-Flavored Markdown.
+
+The output is **grouped by configuration category** into labeled ``####``
+subsections in a stable, map-defined order (``CONFIG_CATEGORIES``), each its own
+``| Setting | Value |`` table. Any field not assigned a category falls into a
+catch-all ``Other`` subsection rendered **last** — so the field set stays derived
+from ``dataclasses.fields(ServerConfig)`` and a newly added field surfaces under
+``Other`` rather than being silently dropped (drift-proof; research Decision 11).
 
 This is build tooling (it lives under ``.github/scripts/``, alongside
 ``build-kiwi-image.sh``), not part of the executor runtime under ``src/``. It
@@ -33,6 +40,54 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import ConfigurationError, ServerConfig, load_config  # noqa: E402
+
+# Ordered map: category label -> ordered ServerConfig field names in that category.
+# Subsections render in this order; within a subsection, fields render in listed
+# order. Any field NOT listed here falls into a catch-all "Other" group rendered
+# last — keeping the printed field set derived from dataclasses.fields() so a newly
+# added field is never dropped (research Decision 11; build-config-summary-contract §1).
+CONFIG_CATEGORIES: dict[str, list[str]] = {
+    "HTTP Server": ["port"],
+    "Execution": [
+        "max_concurrent_executions",
+        "execution_timeout_seconds",
+        "max_script_size_bytes",
+    ],
+    "Rate Limiting": [
+        "rate_limit_per_ip",
+        "rate_limit_window_seconds",
+        "max_output_attestations_per_window",
+        "output_attestation_window_seconds",
+    ],
+    "Storage": ["temp_storage_path", "output_retention_hours"],
+    "NitroTPM": ["tpm_attest_path", "allow_no_tpm"],
+    "OIDC Authentication": [
+        "allowed_repositories",
+        "expected_audience",
+        "allowed_branches",
+        "require_protected_ref",
+    ],
+    "Container Execution": [
+        "container_image",
+        "container_image_digest",
+        "container_memory_limit",
+        "container_cpu_limit",
+        "container_pids_limit",
+    ],
+    "GPU": ["enable_gpu", "gpu_devices", "nvidia_driver_capabilities"],
+    "Container Security": [
+        "container_user",
+        "container_allow_root",
+        "container_cap_add",
+        "no_new_privileges",
+        "container_read_only_rootfs",
+        "container_tmpfs_size",
+        "workspace_mount_mode",
+        "container_network_mode",
+    ],
+}
+
+_OTHER_LABEL = "Other"
 
 
 def load_env_file(path: Path) -> None:
@@ -63,18 +118,39 @@ def _strip_surrounding_quotes(value: str) -> str:
     return value
 
 
-def render_table(config: ServerConfig) -> str:
-    """Render every ``ServerConfig`` field as a GitHub-Flavored Markdown table.
-
-    Rows are derived from ``dataclasses.fields()`` so the table cannot drift from
-    the code and automatically covers every setting (including fields absent from
-    the env file, which appear with their resolved defaults). Values are printed
-    verbatim — no redaction (the source env file is committed in the repo).
-    """
-    lines = ["| Setting | Value |", "|---|---|"]
-    for f in dataclasses.fields(config):
-        lines.append(f"| {f.name} | {getattr(config, f.name)} |")
+def _category_table(label: str, field_names: list[str], config: ServerConfig) -> str:
+    """Render one ``#### <label>`` subsection with its own `| Setting | Value |` table."""
+    lines = [f"#### {label}", "", "| Setting | Value |", "|---|---|"]
+    for name in field_names:
+        lines.append(f"| {name} | {getattr(config, name)} |")
     return "\n".join(lines)
+
+
+def render_table(config: ServerConfig) -> str:
+    """Render every ``ServerConfig`` field grouped by category as Markdown subsections.
+
+    Each category in ``CONFIG_CATEGORIES`` (in map order) that has at least one
+    field becomes a ``#### <label>`` heading + its own table. Any field not assigned
+    a category is collected into a catch-all ``Other`` subsection rendered last (only
+    when non-empty). The field set is derived from ``dataclasses.fields()`` so every
+    setting appears exactly once and a newly added field surfaces under ``Other``
+    rather than being dropped. Values are printed verbatim — no redaction (the source
+    env file is committed in the repo).
+    """
+    all_names = [f.name for f in dataclasses.fields(config)]
+    categorized = {name for names in CONFIG_CATEGORIES.values() for name in names}
+
+    sections: list[str] = []
+    for label, field_names in CONFIG_CATEGORIES.items():
+        present = [name for name in field_names if name in all_names]
+        if present:
+            sections.append(_category_table(label, present, config))
+
+    other = [name for name in all_names if name not in categorized]
+    if other:
+        sections.append(_category_table(_OTHER_LABEL, other, config))
+
+    return "\n\n".join(sections)
 
 
 def main(argv: list[str] | None = None) -> int:
