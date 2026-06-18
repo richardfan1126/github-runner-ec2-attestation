@@ -28,7 +28,7 @@ description: "Task list for Configurable Execution Permission on the Container S
 
 **Purpose**: Establish a known-good baseline before threading the new field through.
 
-- [ ] T001 Establish a green baseline: run `uv run pytest` from the repo root and confirm the existing suites pass before making changes (no new dependencies are required for this feature).
+- [X] T001 Establish a green baseline: run `uv run pytest` from the repo root and confirm the existing suites pass before making changes (no new dependencies are required for this feature).
 
 ---
 
@@ -38,8 +38,8 @@ description: "Task list for Configurable Execution Permission on the Container S
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T002 Add field `container_tmpfs_exec: bool = False` to the `ServerConfig` dataclass in `src/config.py`, immediately after `container_tmpfs_size` (~L142) in the Container Security block.
-- [ ] T003 In `ServerConfig.from_env()` in `src/config.py`, parse `CONTAINER_TMPFS_EXEC` with `parse_strict_bool(os.getenv("CONTAINER_TMPFS_EXEC", "false"), "CONTAINER_TMPFS_EXEC")` (mirroring the `container_tmpfs_size` parse site ~L314-315) and pass `container_tmpfs_exec=...` into the constructed `ServerConfig(...)` (~L383). No new `validate()` rule — `parse_strict_bool` fails fast on invalid input.
+- [X] T002 Add field `container_tmpfs_exec: bool = False` to the `ServerConfig` dataclass in `src/config.py`, immediately after `container_tmpfs_size` (~L142) in the Container Security block.
+- [X] T003 In `ServerConfig.from_env()` in `src/config.py`, parse `CONTAINER_TMPFS_EXEC` with `parse_strict_bool(os.getenv("CONTAINER_TMPFS_EXEC", "false"), "CONTAINER_TMPFS_EXEC")` (mirroring the `container_tmpfs_size` parse site ~L314-315) and pass `container_tmpfs_exec=...` into the constructed `ServerConfig(...)` (~L383). No new `validate()` rule — `parse_strict_bool` fails fast on invalid input.
 
 **Checkpoint**: `load_config().container_tmpfs_exec` resolves (default `False`); invalid values fail fast naming the variable. User stories can now begin.
 
@@ -53,14 +53,14 @@ description: "Task list for Configurable Execution Permission on the Container S
 
 ### Implementation for User Story 1
 
-- [ ] T004 [US1] Add constructor parameter `tmpfs_exec: bool = False` to `ScriptExecutor.__init__` and store `self._tmpfs_exec = tmpfs_exec` in `src/script_executor.py` (constructor ~L32-106, alongside the existing `tmpfs_size` / `self._tmpfs_size`).
-- [ ] T005 [US1] In the `if self._tmpfs_size:` block in `src/script_executor.py` (~L278-279), conditionally append `",exec"` to the `/tmp` tmpfs options string **only** when `self._tmpfs_exec` is `True` (e.g. `f"size={self._tmpfs_size},mode=1777" + (",exec" if self._tmpfs_exec else "")`). Leave `size`, `mode=1777`, and the Docker-default `nosuid`/`nodev` untouched; the disabled path MUST stay byte-identical to today.
-- [ ] T006 [US1] Wire `config.container_tmpfs_exec` into the `ScriptExecutor(...)` construction as `tmpfs_exec=config.container_tmpfs_exec` in `src/server.py` (~L330, next to the existing `tmpfs_size=` argument).
+- [X] T004 [US1] Add constructor parameter `tmpfs_exec: bool = False` to `ScriptExecutor.__init__` and store `self._tmpfs_exec = tmpfs_exec` in `src/script_executor.py` (constructor ~L32-106, alongside the existing `tmpfs_size` / `self._tmpfs_size`).
+- [X] T005 [US1] In the `if self._tmpfs_size:` block in `src/script_executor.py` (~L278-279), conditionally append `",exec"` to the `/tmp` tmpfs options string **only** when `self._tmpfs_exec` is `True` (e.g. `f"size={self._tmpfs_size},mode=1777" + (",exec" if self._tmpfs_exec else "")`). Leave `size`, `mode=1777`, and the Docker-default `nosuid`/`nodev` untouched; the disabled path MUST stay byte-identical to today.
+- [X] T006 [US1] Wire `config.container_tmpfs_exec` into the `ScriptExecutor(...)` construction as `tmpfs_exec=config.container_tmpfs_exec` in `src/server.py` (~L330, next to the existing `tmpfs_size=` argument).
 
 ### Tests for User Story 1
 
-- [ ] T007 [P] [US1] Add config tests in `tests/test_config.py` and `tests/test_config_properties.py`: unset → `container_tmpfs_exec is False`; falsy values (`false`/`0`/`no`, case-insensitive) → `False`.
-- [ ] T008 [P] [US1] Add executor tests in `tests/test_script_executor.py` and `tests/test_docker_container_properties.py`: with `tmpfs_exec=False` and a non-empty size, the `/tmp` tmpfs options string contains no `exec` and is byte-identical to the pre-feature string (INV-1); `mode=1777`/size/`nosuid`/`nodev` invariants hold.
+- [X] T007 [P] [US1] Add config tests in `tests/test_config.py` and `tests/test_config_properties.py`: unset → `container_tmpfs_exec is False`; falsy values (`false`/`0`/`no`, case-insensitive) → `False`.
+- [X] T008 [P] [US1] Add executor tests in `tests/test_script_executor.py` and `tests/test_docker_container_properties.py`: with `tmpfs_exec=False` and a non-empty size, the `/tmp` tmpfs options string contains no `exec` and is byte-identical to the pre-feature string (INV-1); `mode=1777`/size/`nosuid`/`nodev` invariants hold.
 
 **Checkpoint**: Secure-by-default mount path complete and independently testable (SC-001).
 

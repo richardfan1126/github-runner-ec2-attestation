@@ -571,6 +571,7 @@ def security_config(draw):
         "no_new_privileges": draw(st.booleans()),
         "read_only_rootfs": draw(st.booleans()),
         "tmpfs_size": tmpfs_size,
+        "tmpfs_exec": draw(st.booleans()),
         "workspace_mount_mode": draw(st.sampled_from(["ro", "rw"])),
         "network_mode": draw(st.sampled_from(["none", "bridge", "host"])),
     }
@@ -632,7 +633,8 @@ def test_property_153_security_kwargs_reflect_config(params, sec):
 
         # tmpfs mounted at /tmp iff tmpfs_size non-empty (independent of read_only)
         if sec["tmpfs_size"]:
-            assert call.get("tmpfs") == {"/tmp": f"size={sec['tmpfs_size']},mode=1777"}
+            expected_opts = f"size={sec['tmpfs_size']},mode=1777" + (",exec" if sec.get("tmpfs_exec") else "")
+            assert call.get("tmpfs") == {"/tmp": expected_opts}
         else:
             assert "tmpfs" not in call
 
@@ -641,3 +643,33 @@ def test_property_153_security_kwargs_reflect_config(params, sec):
             assert call.get("security_opt") == ["no-new-privileges"]
         else:
             assert "security_opt" not in call
+
+
+# --- T008: tmpfs_exec=False noexec default invariant (INV-1) ---
+
+def test_noexec_default_byte_identical():
+    """With tmpfs_exec unset (default False), tmpfs options are exactly 'size=256m,mode=1777' (INV-1)."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mock_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=mock_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir,
+        )
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="c" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo ok\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        _wait_for_terminal(manager, record.execution_id)
+
+        call = mock_client.containers._creation_calls[0]
+        assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}, (
+            f"Default executor MUST produce byte-identical pre-feature string, got {call.get('tmpfs')!r}"
+        )

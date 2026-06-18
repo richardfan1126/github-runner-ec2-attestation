@@ -252,3 +252,20 @@ def test_invalid_network_mode_message_lists_accepted_values(monkeypatch):
         load_config()
     message = str(exc_info.value)
     assert "none, bridge, host" in message
+
+
+# --- T007: CONTAINER_TMPFS_EXEC default and falsy values (US1 / SC-001) ---
+
+def test_container_tmpfs_exec_default_is_false(monkeypatch):
+    """CONTAINER_TMPFS_EXEC unset defaults to False (secure-by-default, SC-001)."""
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("CONTAINER_TMPFS_EXEC", raising=False)
+    assert load_config().container_tmpfs_exec is False
+
+
+@pytest.mark.parametrize("value", ["false", "False", "FALSE", "0", "no", "No", "NO"])
+def test_container_tmpfs_exec_falsy_values(monkeypatch, value):
+    """All falsy CONTAINER_TMPFS_EXEC strings resolve to False."""
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CONTAINER_TMPFS_EXEC", value)
+    assert load_config().container_tmpfs_exec is False

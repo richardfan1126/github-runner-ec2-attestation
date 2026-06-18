@@ -647,3 +647,13 @@ def test_property_invalid_tmpfs_size_rejected(bad_size):
     with pytest.raises(ValueError) as exc_info:
         config.validate()
     assert "CONTAINER_TMPFS_SIZE" in str(exc_info.value)
+
+
+# --- T007: CONTAINER_TMPFS_EXEC property-based tests (US1 / SC-001) ---
+
+@given(flag=st.booleans())
+@settings(max_examples=10)
+def test_property_tmpfs_exec_field_stored(flag):
+    """container_tmpfs_exec is stored as given — no coercion or inversion."""
+    config = _security_config(container_tmpfs_exec=flag)
+    assert config.container_tmpfs_exec is flag

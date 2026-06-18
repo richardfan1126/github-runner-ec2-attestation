@@ -328,6 +328,7 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
         no_new_privileges=config.no_new_privileges,
         read_only_rootfs=config.container_read_only_rootfs,
         tmpfs_size=config.container_tmpfs_size,
+        tmpfs_exec=config.container_tmpfs_exec,
         workspace_mount_mode=config.workspace_mount_mode,
         network_mode=config.container_network_mode,
     )
