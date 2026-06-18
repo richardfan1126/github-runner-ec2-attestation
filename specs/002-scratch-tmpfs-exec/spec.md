@@ -37,6 +37,14 @@ the others, **defaults to the secure choice** (`noexec`) and can be opted out of
 per-deployment without code changes, with the effective value observable for
 attestation.
 
+## Clarifications
+
+### Session 2026-06-18
+
+- Q: When `CONTAINER_TMPFS_EXEC` is enabled but `CONTAINER_TMPFS_SIZE` is empty (no tmpfs mounted), what should happen? → A: Resolve & attest the value normally, apply no mount change, and emit a startup log warning that exec is enabled but has no effect because no tmpfs is mounted (no fail-fast).
+- Q: Which exact string values does `CONTAINER_TMPFS_EXEC` accept? → A: Case-insensitive `true`/`1`/`yes` → enabled and `false`/`0`/`no` → disabled; any other value fails fast (matches the existing `parse_strict_bool`).
+- Q: What is the attested `user_data` field name for the effective value? → A: `container_tmpfs_exec` (boolean), alongside `container_tmpfs_size`, following the existing `container_`-prefixed convention.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Non-executable scratch by default (Priority: P1)
@@ -131,7 +139,9 @@ enabled; confirm the build-time configuration summary and the attested
 - **Scratch disabled entirely**: When `CONTAINER_TMPFS_SIZE` is empty (no tmpfs
   scratch mounted), the scratch-exec setting has no mount to apply to. The
   setting is still resolved and attested, but it has no effect on container
-  creation because no tmpfs is mounted.
+  creation because no tmpfs is mounted. When the setting is *enabled* in this
+  case, the server MUST emit a startup log warning that exec is enabled but has
+  no effect because no tmpfs is mounted; it MUST NOT fail fast.
 - **Invalid value**: A value that is neither a recognized truthy nor falsy
   string MUST fail fast at startup, naming the offending variable, consistent
   with the strict boolean parsing used by the other security toggles.
@@ -153,8 +163,9 @@ enabled; confirm the build-time configuration summary and the attested
   deployments.
 - **FR-003**: The variable MUST be parsed with the same strict boolean grammar
   as the other container-security toggles (e.g. `NO_NEW_PRIVILEGES`,
-  `CONTAINER_READ_ONLY_ROOTFS`); an unrecognized value MUST cause the server to
-  fail fast at startup, naming the variable.
+  `CONTAINER_READ_ONLY_ROOTFS`): case-insensitive `true`/`1`/`yes` resolve to
+  enabled and `false`/`0`/`no` resolve to disabled. Any other value MUST cause
+  the server to fail fast at startup, naming the variable.
 - **FR-004**: When the setting is disabled, the `/tmp` scratch tmpfs MUST be
   mounted without the `exec` option (Docker's default `noexec`), and binaries
   under `/tmp` MUST NOT be executable.
@@ -166,14 +177,17 @@ enabled; confirm the build-time configuration summary and the attested
   size, or the `nosuid`/`nodev` protections of the scratch mount.
 - **FR-007**: The setting MUST have no effect on container creation when no
   tmpfs scratch is mounted (`CONTAINER_TMPFS_SIZE` empty); resolution and
-  attestation of the value MUST still occur.
+  attestation of the value MUST still occur. When the setting is enabled while
+  no tmpfs is mounted, the server MUST emit a startup log warning that exec is
+  enabled but has no effect, and MUST NOT fail fast.
 - **FR-008**: The effective value of the setting MUST be threaded from the
   server configuration to the container-creation path so that the attested
   posture matches the mount actually applied (no drift between reported and
   effective behavior).
 - **FR-009**: The effective value MUST be included in the executor's attested
   configuration (`user_data`) alongside the existing container-security
-  settings.
+  settings, as a boolean field named `container_tmpfs_exec` (following the
+  existing `container_`-prefixed naming, paired with `container_tmpfs_size`).
 - **FR-010**: The effective value MUST appear in the `Build Attestable Image`
   workflow's server-configuration summary, derived programmatically from the
   application's configuration so it cannot drift from the value baked into the
