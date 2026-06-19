@@ -12,7 +12,7 @@ individual seams in isolation, which the per-seam suites already cover):
 These mirror the real wiring in ``src/server.py`` (executor construction ~L312
 and the ``generate_attestation`` / ``generate_output_attestation`` call sites).
 
-See specs/001-container-security-config/quickstart.md ("Done When").
+See openspec/specs/container-security/spec.md.
 """
 import json
 import os

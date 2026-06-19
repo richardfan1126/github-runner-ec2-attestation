@@ -1,5 +1,2 @@
-<!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan:
-specs/002-scratch-tmpfs-exec/plan.md
-<!-- SPECKIT END -->
+For context about the project's capabilities, requirements, and design
+rationale, read the OpenSpec specifications in `openspec/specs/`.
