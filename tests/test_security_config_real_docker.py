@@ -14,8 +14,8 @@ in standard CI. To run them explicitly:
 
     RUN_REAL_DOCKER_TESTS=1 .venv/bin/pytest -q tests/test_security_config_real_docker.py
 
-See specs/001-container-security-config/spec.md (Clarifications 2026-06-13) and
-SC-006.
+See openspec/specs/container-security/spec.md and design.md (tmpfs scratch /
+relaxation-is-observable rationale).
 """
 import os
 import tempfile

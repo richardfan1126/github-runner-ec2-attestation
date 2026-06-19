@@ -320,7 +320,7 @@ class TestBothFieldsPresent:
 
 
 # The eight container-security values bound into user_data (hardened defaults).
-# See specs/001-container-security-config/contracts/attestation-user-data-contract.md
+# See openspec/specs/container-security/spec.md (attested posture requirements).
 SECURITY_KWARGS = dict(
     container_user="65534:65534",
     container_allow_root=False,
