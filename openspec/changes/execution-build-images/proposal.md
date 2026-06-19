@@ -6,7 +6,7 @@ Today this repository builds a single attestable AMI that runs the Remote Execut
 
 - Introduce a developer-facing definition of multiple **build-environment flavors** (e.g. `projects.yml` + a shared hardened base + a thin per-flavor Dockerfile). Each flavor declares its environment (base image, toolchain, OS packages, checksummed out-of-band downloads) and its sandbox config overrides.
 - Add a GitHub Actions pipeline that builds a **hardened execution-container image per flavor**, satisfying the executor's hardened contract (rootless `65534`, world-exec tools on PATH, pinned, no run-time install), and publishes each to GHCR **by immutable digest**.
-- Bake **each flavor's image into its own AMI** (one AMI per flavor) as a digest-preserving **OCI image layout** inside the dm-verity-sealed erofs root, with that flavor's effective sandbox config, keeping the GHCR image (same manifest digest) as the canonical/provenance reference. See **Resolved Decisions** D1–D2 below for the baking format, runtime binding, and verifier anchor.
+- Bake **each flavor's image into its own AMI** (one AMI per flavor) as a digest-preserving **OCI image layout** inside the dm-verity-sealed erofs root, with that flavor's effective sandbox config, keeping the GHCR image (same manifest digest) as the canonical/provenance reference. The baking *mechanism* itself (OCI-layout format, offline verification, image-ID runtime binding, GHCR-digest anchor) is delivered single-flavor by the **prerequisite change `bake-image-into-ami` (Change 1)** — see **Prerequisite & scope split (D5)** below; this change multiplies it to N flavors and adds the per-flavor baked sandbox config.
 - Scope boundary (**not** a guest-build tool): this repo defines build **environments only**. Guest project source and guest build scripts stay in guest repos and are cloned by the executor at run time. A flavor definition carries no build script, no compile hook, and no artifact contract; the image ships `oras`/`curl`/CA-certs as tools but no build orchestration.
 - Sandbox config is **secure-by-default, per-flavor-overridable**: every security-relevant `container-security` setting defaults to its hardened value and may be overridden explicitly per flavor; the effective config is baked into that flavor's AMI, shown in the build-time configuration summary, and bound into the runtime attestation.
 
@@ -14,41 +14,28 @@ This proposal deliberately leaves several **open questions unresolved**, to be s
 
 - **Q1 — Flavor manifest schema**: concrete shape of the flavor definition (base image + toolchain + OS packages + checksummed downloads + sandbox-config overrides; no build/artifact fields).
 - **Q2 — Rebuild strategy / cost** *(resolved by D4)*.
-- **Q4 — Verifier model** *(largely resolved by D2 and D4)*: the canonical anchor (the per-flavor GHCR manifest digest) and the dual GHCR/Sigstore-vs-NitroTPM/PCR4 verification surfaces are settled in D2; the per-flavor publication/mapping mechanism is the durable `flavors.lock` record in D4. What remains open is only **where that record lives** (git-committed source of truth vs. SSM mirror — see D4) and **where/how a consumer is expected to run the runtime NitroTPM attestation check**.
-- **Q5 — Baking feasibility** *(resolved by D1)*.
-- **Q6 — Per-flavor scratch + image RAM sizing**: RAM-backed tmpfs sizing and instance-memory implications — now including the decompressed baked image resident in the RAM overlay (per D1) on top of the `256m` `/tmp` default (demo assumed ≥4 GiB vs. this repo's `256m` default).
-- **Q8 — Spec scoping**: which existing capabilities need delta specs vs. being subsumed here, and whether this ships as one change or several.
+- **Q4 — Verifier model** *(largely resolved by Change 1's D2 and this change's D4)*: the canonical anchor (the per-flavor GHCR manifest digest) and the dual GHCR/Sigstore-vs-NitroTPM/PCR4 verification surfaces are settled by Change 1's D2; the per-flavor publication/mapping mechanism is the durable `flavors.lock` record in D4 (generalizing Change 1's single-entry verifier record). What remains open is only **where that record lives** (git-committed source of truth vs. SSM mirror — see D4) and **where/how a consumer is expected to run the runtime NitroTPM attestation check**.
+- **Q5 — Baking feasibility** *(resolved by Change 1's D1)*.
+- **Q6 — Per-flavor scratch + image RAM sizing**: RAM-backed tmpfs sizing and instance-memory implications — now including the decompressed baked image resident in the RAM overlay (per Change 1's D1) on top of the `256m` `/tmp` default (demo assumed ≥4 GiB vs. this repo's `256m` default).
+- **Q8 — Spec scoping** *(resolved by D5)*: no existing capability is subsumed; `image-build`/`ami-build`/`container-security` receive delta specs and this change adds one new flavor-fleet capability, sequenced after the `bake-image-into-ami` prerequisite — see D5.
 - **Q9 — Flavor → executor routing**: given one AMI/executor per flavor (D3), how a caller targets the right one.
 - **Q-new — Optional guest-side build-wrapper**: whether this repo should also publish a reusable guest-side composite action (separable).
 - **Terminology**: whether "project" / "flavor" / "build environment" / "runner flavor" is the right user-facing term.
 
 ## Resolved Decisions
 
-### D1 — Image baking format and runtime binding (resolves Q5)
+### D5 — Prerequisite & scope split: bake first (single flavor), then multiply (resolves Q8)
 
-**Decision**: bake each flavor's execution-container image into the AMI as an **OCI image layout** placed inside the dm-verity-sealed erofs root (covered by `verity_blocks="all"`, so its bytes are measured into PCR4). At run time the executor verifies the baked layout's **manifest digest** against the expected per-flavor value **offline** (no registry, no network), imports it into the existing rootless Docker daemon, and binds container creation to the resulting **image ID** (config digest) rather than the daemon's `RepoDigests`. (This is "Option A"; the rejected "Option B" was switching the daemon to the containerd image store.)
+**Decision**: deliver the work as **two sequenced changes** rather than one. The bake-instead-of-pull *mechanism* ships single-flavor in the prerequisite change **`bake-image-into-ami` (Change 1)**; this change (`execution-build-images`, Change 2) depends on it and adds the multi-flavor fleet on top.
 
 **Rationale**:
 
-- **Filesystem feasibility is the status quo, not a new risk.** With `overlayroot_write_partition="false"`, Docker's `data-root` (`/var/lib/gha-executor/docker`) already lives on the ephemeral tmpfs/RAM overlay above the read-only erofs root, served by source-compiled `fuse-overlayfs` (kernel `overlay2` is documented as unsupported on an overlayfs backing). The shipping product already pulls the image into exactly this location at startup, so "docker data-root on the ephemeral overlay" carries no new feasibility risk.
-- **Plain `docker save`/`docker load` cannot be used.** A save/load round-trip drops `RepoDigests` (moby#22011): registries — not local daemons — assign manifest digests, so a loaded image reports digest `<none>`, breaking the executor's existing digest-pinning contract.
-- **An OCI layout preserves the digest binding without a registry.** The OCI layout is content-addressed, so the manifest digest travels with the bytes; it is verified offline against the verity-measured layout, and the image ID it commits to is used for execution. This avoids switching the daemon to the containerd image store (Option B), which would entangle the rootless `fuse-overlayfs` snapshotter and re-open all existing hardening — a larger blast radius for a property Option A obtains without it.
-- **Cost (feeds Q6):** the imported image is resident in the RAM overlay for the instance's lifetime, so per-flavor instance memory must budget the decompressed image size on top of the `256m` `/tmp` scratch and the workspace.
+- **Two orthogonal axes were bundled.** Axis 1 = *how* the image reaches the executor (runtime pull → baked, offline-verified). Axis 2 = *how many* environments (one → N flavors). Axis 2 depends on Axis 1 (per D3 the per-flavor sandbox config is bound by PCR4, which is only possible once it is baked), but Axis 1 stands alone and is valuable single-flavor (removes the boot-time GHCR dependency; folds the image into measured boot).
+- **Risk placement.** D1 (offline OCI-layout import on the rootless `fuse-overlayfs` RAM overlay, image-ID binding to survive the `RepoDigests` loss) is the most novel, least-proven claim. Change 1 proves it single-flavor *before* the manifest schema, dynamic matrix, and N× AMI cost are built on top — and Change 1's runtime code is exactly what this change reuses, so rework risk is low.
 
-### D2 — Canonical verifier anchor: the GHCR manifest digest (resolves the anchor part of Q4)
+**Spec-scoping consequence (the other half of Q8)**: **nothing is subsumed.** `image-build`, `ami-build`, and `container-security` receive **delta specs** (split across the two changes); this change adds **one new flavor-fleet capability** (the flavor manifest + selective rebuild + `flavors.lock`). No mega-capability that re-owns image building.
 
-**Decision**: the **per-flavor GHCR manifest digest is the single canonical identifier** the build publishes, the executor verifies the baked layout against, and external consumers verify against. The build pushes each flavor to GHCR by digest (canonical/provenance reference) and bakes the byte-identical OCI layout into the AMI under the same digest.
-
-**Rationale and properties**:
-
-- **Image authenticity is verifiable without the AMI.** A third party pulls `ghcr.io/<owner>/<image>@sha256:<manifest>` (digest-pinned, verified client-side), verifies the Sigstore build-provenance attestation, and inspects the image — none of which touches the AMI.
-- **The image ID is identical across both distributions, by definition.** Per the OCI image-spec, the image ID is `SHA256(config JSON)`, content-addressable and immutable; the manifest references the config by digest, so the manifest digest deterministically commits to the config digest = image ID. Image ID is independent of registry-vs-local, pull-vs-load, and graphdriver-vs-containerd store — therefore the image ID a consumer computes from GHCR equals the image ID the AMI executes, and the `RepoDigests` loss is irrelevant because it never affects the image ID.
-- **Runtime binding remains an AMI/attestation property** (intrinsic): proving *this instance runs that image* uses the NitroTPM runtime attestation, with PCR4 binding the baked layout (it is in the verity root). The two surfaces — GHCR/Sigstore for image authenticity, NitroTPM/PCR4 for runtime binding — join at the shared manifest-digest anchor. Surfacing `container_image_digest` (the manifest digest) in the attestation `user_data` makes the runtime attestation self-describing.
-
-**Two byte-identity constraints the build pipeline must honor**:
-
-1. **Single-platform anchor.** The per-flavor anchor must resolve to the `linux/amd64` manifest (the AMI architecture); a multi-platform index digest resolves per-host and yields a different image ID off-platform.
-2. **Digest-preserving copy.** The baked layout must be copied from the GHCR artifact by digest (e.g. `oras cp` / `skopeo copy` preserving digests), never rebuilt or media-type-converted, which would rewrite the config JSON and change the image ID.
+**Decision migration**: **D1** and the single-flavor **core of D2** (GHCR-digest anchor, image-ID binding, the two byte-identity constraints) move to Change 1. They remain referenced here because this change *multiplies* them per flavor; D3 and D4 (and the per-flavor multiplication of D2) stay in this change.
 
 ### D3 — One AMI per flavor (confirmed)
 
@@ -72,7 +59,7 @@ This proposal deliberately leaves several **open questions unresolved**, to be s
 
 **Durable record (`flavors.lock`)**:
 
-- Selective rebuild and the durable record are a **package deal**: "only changed flavors rebuild" requires "unchanged flavors are remembered durably." `flavors.lock` is that memory, and it **doubles as Q4's per-flavor verifier mapping** (flavor → expected PCR4 + manifest digest + AMI).
+- Selective rebuild and the durable record are a **package deal**: "only changed flavors rebuild" requires "unchanged flavors are remembered durably." `flavors.lock` is that memory, and it **doubles as Q4's per-flavor verifier mapping** (flavor → expected PCR4 + manifest digest + AMI). It **generalizes Change 1's minimal single-entry verifier record** (D-rec) from one image to N flavors, reusing the same fields so the verifier story is continuous across the split.
 - **Open sub-decision (deferred to design):** where `flavors.lock` lives — a **git-committed source of truth** (best auditability; verifier reads flavor → PCR4 → digest → AMI from history, tied to the producing commit) optionally mirrored to **SSM Parameter Store** for the `deployment` side to consume.
 
 **Fail-safe and edge-case requirements** (to be specified at design time):
@@ -90,16 +77,18 @@ This proposal deliberately leaves several **open questions unresolved**, to be s
 - `execution-build-images`: Define multiple hardened build-environment flavors; build and publish a hardened execution-container image per flavor to GHCR by digest; bake each into its own attestable AMI carrying that flavor's secure-by-default, per-flavor sandbox configuration.
 
 ### Modified Capabilities
-<!-- Deferred pending open question Q8 (spec scoping). Baking per-flavor images and
-     config plausibly changes requirements in `image-build`, `ami-build`, and
-     `container-security`, but whether those capabilities need delta specs (and whether
-     this lands as one change or several) is the explicit open question Q8 above,
-     so no delta specs are authored at the proposal stage. -->
+
+Per D5 (Q8 resolved), this change authors delta specs for the following — none is subsumed:
+
+- `image-build`: KIWI build **parameterized 1 → N per flavor**, each baking that flavor's OCI layout. (The pull → offline-verified-bake *mechanism* itself is delivered by Change 1; this change multiplies it.)
+- `ami-build`: **one AMI per flavor** driven by a dynamic matrix.
+- `container-security`: per-flavor **effective sandbox config baked into the verity root and bound by PCR4** (the shift from runtime operator-set config; `container-security` is untouched by Change 1).
 
 ## Impact
 
-- **New artifacts**: a flavor manifest (e.g. `projects.yml`), a shared hardened base image definition, per-flavor Dockerfiles, a per-flavor build/publish/build-ami workflow (matrix), and a per-flavor OCI image layout copied **by digest** into the KIWI root tree (per D1–D2).
-- **Affected existing capabilities/code (pending Q8)**: `image-build` (KIWI build parameterized and baking a per-flavor OCI layout; its "Container image pull at server startup" requirement shifts from a network `docker pull`+`RepoDigests` check to an **offline manifest-digest verification of the baked layout + image-ID execution** per D1 — a delta to be authored at the design phase), `ami-build` (one AMI per flavor), `container-security` (per-flavor effective config baked and summarized). PCR4 already binds the baked image/config via whole-root dm-verity (the verity root hash is embedded in the UKI that PCR4 measures), so no executor `user_data` change is required for integrity (though D2 surfaces `container_image_digest` in `user_data` to make the runtime attestation self-describing).
+- **Prerequisite**: depends on **`bake-image-into-ami` (Change 1)**, which delivers the single-flavor bake mechanism (D1 + D2-core) and the minimal single-entry verifier record this change generalizes.
+- **New artifacts**: a flavor manifest (e.g. `projects.yml`), a shared hardened base image definition, per-flavor Dockerfiles, a per-flavor build/publish/build-ami workflow (matrix), and a per-flavor OCI image layout copied **by digest** into the KIWI root tree (reusing Change 1's bake path).
+- **Affected existing capabilities/code (per D5)**: `image-build` (KIWI build parameterized 1 → N and baking a per-flavor OCI layout — building on Change 1's pull → offline-bake mechanism), `ami-build` (one AMI per flavor), `container-security` (per-flavor effective config baked and summarized, bound by PCR4). PCR4 already binds the baked image/config via whole-root dm-verity (the verity root hash is embedded in the UKI that PCR4 measures), so no executor `user_data` change is required for integrity (Change 1's D2 surfaces `container_image_digest` in `user_data` to make the runtime attestation self-describing).
 - **CI cost**: up to N full KIWI→AMI builds in the worst case (a global invalidator), but per-commit cost is bounded to the changed flavors by the selective-rebuild strategy in D4 (with image builds further skipped on AMI-only changes).
 - **New persistent state**: a durable `flavors.lock` record (D4) mapping each flavor to its image manifest digest, PCR4, AMI id, and producing commit — carried forward across selective-rebuild runs and doubling as Q4's verifier mapping.
 - **No change to**: the guest-side build flow (`remote-executor` execution, cloning, `request-encryption`) — guests still ship their own source and build scripts.
