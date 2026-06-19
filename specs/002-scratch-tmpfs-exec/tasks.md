@@ -109,8 +109,8 @@ description: "Task list for Configurable Execution Permission on the Container S
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T018 [P] If any operator-facing doc beyond `.env.example` (e.g. `README` / docs) enumerates the container-security variables, add `CONTAINER_TMPFS_EXEC` with its secure default and security note for parity (FR-011).
-- [ ] T019 Run the quickstart validation end-to-end: execute Scenarios 1–6 in `specs/002-scratch-tmpfs-exec/quickstart.md` and confirm `uv run pytest` is green across all touched suites.
+- [X] T018 [P] If any operator-facing doc beyond `.env.example` (e.g. `README` / docs) enumerates the container-security variables, add `CONTAINER_TMPFS_EXEC` with its secure default and security note for parity (FR-011).
+- [X] T019 Run the quickstart validation end-to-end: execute Scenarios 1–6 in `specs/002-scratch-tmpfs-exec/quickstart.md` and confirm `uv run pytest` is green across all touched suites.
 
 ---
 

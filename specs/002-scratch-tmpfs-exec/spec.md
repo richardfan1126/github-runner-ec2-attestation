@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-18
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "Configurable execution permission on the container scratch tmpfs so build toolchains that compile and run helper binaries (e.g. Cargo build scripts) work, defaulting to noexec to preserve hardening."
 
