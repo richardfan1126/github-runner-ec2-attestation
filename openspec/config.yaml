@@ -2,12 +2,32 @@ schema: spec-driven
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Domain: GitHub Actions Remote Executor — a secure service that runs scripts
+  requested by GitHub Actions workflows inside ephemeral Docker containers on an
+  attestable EC2 instance with NitroTPM, returning cryptographic attestation of
+  the execution environment.
+
+  Tech stack:
+    - Python (FastAPI + uvicorn) for the executor service (src/), boto3/paramiko
+      for build/deploy scripts (scripts/, separate pyproject.toml), managed with uv.
+    - Docker (rootless) for ephemeral Execution_Containers.
+    - KIWI NG to build the attestable AMI (Amazon Linux 2023, erofs read-only root).
+    - Terraform for AMI-build, deploy, and IAM-role stacks (AWS provider ~> 5.0).
+    - GitHub Actions for the build/publish/build-ami pipeline; OIDC for AWS creds.
+    - Crypto: X25519 + ML-KEM-768 hybrid KEM (cryptography + wolfcrypt-py),
+      AES-256-GCM, HKDF-SHA256; GitHub OIDC for request auth; Sigstore/ORAS for
+      artifact provenance.
+
+  Conventions:
+    - Secure-by-default: every relaxation must be explicit, validated fail-fast at
+      startup, and observable in the NitroTPM attestation user_data.
+    - Pin everything (action SHAs, image digests, source tags) and verify integrity.
+    - These specs were imported from prior Kiro (.kiro/specs/) and spec-kit
+      (specs/) documents and describe the already-implemented system.
+
+  Capabilities: remote-executor, request-encryption, image-build, ami-build,
+  deployment, cleanup, container-security.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
