@@ -838,6 +838,7 @@ def security_config(draw):
         no_new_privileges=draw(st.booleans()),
         container_read_only_rootfs=draw(st.booleans()),
         container_tmpfs_size=tmpfs,
+        container_tmpfs_exec=draw(st.booleans()),
         workspace_mount_mode=draw(st.sampled_from(["ro", "rw"])),
         container_network_mode=draw(st.sampled_from(["none", "bridge", "host"])),
     )
@@ -861,7 +862,7 @@ def _capture_user_data_side_effect(captured):
 SECURITY_KEYS = {
     "container_user", "container_allow_root", "container_cap_add",
     "no_new_privileges", "container_read_only_rootfs", "container_tmpfs_size",
-    "workspace_mount_mode", "container_network_mode",
+    "container_tmpfs_exec", "workspace_mount_mode", "container_network_mode",
 }
 
 

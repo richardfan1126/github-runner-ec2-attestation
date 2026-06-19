@@ -58,6 +58,7 @@ class AttestationGenerator:
         container_tmpfs_size: Optional[str],
         workspace_mount_mode: Optional[str],
         container_network_mode: Optional[str],
+        container_tmpfs_exec: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Build the container-security subset of user_data from resolved config values.
@@ -81,6 +82,8 @@ class AttestationGenerator:
             fields["container_read_only_rootfs"] = container_read_only_rootfs
         if container_tmpfs_size is not None:
             fields["container_tmpfs_size"] = container_tmpfs_size
+        if container_tmpfs_exec is not None:
+            fields["container_tmpfs_exec"] = container_tmpfs_exec
         if workspace_mount_mode is not None:
             fields["workspace_mount_mode"] = workspace_mount_mode
         if container_network_mode is not None:
@@ -123,6 +126,7 @@ class AttestationGenerator:
         no_new_privileges: Optional[bool] = None,
         container_read_only_rootfs: Optional[bool] = None,
         container_tmpfs_size: Optional[str] = None,
+        container_tmpfs_exec: Optional[bool] = None,
         workspace_mount_mode: Optional[str] = None,
         container_network_mode: Optional[str] = None,
     ) -> tuple[Optional[AttestationDocument], Optional[AttestationError]]:
@@ -196,6 +200,7 @@ class AttestationGenerator:
                     container_user, container_allow_root, container_cap_add,
                     no_new_privileges, container_read_only_rootfs, container_tmpfs_size,
                     workspace_mount_mode, container_network_mode,
+                    container_tmpfs_exec=container_tmpfs_exec,
                 ))
                 user_data_json = json.dumps(user_data)
 
@@ -366,6 +371,7 @@ class AttestationGenerator:
         no_new_privileges: Optional[bool] = None,
         container_read_only_rootfs: Optional[bool] = None,
         container_tmpfs_size: Optional[str] = None,
+        container_tmpfs_exec: Optional[bool] = None,
         workspace_mount_mode: Optional[str] = None,
         container_network_mode: Optional[str] = None,
     ) -> tuple[Optional[bytes], Optional[str]]:
@@ -406,6 +412,7 @@ class AttestationGenerator:
                 container_user, container_allow_root, container_cap_add,
                 no_new_privileges, container_read_only_rootfs, container_tmpfs_size,
                 workspace_mount_mode, container_network_mode,
+                container_tmpfs_exec=container_tmpfs_exec,
             ))
             user_data_content = json.dumps(user_data)
 

@@ -556,6 +556,146 @@ class TestUserDataWithinNitroTpmLimit:
         run.assert_not_called()
 
 
+class TestContainerTmpfsExecInUserData:
+    """Pin container_tmpfs_exec in attestation user_data for both attest paths (INV-3, FR-009)."""
+
+    def test_tmpfs_exec_false_present_in_execute_attestation(
+        self, generator, mock_successful_attestation
+    ):
+        """container_tmpfs_exec=False must appear in generate_attestation user_data."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="build.sh",
+                **SECURITY_KWARGS,
+                container_tmpfs_exec=False,
+            )
+
+        assert error is None
+        assert "container_tmpfs_exec" in captured["user_data"]
+        assert captured["user_data"]["container_tmpfs_exec"] is False
+
+    def test_tmpfs_exec_true_present_in_execute_attestation(
+        self, generator, mock_successful_attestation
+    ):
+        """container_tmpfs_exec=True must appear in generate_attestation user_data."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            doc, error = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="b" * 40,
+                script_path="build.sh",
+                **SECURITY_KWARGS,
+                container_tmpfs_exec=True,
+            )
+
+        assert error is None
+        assert "container_tmpfs_exec" in captured["user_data"]
+        assert captured["user_data"]["container_tmpfs_exec"] is True
+
+    def test_tmpfs_exec_absent_when_not_provided_in_execute_attestation(
+        self, generator, mock_successful_attestation
+    ):
+        """container_tmpfs_exec must be absent from user_data when not passed (backward compat)."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="c" * 40,
+                script_path="build.sh",
+                **SECURITY_KWARGS,
+            )
+
+        assert "container_tmpfs_exec" not in captured["user_data"]
+
+    def test_tmpfs_exec_false_present_in_output_attestation(
+        self, generator, mock_successful_attestation
+    ):
+        """container_tmpfs_exec=False must appear in generate_output_attestation user_data."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-123",
+                **SECURITY_KWARGS,
+                container_tmpfs_exec=False,
+            )
+
+        assert error_msg is None
+        assert "container_tmpfs_exec" in captured["user_data"]
+        assert captured["user_data"]["container_tmpfs_exec"] is False
+
+    def test_tmpfs_exec_true_present_in_output_attestation(
+        self, generator, mock_successful_attestation
+    ):
+        """container_tmpfs_exec=True must appear in generate_output_attestation user_data."""
+        captured, side_effect = mock_successful_attestation
+
+        with patch("subprocess.run", side_effect=side_effect):
+            attestation_bytes, error_msg = generator.generate_output_attestation(
+                script_output="stdout:hi\nstderr:\nexit_code:0",
+                execution_id="exec-456",
+                **SECURITY_KWARGS,
+                container_tmpfs_exec=True,
+            )
+
+        assert error_msg is None
+        assert "container_tmpfs_exec" in captured["user_data"]
+        assert captured["user_data"]["container_tmpfs_exec"] is True
+
+    def test_execute_and_output_attestations_agree_on_tmpfs_exec(
+        self, generator, mock_successful_attestation
+    ):
+        """The same container_tmpfs_exec value must appear in both attest paths."""
+        for exec_value in (False, True):
+            captured_exec: dict = {}
+            captured_output: dict = {}
+
+            def side_effect_exec(cmd, **kwargs):
+                if "--user-data" in cmd:
+                    path = cmd[cmd.index("--user-data") + 1]
+                    with open(path) as f:
+                        import json
+                        captured_exec.update(json.load(f))
+                m = type("M", (), {"returncode": 0, "stdout": b"cbor", "stderr": b""})()
+                return m
+
+            def side_effect_output(cmd, **kwargs):
+                if "--user-data" in cmd:
+                    path = cmd[cmd.index("--user-data") + 1]
+                    with open(path) as f:
+                        import json
+                        captured_output.update(json.load(f))
+                m = type("M", (), {"returncode": 0, "stdout": b"cbor", "stderr": b""})()
+                return m
+
+            with patch("subprocess.run", side_effect=side_effect_exec):
+                generator.generate_attestation(
+                    repository_url="https://github.com/owner/repo",
+                    commit_hash="a" * 40,
+                    script_path="build.sh",
+                    **SECURITY_KWARGS,
+                    container_tmpfs_exec=exec_value,
+                )
+
+            with patch("subprocess.run", side_effect=side_effect_output):
+                generator.generate_output_attestation(
+                    script_output="stdout:x\nstderr:\nexit_code:0",
+                    execution_id="exec-1",
+                    **SECURITY_KWARGS,
+                    container_tmpfs_exec=exec_value,
+                )
+
+            assert captured_exec.get("container_tmpfs_exec") == exec_value
+            assert captured_output.get("container_tmpfs_exec") == exec_value
+
+
 class TestFieldRemovalCausesFailure:
     """Tests that verify removing script_path or script_env_hash would cause failure.
 

@@ -93,15 +93,15 @@ description: "Task list for Configurable Execution Permission on the Container S
 
 ### Implementation for User Story 3
 
-- [ ] T012 [US3] In `src/attestation.py`, add a `container_tmpfs_exec` parameter to `_build_security_user_data` (~L52-88) and to the `generate_attestation` (~L119-200) and `generate_output_attestation` (~L362-410) signatures; emit `user_data["container_tmpfs_exec"]` only when the value is not `None`, paired alongside `container_tmpfs_size` (FR-009).
-- [ ] T013 [US3] In `src/server.py`, pass `container_tmpfs_exec=config.container_tmpfs_exec` into `generate_attestation` (~L839) and `generate_output_attestation` (~L1169) so both attest paths report the same value used to build the mount (FR-008). (Same file as T006 but different call sites.)
-- [ ] T014 [US3] In `src/main.py` (~L60-74), add a startup log line reporting the effective `container_tmpfs_exec` value near the existing tmpfs-size line, and emit a WARNING when `container_tmpfs_exec` is `True` AND `container_tmpfs_size` is empty ("exec enabled but no tmpfs is mounted; setting has no effect"). Do NOT fail fast (FR-007).
-- [ ] T015 [P] [US3] In `.github/scripts/print_config.py`, add `"container_tmpfs_exec"` to `CONFIG_CATEGORIES["Container Security"]` immediately after `container_tmpfs_size` (~L78-88) so it renders grouped with its security siblings (FR-010).
+- [X] T012 [US3] In `src/attestation.py`, add a `container_tmpfs_exec` parameter to `_build_security_user_data` (~L52-88) and to the `generate_attestation` (~L119-200) and `generate_output_attestation` (~L362-410) signatures; emit `user_data["container_tmpfs_exec"]` only when the value is not `None`, paired alongside `container_tmpfs_size` (FR-009).
+- [X] T013 [US3] In `src/server.py`, pass `container_tmpfs_exec=config.container_tmpfs_exec` into `generate_attestation` (~L839) and `generate_output_attestation` (~L1169) so both attest paths report the same value used to build the mount (FR-008). (Same file as T006 but different call sites.)
+- [X] T014 [US3] In `src/main.py` (~L60-74), add a startup log line reporting the effective `container_tmpfs_exec` value near the existing tmpfs-size line, and emit a WARNING when `container_tmpfs_exec` is `True` AND `container_tmpfs_size` is empty ("exec enabled but no tmpfs is mounted; setting has no effect"). Do NOT fail fast (FR-007).
+- [X] T015 [P] [US3] In `.github/scripts/print_config.py`, add `"container_tmpfs_exec"` to `CONFIG_CATEGORIES["Container Security"]` immediately after `container_tmpfs_size` (~L78-88) so it renders grouped with its security siblings (FR-010).
 
 ### Tests for User Story 3
 
-- [ ] T016 [P] [US3] Add attestation tests in `tests/test_attestation_user_data_regression.py` and `tests/test_attestation_properties.py`: `container_tmpfs_exec` appears in `user_data` for both `generate_attestation` and `generate_output_attestation`, and equals the value passed in (INV-3).
-- [ ] T017 [P] [US3] Add a test in `tests/test_print_config.py` asserting `container_tmpfs_exec` is rendered under the "Container Security" category of the build summary.
+- [X] T016 [P] [US3] Add attestation tests in `tests/test_attestation_user_data_regression.py` and `tests/test_attestation_properties.py`: `container_tmpfs_exec` appears in `user_data` for both `generate_attestation` and `generate_output_attestation`, and equals the value passed in (INV-3).
+- [X] T017 [P] [US3] Add a test in `tests/test_print_config.py` asserting `container_tmpfs_exec` is rendered under the "Container Security" category of the build summary.
 
 **Checkpoint**: Posture fully observable across attestation, build summary, and startup logs (SC-003).
 

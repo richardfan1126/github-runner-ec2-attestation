@@ -82,6 +82,7 @@ CONFIG_CATEGORIES: dict[str, list[str]] = {
         "no_new_privileges",
         "container_read_only_rootfs",
         "container_tmpfs_size",
+        "container_tmpfs_exec",
         "workspace_mount_mode",
         "container_network_mode",
     ],

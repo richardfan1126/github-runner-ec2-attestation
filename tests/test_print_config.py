@@ -248,6 +248,7 @@ def test_container_security_settings_grouped_together(tmp_path):
         "no_new_privileges",
         "container_read_only_rootfs",
         "container_tmpfs_size",
+        "container_tmpfs_exec",
         "workspace_mount_mode",
         "container_network_mode",
     ):
