@@ -657,3 +657,27 @@ def test_property_tmpfs_exec_field_stored(flag):
     """container_tmpfs_exec is stored as given — no coercion or inversion."""
     config = _security_config(container_tmpfs_exec=flag)
     assert config.container_tmpfs_exec is flag
+
+
+# --- T010: CONTAINER_TMPFS_EXEC truthy-string property (US2 / SC-004) ---
+
+@given(truthy=st.sampled_from(["true", "True", "TRUE", "1", "yes", "Yes", "YES"]))
+@settings(max_examples=20)
+def test_property_tmpfs_exec_truthy_strings_parse_to_true(truthy):
+    """Any accepted truthy string for CONTAINER_TMPFS_EXEC parses to True."""
+    from src.config import load_config
+    with env_vars(
+        SERVER_PORT="8080", MAX_CONCURRENT_EXECUTIONS="10",
+        EXECUTION_TIMEOUT_SECONDS="300", MAX_SCRIPT_SIZE_BYTES="1048576",
+        RATE_LIMIT_PER_IP="100", RATE_LIMIT_WINDOW_SECONDS="60",
+        TEMP_STORAGE_PATH="/tmp/gha-executor", OUTPUT_RETENTION_HOURS="24",
+        TPM_ATTEST_PATH="/dev/nsm", ALLOWED_REPOSITORIES="owner/repo",
+        EXPECTED_AUDIENCE="https://example.com", CONTAINER_IMAGE="python:3.11-slim",
+        CONTAINER_MEMORY_LIMIT="512m", CONTAINER_CPU_LIMIT="1.0",
+        CONTAINER_IMAGE_DIGEST="sha256:" + "a" * 64,
+        CONTAINER_USER=None, CONTAINER_ALLOW_ROOT=None, CONTAINER_CAP_ADD=None,
+        NO_NEW_PRIVILEGES=None, CONTAINER_READ_ONLY_ROOTFS=None, CONTAINER_TMPFS_SIZE=None,
+        WORKSPACE_MOUNT_MODE=None, CONTAINER_NETWORK_MODE=None,
+        CONTAINER_TMPFS_EXEC=truthy,
+    ):
+        assert load_config().container_tmpfs_exec is True

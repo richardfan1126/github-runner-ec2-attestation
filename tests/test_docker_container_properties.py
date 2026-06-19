@@ -673,3 +673,88 @@ def test_noexec_default_byte_identical():
         assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}, (
             f"Default executor MUST produce byte-identical pre-feature string, got {call.get('tmpfs')!r}"
         )
+
+
+# --- T011: tmpfs_exec=True adds exactly ',exec' (US2 / INV-2 / SC-005) ---
+
+def test_exec_enabled_adds_exactly_exec_suffix():
+    """With tmpfs_exec=True and a non-empty size, tmpfs options are 'size=<size>,mode=1777,exec' (INV-2)."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mock_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=mock_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir,
+            tmpfs_exec=True,
+        )
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="d" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo ok\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        _wait_for_terminal(manager, record.execution_id)
+
+        call = mock_client.containers._creation_calls[0]
+        assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777,exec"}, (
+            f"Enabled executor MUST append exactly ',exec', got {call.get('tmpfs')!r}"
+        )
+
+
+def test_exec_toggle_changes_only_exec_option():
+    """SC-005: toggling tmpfs_exec changes ONLY the exec option — all other container kwargs are identical."""
+    params = {
+        "repository_url": "https://github.com/owner/repo",
+        "commit_hash": "e" * 40,
+        "script_path": "test.sh",
+        "timeout_seconds": 5,
+    }
+    common_kwargs = dict(
+        memory_limit="512m",
+        cpu_limit=1.0,
+        user="1000:1000",
+        no_new_privileges=True,
+        read_only_rootfs=True,
+        tmpfs_size="128m",
+        workspace_mount_mode="ro",
+        network_mode="none",
+    )
+
+    calls = {}
+    for exec_flag in (False, True):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mock_client = create_mock_docker_client()
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = ScriptExecutor(
+                docker_client=mock_client,
+                execution_manager=manager,
+                output_collector=collector,
+                temp_storage_path=temp_dir,
+                tmpfs_exec=exec_flag,
+                **common_kwargs,
+            )
+            record = manager.create_execution(**params)
+            script_path = create_test_script(temp_dir, "echo ok\n")
+            executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+            _wait_for_terminal(manager, record.execution_id)
+            calls[exec_flag] = mock_client.containers._creation_calls[0]
+
+    disabled = calls[False]
+    enabled = calls[True]
+
+    # Only the tmpfs value changes between the two.
+    assert disabled.get("tmpfs") == {"/tmp": "size=128m,mode=1777"}
+    assert enabled.get("tmpfs") == {"/tmp": "size=128m,mode=1777,exec"}
+
+    # Every other security-relevant kwarg is identical (SC-005).
+    for key in ("read_only", "cap_drop", "cap_add", "network_mode", "security_opt",
+                "mem_limit", "nano_cpus", "user"):
+        assert disabled.get(key) == enabled.get(key), (
+            f"SC-005 violation: '{key}' differs between disabled and enabled exec containers"
+        )

@@ -74,12 +74,12 @@ description: "Task list for Configurable Execution Permission on the Container S
 
 ### Implementation for User Story 2
 
-- [ ] T009 [P] [US2] Document `CONTAINER_TMPFS_EXEC` in `.env.example`, next to `CONTAINER_TMPFS_SIZE`: state the secure default (`false` / `noexec`) and the security implication of enabling exec-from-scratch (unblocks trusted compile-and-run build toolchains, e.g. Rust `build.rs`, vs. relaxing the no-execute-from-scratch posture).
+- [X] T009 [P] [US2] Document `CONTAINER_TMPFS_EXEC` in `.env.example`, next to `CONTAINER_TMPFS_SIZE`: state the secure default (`false` / `noexec`) and the security implication of enabling exec-from-scratch (unblocks trusted compile-and-run build toolchains, e.g. Rust `build.rs`, vs. relaxing the no-execute-from-scratch posture).
 
 ### Tests for User Story 2
 
-- [ ] T010 [P] [US2] Add config tests in `tests/test_config.py` / `tests/test_config_properties.py`: truthy values (`true`/`1`/`yes`, case-insensitive) → `True`; an invalid value (e.g. `maybe`) raises a startup error naming `CONTAINER_TMPFS_EXEC` (SC-004).
-- [ ] T011 [P] [US2] Add executor/integration tests in `tests/test_docker_container_properties.py` and `tests/test_security_config_integration.py`: with `tmpfs_exec=True` the `/tmp` options include `,exec`; toggling the flag changes **only** the `exec` option — `size`, `mode=1777`, `nosuid`, `nodev`, `read_only`, `cap_drop`, `no-new-privileges`, network mode, and limits are identical between enabled and disabled containers (SC-005).
+- [X] T010 [P] [US2] Add config tests in `tests/test_config.py` / `tests/test_config_properties.py`: truthy values (`true`/`1`/`yes`, case-insensitive) → `True`; an invalid value (e.g. `maybe`) raises a startup error naming `CONTAINER_TMPFS_EXEC` (SC-004).
+- [X] T011 [P] [US2] Add executor/integration tests in `tests/test_docker_container_properties.py` and `tests/test_security_config_integration.py`: with `tmpfs_exec=True` the `/tmp` options include `,exec`; toggling the flag changes **only** the `exec` option — `size`, `mode=1777`, `nosuid`, `nodev`, `read_only`, `cap_drop`, `no-new-privileges`, network mode, and limits are identical between enabled and disabled containers (SC-005).
 
 **Checkpoint**: Opt-in path verified; operator docs in place. US1 + US2 both pass independently.
 
