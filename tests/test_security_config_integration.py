@@ -59,6 +59,7 @@ SECURITY_ENV_VARS = [
     "NO_NEW_PRIVILEGES",
     "CONTAINER_READ_ONLY_ROOTFS",
     "CONTAINER_TMPFS_SIZE",
+    "CONTAINER_TMPFS_EXEC",
     "WORKSPACE_MOUNT_MODE",
     "CONTAINER_NETWORK_MODE",
 ]
@@ -94,6 +95,7 @@ def _executor_from_config(config, docker_client, manager, collector, temp_dir):
         no_new_privileges=config.no_new_privileges,
         read_only_rootfs=config.container_read_only_rootfs,
         tmpfs_size=config.container_tmpfs_size,
+        tmpfs_exec=config.container_tmpfs_exec,
         workspace_mount_mode=config.workspace_mount_mode,
         network_mode=config.container_network_mode,
     )
@@ -287,6 +289,7 @@ class TestInvalidConfigFailsFastBeforeServing:
             ("CONTAINER_USER", "1000", "CONTAINER_USER"),
             ("CONTAINER_CAP_ADD", "SYS_ADMIN", "CONTAINER_CAP_ADD"),
             ("CONTAINER_TMPFS_SIZE", "256", "CONTAINER_TMPFS_SIZE"),
+            ("CONTAINER_TMPFS_EXEC", "maybe", "CONTAINER_TMPFS_EXEC"),
         ],
     )
     def test_invalid_value_fails_fast(self, clean_security_env, var, value, expected_token):
@@ -303,3 +306,57 @@ class TestInvalidConfigFailsFastBeforeServing:
         message = str(exc_info.value)
         assert "CONTAINER_USER" in message
         assert "CONTAINER_ALLOW_ROOT" in message
+
+
+class TestTmpfsExecOptInFlowsThrough:
+    """US2 (T011) — CONTAINER_TMPFS_EXEC=true flows through config → executor; only exec differs (SC-005)."""
+
+    def test_exec_enabled_adds_exec_to_tmpfs_options(self, clean_security_env):
+        """With CONTAINER_TMPFS_EXEC=true, the /tmp tmpfs options include ',exec' (INV-2)."""
+        clean_security_env.setenv("CONTAINER_TMPFS_EXEC", "true")
+        config = load_config()
+        assert config.container_tmpfs_exec is True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = ExecutionManager(output_retention_hours=1)
+            collector = OutputCollector()
+            executor = _executor_from_config(
+                config, create_mock_docker_client(), manager, collector, temp_dir
+            )
+            kwargs = _run_one_script(executor, manager, temp_dir)
+
+        assert kwargs.get("tmpfs") == {"/tmp": "size=256m,mode=1777,exec"}, (
+            f"CONTAINER_TMPFS_EXEC=true must add exactly ',exec', got {kwargs.get('tmpfs')!r}"
+        )
+
+    def test_exec_toggle_changes_only_exec_in_tmpfs_options(self, clean_security_env):
+        """SC-005: toggling CONTAINER_TMPFS_EXEC changes only the exec mount option — all other
+        container security controls (read_only, cap_drop, cap_add, network_mode, security_opt,
+        mem_limit, nano_cpus, user) are identical between the disabled and enabled containers."""
+        # Collect create-kwargs for both states.
+        kwargs_by_state = {}
+        for flag_value in ("false", "true"):
+            clean_security_env.setenv("CONTAINER_TMPFS_EXEC", flag_value)
+            config = load_config()
+            with tempfile.TemporaryDirectory() as temp_dir:
+                manager = ExecutionManager(output_retention_hours=1)
+                collector = OutputCollector()
+                executor = _executor_from_config(
+                    config, create_mock_docker_client(), manager, collector, temp_dir
+                )
+                kwargs_by_state[flag_value] = _run_one_script(executor, manager, temp_dir)
+
+        disabled = kwargs_by_state["false"]
+        enabled = kwargs_by_state["true"]
+
+        # Tmpfs options differ only by the ',exec' suffix.
+        assert disabled.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}
+        assert enabled.get("tmpfs") == {"/tmp": "size=256m,mode=1777,exec"}
+
+        # All other security-relevant kwargs are byte-identical (SC-005).
+        for key in ("read_only", "cap_drop", "cap_add", "network_mode",
+                    "security_opt", "mem_limit", "nano_cpus", "user"):
+            assert disabled.get(key) == enabled.get(key), (
+                f"SC-005: '{key}' must be identical regardless of CONTAINER_TMPFS_EXEC, "
+                f"disabled={disabled.get(key)!r} enabled={enabled.get(key)!r}"
+            )

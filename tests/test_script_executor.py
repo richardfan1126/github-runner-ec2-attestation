@@ -56,6 +56,7 @@ def _executor_from_config(config: ServerConfig, docker_client, manager, collecto
         no_new_privileges=config.no_new_privileges,
         read_only_rootfs=config.container_read_only_rootfs,
         tmpfs_size=config.container_tmpfs_size,
+        tmpfs_exec=config.container_tmpfs_exec,
         workspace_mount_mode=config.workspace_mount_mode,
         network_mode=config.container_network_mode,
     )
@@ -1163,3 +1164,64 @@ def test_relaxed_values_flow_through_to_container():
         assert call.get("network_mode") == "bridge"
         repo_mount = next(iter(call.get("volumes", {}).values()))
         assert repo_mount["mode"] == "rw"
+
+
+# --- T008: tmpfs_exec=False produces byte-identical options string (INV-1) ---
+
+def test_tmpfs_exec_false_options_byte_identical(monkeypatch):
+    """tmpfs_exec=False with a size produces exactly 'size=<size>,mode=1777' — no exec token (INV-1)."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=docker_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir,
+            tmpfs_size="256m",
+            tmpfs_exec=False,
+        )
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="a" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo ok\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        call = docker_client.containers._creation_calls[0]
+        assert call.get("tmpfs") == {"/tmp": "size=256m,mode=1777"}, (
+            f"Disabled exec MUST produce byte-identical pre-feature string, got {call.get('tmpfs')!r}"
+        )
+
+
+def test_tmpfs_exec_false_default_is_noexec():
+    """ScriptExecutor with no tmpfs_exec argument (default) has noexec mount (SC-001)."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        docker_client = create_mock_docker_client()
+        manager = ExecutionManager(output_retention_hours=1)
+        collector = OutputCollector()
+        executor = ScriptExecutor(
+            docker_client=docker_client,
+            execution_manager=manager,
+            output_collector=collector,
+            temp_storage_path=temp_dir,
+            tmpfs_size="128m",
+        )
+        record = manager.create_execution(
+            repository_url="https://github.com/owner/repo",
+            commit_hash="b" * 40,
+            script_path="test.sh",
+            timeout_seconds=5,
+        )
+        script_path = create_test_script(temp_dir, "echo ok\n")
+        executor.execute_async(record.execution_id, os.path.dirname(script_path), os.path.basename(script_path))
+        assert wait_for_completion(manager, record.execution_id)
+
+        call = docker_client.containers._creation_calls[0]
+        opts = call.get("tmpfs", {}).get("/tmp", "")
+        assert "exec" not in opts, f"Default executor must not have exec in tmpfs opts, got {opts!r}"
+        assert "size=128m,mode=1777" == opts

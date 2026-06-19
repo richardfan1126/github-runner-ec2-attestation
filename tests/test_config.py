@@ -25,7 +25,7 @@ def _set_base_env(monkeypatch):
     for var in (
         "CONTAINER_USER", "CONTAINER_ALLOW_ROOT", "CONTAINER_CAP_ADD",
         "NO_NEW_PRIVILEGES", "CONTAINER_READ_ONLY_ROOTFS", "CONTAINER_TMPFS_SIZE",
-        "WORKSPACE_MOUNT_MODE", "CONTAINER_NETWORK_MODE",
+        "CONTAINER_TMPFS_EXEC", "WORKSPACE_MOUNT_MODE", "CONTAINER_NETWORK_MODE",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -219,6 +219,9 @@ def test_empty_tmpfs_size_means_no_tmpfs(monkeypatch):
         ("CONTAINER_TMPFS_SIZE", "-5m"),
         ("CONTAINER_TMPFS_SIZE", "256mb"),
         ("CONTAINER_TMPFS_SIZE", "big"),
+        ("CONTAINER_TMPFS_EXEC", "maybe"),
+        ("CONTAINER_TMPFS_EXEC", "on"),
+        ("CONTAINER_TMPFS_EXEC", "enabled"),
     ],
 )
 def test_invalid_security_value_fails_fast_naming_variable(monkeypatch, var, value):
@@ -252,3 +255,30 @@ def test_invalid_network_mode_message_lists_accepted_values(monkeypatch):
         load_config()
     message = str(exc_info.value)
     assert "none, bridge, host" in message
+
+
+# --- T007: CONTAINER_TMPFS_EXEC default and falsy values (US1 / SC-001) ---
+
+def test_container_tmpfs_exec_default_is_false(monkeypatch):
+    """CONTAINER_TMPFS_EXEC unset defaults to False (secure-by-default, SC-001)."""
+    _set_base_env(monkeypatch)
+    monkeypatch.delenv("CONTAINER_TMPFS_EXEC", raising=False)
+    assert load_config().container_tmpfs_exec is False
+
+
+@pytest.mark.parametrize("value", ["false", "False", "FALSE", "0", "no", "No", "NO"])
+def test_container_tmpfs_exec_falsy_values(monkeypatch, value):
+    """All falsy CONTAINER_TMPFS_EXEC strings resolve to False."""
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CONTAINER_TMPFS_EXEC", value)
+    assert load_config().container_tmpfs_exec is False
+
+
+# --- T010: CONTAINER_TMPFS_EXEC truthy values and invalid input (US2 / SC-004) ---
+
+@pytest.mark.parametrize("value", ["true", "True", "TRUE", "1", "yes", "Yes", "YES"])
+def test_container_tmpfs_exec_truthy_values(monkeypatch, value):
+    """All truthy CONTAINER_TMPFS_EXEC strings resolve to True (US2 opt-in)."""
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("CONTAINER_TMPFS_EXEC", value)
+    assert load_config().container_tmpfs_exec is True

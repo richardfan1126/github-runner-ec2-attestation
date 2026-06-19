@@ -328,6 +328,7 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
         no_new_privileges=config.no_new_privileges,
         read_only_rootfs=config.container_read_only_rootfs,
         tmpfs_size=config.container_tmpfs_size,
+        tmpfs_exec=config.container_tmpfs_exec,
         workspace_mount_mode=config.workspace_mount_mode,
         network_mode=config.container_network_mode,
     )
@@ -850,10 +851,11 @@ def add_routes(app: FastAPI) -> None:
                     no_new_privileges=sec_config.no_new_privileges,
                     container_read_only_rootfs=sec_config.container_read_only_rootfs,
                     container_tmpfs_size=sec_config.container_tmpfs_size,
+                    container_tmpfs_exec=sec_config.container_tmpfs_exec,
                     workspace_mount_mode=sec_config.workspace_mount_mode,
                     container_network_mode=sec_config.container_network_mode,
                 )
-                
+
                 if attestation_error:
                     logger.error(
                         f"Attestation generation failed: {attestation_error.context}"
@@ -1175,6 +1177,7 @@ def add_routes(app: FastAPI) -> None:
                         no_new_privileges=sec_config.no_new_privileges,
                         container_read_only_rootfs=sec_config.container_read_only_rootfs,
                         container_tmpfs_size=sec_config.container_tmpfs_size,
+                        container_tmpfs_exec=sec_config.container_tmpfs_exec,
                         workspace_mount_mode=sec_config.workspace_mount_mode,
                         container_network_mode=sec_config.container_network_mode,
                     )

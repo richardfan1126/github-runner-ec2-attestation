@@ -49,6 +49,7 @@ class ScriptExecutor:
         no_new_privileges: bool = True,
         read_only_rootfs: bool = True,
         tmpfs_size: str = "256m",
+        tmpfs_exec: bool = False,
         workspace_mount_mode: str = "ro",
         network_mode: str = "none",
     ):
@@ -77,6 +78,7 @@ class ScriptExecutor:
             no_new_privileges: Apply the no-new-privileges security option when True
             read_only_rootfs: Mount the container root filesystem read-only when True
             tmpfs_size: Size of the /tmp tmpfs scratch mount (e.g. "256m"); empty = no tmpfs
+            tmpfs_exec: Mount /tmp tmpfs with exec permission when True (default noexec)
             workspace_mount_mode: Bind mode for the /workspace volume ("ro" or "rw")
             network_mode: Container network mode ("none", "bridge", or "host")
         """
@@ -104,6 +106,7 @@ class ScriptExecutor:
         self._no_new_privileges = no_new_privileges
         self._read_only_rootfs = read_only_rootfs
         self._tmpfs_size = tmpfs_size
+        self._tmpfs_exec = tmpfs_exec
         self._workspace_mount_mode = workspace_mount_mode
         self._network_mode = network_mode
         self._immutable_image_ref = self._compute_immutable_image_ref(
@@ -276,7 +279,7 @@ class ScriptExecutor:
             # claim of 1777), which would leave the non-root default user unable
             # to write /tmp (EACCES). See docker/docs#15594, runc#4971.
             if self._tmpfs_size:
-                create_kwargs["tmpfs"] = {"/tmp": f"size={self._tmpfs_size},mode=1777"}
+                create_kwargs["tmpfs"] = {"/tmp": f"size={self._tmpfs_size},mode=1777" + (",exec" if self._tmpfs_exec else "")}
 
             container = self._docker_client.containers.create(
                 image=self._immutable_image_ref,

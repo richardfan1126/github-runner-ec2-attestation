@@ -70,6 +70,12 @@ def main() -> int:
         logger.info(f"No new privileges: {config.no_new_privileges}")
         logger.info(f"Container read-only rootfs: {config.container_read_only_rootfs}")
         logger.info(f"Container tmpfs size: {config.container_tmpfs_size or '(no tmpfs)'}")
+        logger.info(f"Container tmpfs exec: {config.container_tmpfs_exec}")
+        if config.container_tmpfs_exec and not config.container_tmpfs_size:
+            logger.warning(
+                "CONTAINER_TMPFS_EXEC is enabled but CONTAINER_TMPFS_SIZE is not set; "
+                "exec enabled but no tmpfs is mounted — setting has no effect"
+            )
         logger.info(f"Workspace mount mode: {config.workspace_mount_mode}")
         logger.info(f"Container network mode: {config.container_network_mode}")
 

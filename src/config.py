@@ -140,6 +140,7 @@ class ServerConfig:
     no_new_privileges: bool = True
     container_read_only_rootfs: bool = True
     container_tmpfs_size: str = "256m"
+    container_tmpfs_exec: bool = False
     workspace_mount_mode: str = "ro"
     container_network_mode: str = "none"
 
@@ -314,6 +315,10 @@ class ServerConfig:
         # CONTAINER_TMPFS_SIZE: empty string preserved as "no tmpfs"; validated when non-empty.
         container_tmpfs_size = os.getenv("CONTAINER_TMPFS_SIZE", "256m")
 
+        container_tmpfs_exec = parse_strict_bool(
+            os.getenv("CONTAINER_TMPFS_EXEC", "false"), "CONTAINER_TMPFS_EXEC"
+        )
+
         workspace_mount_mode = os.getenv("WORKSPACE_MOUNT_MODE", "ro")
 
         container_network_mode = os.getenv("CONTAINER_NETWORK_MODE", "none")
@@ -381,6 +386,7 @@ class ServerConfig:
             no_new_privileges=no_new_privileges,
             container_read_only_rootfs=container_read_only_rootfs,
             container_tmpfs_size=container_tmpfs_size,
+            container_tmpfs_exec=container_tmpfs_exec,
             workspace_mount_mode=workspace_mount_mode,
             container_network_mode=container_network_mode,
             allowed_branches=allowed_branches,
