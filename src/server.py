@@ -241,15 +241,18 @@ class RateLimiter:
         return len(stale_ips)
 
 
-def create_app(config: ServerConfig, docker_client=None, encryption_manager=None) -> FastAPI:
+def create_app(config: ServerConfig, docker_client=None, encryption_manager=None, bound_image_id=None) -> FastAPI:
     """
     Create and configure FastAPI application
-    
+
     Args:
         config: Server configuration
         docker_client: Optional pre-initialized Docker client. If None, creates one using the rootless Docker socket.
         encryption_manager: Optional pre-initialized EncryptionManager instance.
-    
+        bound_image_id: Optional pre-derived image ID (config digest) that the startup
+            loader already verified and loaded into the shared daemon. The Script_Executor
+            binds execution to it rather than a registry reference.
+
     Returns:
         Configured FastAPI application
     """
@@ -319,6 +322,9 @@ def create_app(config: ServerConfig, docker_client=None, encryption_manager=None
         output_collector=output_collector,
         temp_storage_path=config.temp_storage_path,
         container_image_digest=config.container_image_digest,
+        baked_image_archive_path=config.baked_image_archive_path,
+        baked_image_manifest_path=config.baked_image_manifest_path,
+        bound_image_id=bound_image_id,
         container_pids_limit=config.container_pids_limit,
         enable_gpu=config.enable_gpu,
         gpu_devices=config.gpu_devices,

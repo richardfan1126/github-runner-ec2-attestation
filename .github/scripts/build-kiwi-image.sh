@@ -441,6 +441,128 @@ chmod +x "${TEMP_IMAGE_DIR}/root/usr/local/bin/github-actions-remote-executor"
 echo "GitHub Actions Remote Executor integration complete"
 
 ################################
+# Bake Execution Container Image
+################################
+# Replace the former runtime registry pull with an image baked into the
+# verity-sealed root tree. We copy the externally-supplied, digest-pinned image
+# BY DIGEST into an OCI-layout intermediate (digest-preserving), assert the
+# copied manifest blob is byte-identical to the expected digest and is a single
+# linux/amd64 manifest (not a multi-arch index), then bake TWO files into the
+# root tree at a fixed path (covered by verity_blocks="all", measured into PCR4):
+#   (a) image.tar    — a docker-archive (oci -> docker-archive), config-preserving,
+#                      consumed by `docker load` at runtime;
+#   (b) manifest.json — the OCI manifest blob copied out byte-for-byte (sidecar),
+#                      whose sha256 == the expected manifest digest.
+# The conversion preserves the config blob (and thus the image ID); it never
+# rebuilds the image or rewrites the config JSON. No bake-time provenance check.
+echo ""
+echo "=== Baking Execution Container Image ==="
+
+EXECUTOR_ENV_FILE="${TEMP_IMAGE_DIR}/root/etc/github-actions-remote-executor/env"
+if [ ! -f "${EXECUTOR_ENV_FILE}" ]; then
+    echo "::error::Executor env file not found: ${EXECUTOR_ENV_FILE}"
+    exit 1
+fi
+
+# Read CONTAINER_IMAGE / CONTAINER_IMAGE_DIGEST from the baked env file — the same
+# values (and the same expected digest) the executor verifies offline at runtime.
+CONTAINER_IMAGE=$(grep -E '^CONTAINER_IMAGE=' "${EXECUTOR_ENV_FILE}" | head -n1 | cut -d= -f2-)
+CONTAINER_IMAGE_DIGEST=$(grep -E '^CONTAINER_IMAGE_DIGEST=' "${EXECUTOR_ENV_FILE}" | head -n1 | cut -d= -f2-)
+
+if [ -z "${CONTAINER_IMAGE}" ] || [ -z "${CONTAINER_IMAGE_DIGEST}" ]; then
+    echo "::error::CONTAINER_IMAGE / CONTAINER_IMAGE_DIGEST missing or empty in ${EXECUTOR_ENV_FILE}"
+    exit 1
+fi
+case "${CONTAINER_IMAGE_DIGEST}" in
+    sha256:*) : ;;
+    *) echo "::error::CONTAINER_IMAGE_DIGEST must be a sha256: digest, got '${CONTAINER_IMAGE_DIGEST}'"; exit 1 ;;
+esac
+DIGEST_HEX="${CONTAINER_IMAGE_DIGEST#sha256:}"
+
+# Build the digest-pinned source repository (drop any tag / existing @digest from
+# CONTAINER_IMAGE; only the last path component's tag is stripped so a
+# registry:port host is preserved).
+SRC_NO_DIGEST="${CONTAINER_IMAGE%%@*}"
+case "${SRC_NO_DIGEST}" in
+    */*) SRC_PREFIX="${SRC_NO_DIGEST%/*}"; SRC_LAST="${SRC_NO_DIGEST##*/}"; SRC_REPO="${SRC_PREFIX}/${SRC_LAST%%:*}" ;;
+    *)   SRC_REPO="${SRC_NO_DIGEST%%:*}" ;;
+esac
+SRC_REF="docker://${SRC_REPO}@${CONTAINER_IMAGE_DIGEST}"
+echo "Source image (digest-pinned): ${SRC_REF}"
+
+# skopeo is the digest-preserving OCI copy/convert tool. Install it if absent.
+if ! command -v skopeo > /dev/null 2>&1; then
+    echo "Installing skopeo..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq skopeo
+fi
+skopeo --version
+
+# Baked artifact destination inside the root tree (matches the runtime defaults
+# BAKED_IMAGE_ARCHIVE / BAKED_IMAGE_MANIFEST in src/config.py).
+BAKE_DIR="${TEMP_IMAGE_DIR}/root/opt/github-actions-remote-executor/baked-image"
+mkdir -p "${BAKE_DIR}"
+
+OCI_LAYOUT_PARENT=$(mktemp -d)
+OCI_LAYOUT="${OCI_LAYOUT_PARENT}/oci-layout"
+
+# 1. Copy by digest into an OCI layout, pinning the linux/amd64 platform. This is
+#    digest-preserving (no rebuild); the manifest blob lands at blobs/sha256/<hex>.
+echo "Copying ${SRC_REF} into OCI layout (linux/amd64)..."
+if ! skopeo copy --override-os linux --override-arch amd64 \
+        "${SRC_REF}" "oci:${OCI_LAYOUT}:baked"; then
+    echo "::error::skopeo copy of ${SRC_REF} into OCI layout failed"
+    exit 1
+fi
+
+# 2. Locate the manifest blob addressed by the expected digest. Its mere presence
+#    in the content-addressed store asserts byte-identity (sha256(blob)==digest).
+SIDECAR_SRC="${OCI_LAYOUT}/blobs/sha256/${DIGEST_HEX}"
+if [ ! -f "${SIDECAR_SRC}" ]; then
+    echo "::error::No blob addressed by ${CONTAINER_IMAGE_DIGEST} in the OCI layout — the supplied digest is not the copied linux/amd64 manifest digest"
+    exit 1
+fi
+
+# 2a. Fail if the digest resolves to a multi-platform index rather than a single
+#     manifest (D2 constraint 1), and confirm it is an image manifest with a config.
+MEDIA_TYPE=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('mediaType',''))" "${SIDECAR_SRC}")
+HAS_CONFIG=$(python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print('yes' if isinstance(m.get('config'),dict) and m['config'].get('digest') else 'no')" "${SIDECAR_SRC}")
+case "${MEDIA_TYPE}" in
+    *image.index*|*manifest.list*)
+        echo "::error::CONTAINER_IMAGE_DIGEST resolves to a multi-platform index (${MEDIA_TYPE}); a single linux/amd64 manifest digest is required (D2 constraint 1)"
+        exit 1 ;;
+esac
+if [ "${HAS_CONFIG}" != "yes" ]; then
+    echo "::error::Manifest ${CONTAINER_IMAGE_DIGEST} has no config descriptor; not a single-platform image manifest"
+    exit 1
+fi
+
+# 3. Emit the OCI manifest blob byte-for-byte as the sidecar, and re-verify
+#    sha256(sidecar) == expected digest (explicit assertion of task 1.3).
+cp "${SIDECAR_SRC}" "${BAKE_DIR}/manifest.json"
+ACTUAL_SIDECAR_HEX=$(sha256sum "${BAKE_DIR}/manifest.json" | cut -d' ' -f1)
+if [ "${ACTUAL_SIDECAR_HEX}" != "${DIGEST_HEX}" ]; then
+    echo "::error::Baked sidecar digest mismatch: expected ${DIGEST_HEX}, got ${ACTUAL_SIDECAR_HEX}"
+    exit 1
+fi
+
+# 4. Convert the OCI layout into a docker-archive (config-preserving). The
+#    archive's manifest digest is not load-bearing — the sidecar carries the
+#    anchor; the archive's only obligation is to preserve the config blob so the
+#    runtime-derived image ID matches the verified manifest's config digest.
+echo "Converting OCI layout -> docker-archive..."
+if ! skopeo copy "oci:${OCI_LAYOUT}:baked" "docker-archive:${BAKE_DIR}/image.tar"; then
+    echo "::error::skopeo conversion oci -> docker-archive failed"
+    exit 1
+fi
+
+rm -rf "${OCI_LAYOUT_PARENT}"
+
+echo "✓ Baked execution image into root tree:"
+echo "    ${BAKE_DIR}/image.tar      (docker-archive)"
+echo "    ${BAKE_DIR}/manifest.json  (OCI-manifest sidecar, sha256:${DIGEST_HEX})"
+
+################################
 # Configure Loop Devices       #
 ################################
 echo ""

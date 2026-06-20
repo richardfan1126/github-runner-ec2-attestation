@@ -100,7 +100,18 @@ class ServerConfig:
     nonce_cache_ttl_seconds: int = 300
 
     # Container Image Digest Pinning
+    # NOTE: this is the OCI **manifest** digest (the canonical anchor a third party
+    # pulls from the registry). It is distinct from the image ID (the **config**
+    # digest) the executor binds execution to; the two are never conflated.
     container_image_digest: Optional[str] = None
+
+    # Baked execution image (replaces the runtime registry pull).
+    # The build bakes a docker-archive plus an OCI-manifest sidecar into the
+    # verity-sealed root tree; the executor verifies the sidecar offline against
+    # container_image_digest and loads the archive. These paths point at those
+    # baked files and are overridable only for testing against fixtures.
+    baked_image_archive_path: str = "/opt/github-actions-remote-executor/baked-image/image.tar"
+    baked_image_manifest_path: str = "/opt/github-actions-remote-executor/baked-image/manifest.json"
 
     # Container PID Limits (fork bomb protection)
     container_pids_limit: int = 256
@@ -220,6 +231,14 @@ class ServerConfig:
 
         # Parse optional CONTAINER_IMAGE_DIGEST (SHA-256 digest, None if not set)
         container_image_digest = os.getenv("CONTAINER_IMAGE_DIGEST") or None
+
+        # Baked execution-image artifact paths (defaults baked into the image; overridable for tests)
+        baked_image_archive_path = os.getenv(
+            "BAKED_IMAGE_ARCHIVE", "/opt/github-actions-remote-executor/baked-image/image.tar"
+        )
+        baked_image_manifest_path = os.getenv(
+            "BAKED_IMAGE_MANIFEST", "/opt/github-actions-remote-executor/baked-image/manifest.json"
+        )
 
         # Parse optional MAX_CONTAINER_PIDS (default 256, must be positive integer)
         container_pids_limit_raw = os.getenv("MAX_CONTAINER_PIDS")
@@ -373,6 +392,8 @@ class ServerConfig:
             container_memory_limit=container_memory_limit,
             container_cpu_limit=float(container_cpu_limit),
             container_image_digest=container_image_digest,
+            baked_image_archive_path=baked_image_archive_path,
+            baked_image_manifest_path=baked_image_manifest_path,
             container_pids_limit=container_pids_limit,
             max_output_attestations_per_window=max_output_attestations_per_window,
             output_attestation_window_seconds=output_attestation_window_seconds,

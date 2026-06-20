@@ -123,9 +123,10 @@ class TestMainStartupRootlessSocket:
             # Attestation generator mock
             mock_attest_gen_cls.return_value.verify_tpm_available.return_value = True
 
-            # ScriptExecutor mock - successful pull
+            # ScriptExecutor mock - successful baked-image load
             mock_executor_instance = mock_script_executor_cls.return_value
-            mock_executor_instance.pull_container_image.return_value = None
+            mock_executor_instance.load_baked_image.return_value = None
+            mock_executor_instance.derived_image_id = "sha256:" + "0" * 64
             mock_executor_instance.cleanup_dangling_containers.return_value = None
 
             exit_code = main()

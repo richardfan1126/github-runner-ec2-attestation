@@ -1307,17 +1307,24 @@ def register_ami(
     ec2_client: Any,
     snapshot_id: str,
     architecture: str,
-    ami_name: str
+    ami_name: str,
+    container_image_digest: Optional[str] = None,
+    producing_commit: Optional[str] = None,
 ) -> str:
     """
     Register an AMI with TPM 2.0 and UEFI boot mode.
-    
+
     Args:
         ec2_client: Boto3 EC2 client
         snapshot_id: EBS snapshot ID
         architecture: CPU architecture (x86_64 or arm64)
         ami_name: Name for the AMI
-    
+        container_image_digest: Baked execution image manifest digest (sha256:...),
+            tagged onto the AMI so verifiers can map AMI -> image digest. PCR4
+            already binds the baked image bytes; this tag is build-output
+            self-description, not part of the runtime attestation.
+        producing_commit: The commit that produced this AMI (tagged for the record).
+
     Returns:
         AMI ID string
     """
@@ -1325,30 +1332,45 @@ def register_ami(
     logger.info(f"  Snapshot: {snapshot_id}")
     logger.info(f"  Architecture: {architecture}")
     logger.info(f"  Name: {ami_name}")
-    
-    try:
-        response = ec2_client.register_image(
-            Name=ami_name,
-            VirtualizationType='hvm',
-            BootMode='uefi',
-            Architecture=architecture,
-            RootDeviceName='/dev/xvda',
-            BlockDeviceMappings=[
-                {
-                    'DeviceName': '/dev/xvda',
-                    'Ebs': {
-                        'SnapshotId': snapshot_id
-                    }
+
+    # Tag the registered AMI with the verifier-record fields known at registration
+    # time (the container image manifest digest and producing commit). The AMI id
+    # and PCR4 round out the single-entry record emitted to the log/summary.
+    tags = []
+    if container_image_digest:
+        tags.append({'Key': 'ContainerImageDigest', 'Value': container_image_digest})
+    if producing_commit:
+        tags.append({'Key': 'ProducingCommit', 'Value': producing_commit})
+
+    register_kwargs = dict(
+        Name=ami_name,
+        VirtualizationType='hvm',
+        BootMode='uefi',
+        Architecture=architecture,
+        RootDeviceName='/dev/xvda',
+        BlockDeviceMappings=[
+            {
+                'DeviceName': '/dev/xvda',
+                'Ebs': {
+                    'SnapshotId': snapshot_id
                 }
-            ],
-            TpmSupport='v2.0',
-            EnaSupport=True
-        )
-        
+            }
+        ],
+        TpmSupport='v2.0',
+        EnaSupport=True,
+    )
+    if tags:
+        register_kwargs['TagSpecifications'] = [{'ResourceType': 'image', 'Tags': tags}]
+
+    try:
+        response = ec2_client.register_image(**register_kwargs)
+
         ami_id = response['ImageId']
         logger.info(f"AMI registered successfully: {ami_id}")
+        if container_image_digest:
+            logger.info(f"  Tagged ContainerImageDigest={container_image_digest}")
         return ami_id
-        
+
     except ClientError as e:
         logger.error(f"Failed to register AMI: {e}")
         raise
@@ -1358,7 +1380,9 @@ def generate_build_result(
     snapshot_id: str,
     region: str,
     pcr_measurements: dict,
-    output_file: str
+    output_file: str,
+    container_image_digest: Optional[str] = None,
+    producing_commit: Optional[str] = None,
 ) -> dict:
     """
     Generate build result dictionary and write it to the output file.
@@ -1366,27 +1390,46 @@ def generate_build_result(
     Creates a build result containing AMI details, region, timestamp, and
     PCR measurements, then writes it as JSON with 2-space indentation.
 
+    Also emits a single-entry **verifier record** mapping the baked image's
+    manifest digest -> PCR4 -> AMI id -> producing commit (D-rec). Its field set
+    is a clean subset of the multi-flavor ``flavors.lock`` the
+    ``execution-build-images`` change introduces, so that change need not
+    retrofit a record format: there it becomes one entry per flavor keyed by
+    flavor, with these same fields.
+
     Args:
         ami_id: The registered AMI ID
         snapshot_id: The EBS snapshot ID
         region: AWS region where the AMI was created
         pcr_measurements: Dict with structure {"Measurements": {"PCR4": "...", "PCR7": "..."}}
         output_file: Path to the output JSON file
+        container_image_digest: Baked execution image manifest digest (sha256:...)
+        producing_commit: The commit that produced this AMI
 
     Returns:
         The build result dictionary
 
     Requirements: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6
     """
+    pcr4 = pcr_measurements['Measurements']['PCR4']
+    pcr7 = pcr_measurements['Measurements']['PCR7']
+
     build_result = {
         "ami_id": ami_id,
         "snapshot_id": snapshot_id,
         "region": region,
         "build_timestamp": datetime.now(timezone.utc).isoformat(),
         "pcr_measurements": {
-            "pcr4": pcr_measurements['Measurements']['PCR4'],
-            "pcr7": pcr_measurements['Measurements']['PCR7'],
-        }
+            "pcr4": pcr4,
+            "pcr7": pcr7,
+        },
+        # Single-entry verifier record (seed of Change 2's per-flavor flavors.lock).
+        "verifier_record": {
+            "container_image_digest": container_image_digest,
+            "pcr4": pcr4,
+            "ami_id": ami_id,
+            "producing_commit": producing_commit,
+        },
     }
 
     with open(output_file, 'w') as f:
@@ -1526,7 +1569,16 @@ def parse_arguments() -> argparse.Namespace:
              '(e.g., .github/workflows/build-attestable-image.yml). '
              'When provided, the attestation workflow identity is verified against this path.'
     )
-    
+
+    parser.add_argument(
+        '--container-image-digest',
+        type=str,
+        default=None,
+        help='The baked execution container image manifest digest (sha256:...). '
+             'Tagged onto the registered AMI and emitted in the single-entry '
+             'verifier record so external verifiers can map AMI -> image digest.'
+    )
+
     return parser.parse_args()
 
 def main() -> int:
@@ -1660,7 +1712,13 @@ def main() -> int:
         snapshot_id = upload_snapshot(ssh_client, args.region)
         wait_for_snapshot(ec2_client, snapshot_id)
         ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
-        ami_id = register_ami(ec2_client, snapshot_id, architecture, ami_name)
+        # Producing commit for the verifier record (GitHub Actions sets GITHUB_SHA).
+        producing_commit = os.environ.get("GITHUB_SHA")
+        ami_id = register_ami(
+            ec2_client, snapshot_id, architecture, ami_name,
+            container_image_digest=args.container_image_digest,
+            producing_commit=producing_commit,
+        )
 
         # Save build results
         logger.info("")
@@ -1673,7 +1731,9 @@ def main() -> int:
             snapshot_id=snapshot_id,
             region=args.region,
             pcr_measurements=pcr_measurement,
-            output_file=args.output_file
+            output_file=args.output_file,
+            container_image_digest=args.container_image_digest,
+            producing_commit=producing_commit,
         )
 
         return 0

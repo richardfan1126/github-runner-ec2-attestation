@@ -31,6 +31,7 @@ def make_mock_args(output_file="test_output.json"):
     args.region = "us-east-1"
     args.instance_type = "c5.9xlarge"
     args.output_file = output_file
+    args.container_image_digest = "sha256:" + "c" * 64
     return args
 
 

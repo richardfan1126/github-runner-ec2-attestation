@@ -127,6 +127,41 @@ def main() -> int:
                 "Ensure rootless Docker is running for the service user."
             )
         
+        # Clean up any dangling execution containers from previous runs, then load
+        # the baked execution image. Both happen before the image-dependent GPU
+        # verification so it binds to the verified, loaded image.
+        logger.info("Cleaning up dangling execution containers...")
+        from src.execution_manager import ExecutionManager
+        from src.output_collector import OutputCollector
+        temp_executor = ScriptExecutor(
+            docker_client=docker_client,
+            container_image=config.container_image,
+            memory_limit=config.container_memory_limit,
+            cpu_limit=config.container_cpu_limit,
+            timeout_seconds=config.execution_timeout_seconds,
+            execution_manager=ExecutionManager(config.output_retention_hours),
+            output_collector=OutputCollector(),
+            temp_storage_path=config.temp_storage_path,
+            container_image_digest=config.container_image_digest,
+            baked_image_archive_path=config.baked_image_archive_path,
+            baked_image_manifest_path=config.baked_image_manifest_path,
+        )
+        temp_executor.cleanup_dangling_containers()
+        logger.info("Dangling container cleanup complete")
+
+        # Load the baked execution image: verify the OCI-manifest sidecar offline
+        # against the expected manifest digest, derive the trusted image ID (config
+        # digest), and docker load the baked archive. No registry pull, no network.
+        logger.info("Loading baked execution image (offline verify -> derive -> load)...")
+        try:
+            temp_executor.load_baked_image()
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to load baked container image: {e}"
+            )
+        baked_image_id = temp_executor.derived_image_id
+        logger.info(f"Baked execution image ready (image ID: {baked_image_id})")
+
         # GPU startup verification (when enabled)
         if config.enable_gpu:
             logger.info("GPU passthrough enabled — verifying NVIDIA runtime...")
@@ -166,7 +201,7 @@ def main() -> int:
             logger.info("Running GPU access verification container...")
             try:
                 test_container = docker_client.containers.create(
-                    image=config.container_image,
+                    image=baked_image_id,
                     command=["true"],
                     runtime="nvidia",
                     environment={"NVIDIA_VISIBLE_DEVICES": "all"},
@@ -184,40 +219,13 @@ def main() -> int:
                 return 1
             except docker.errors.ImageNotFound as e:
                 logger.error(
-                    f"GPU access verification failed: container image not found: {e}. "
-                    f"Ensure '{config.container_image}' is available locally."
+                    f"GPU access verification failed: baked image not found: {e}. "
+                    f"Ensure the baked execution image (ID '{baked_image_id}') loaded successfully."
                 )
                 return 1
         else:
             logger.info("GPU passthrough disabled (ENABLE_GPU=false)")
 
-        # Clean up any dangling execution containers from previous runs
-        logger.info("Cleaning up dangling execution containers...")
-        from src.execution_manager import ExecutionManager
-        from src.output_collector import OutputCollector
-        temp_executor = ScriptExecutor(
-            docker_client=docker_client,
-            container_image=config.container_image,
-            memory_limit=config.container_memory_limit,
-            cpu_limit=config.container_cpu_limit,
-            timeout_seconds=config.execution_timeout_seconds,
-            execution_manager=ExecutionManager(config.output_retention_hours),
-            output_collector=OutputCollector(),
-            temp_storage_path=config.temp_storage_path,
-            container_image_digest=config.container_image_digest,
-        )
-        temp_executor.cleanup_dangling_containers()
-        logger.info("Dangling container cleanup complete")
-        
-        # Pull container image if not already present
-        logger.info(f"Ensuring container image '{config.container_image}' is available...")
-        try:
-            temp_executor.pull_container_image()
-        except Exception as e:
-            raise ConfigurationError(
-                f"Failed to pull container image '{config.container_image}': {e}"
-            )
-        
         # Ensure temp storage directory exists
         if not os.path.exists(config.temp_storage_path):
             logger.info(f"Creating temp storage directory: {config.temp_storage_path}")
@@ -229,7 +237,12 @@ def main() -> int:
         
         # Initialize all components via create_app
         logger.info("Initializing application components...")
-        app = create_app(config, docker_client=docker_client, encryption_manager=encryption_manager)
+        app = create_app(
+            config,
+            docker_client=docker_client,
+            encryption_manager=encryption_manager,
+            bound_image_id=baked_image_id,
+        )
         logger.info("All components initialized successfully")
         
         # Register signal handlers for graceful shutdown
