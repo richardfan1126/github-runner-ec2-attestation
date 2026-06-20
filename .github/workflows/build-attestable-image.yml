@@ -24,6 +24,7 @@ jobs:
     outputs:
       artifact_ref: ${{ steps.push.outputs.artifact_ref_digest }}
       artifact_ref_tag: ${{ steps.push.outputs.artifact_ref }}
+      container_image_digest: ${{ steps.container_image.outputs.container_image_digest }}
     
     steps:
       - name: Checkout repository
@@ -132,7 +133,23 @@ jobs:
       - name: Authenticate to GHCR
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
-      
+
+      - name: Extract baked container image digest
+        id: container_image
+        run: |
+          ENV_FILE="kiwi-descriptions/root/etc/github-actions-remote-executor/env"
+          CID=$(grep -E '^CONTAINER_IMAGE_DIGEST=' "$ENV_FILE" | head -n1 | cut -d= -f2-)
+          if [ -z "$CID" ]; then
+            echo "::error::CONTAINER_IMAGE_DIGEST missing or empty in $ENV_FILE"
+            exit 1
+          fi
+          echo "container_image_digest=$CID" >> $GITHUB_OUTPUT
+          echo "Baked container image digest: $CID"
+          {
+            echo "### Baked Container Image"
+            echo "- **Container image digest**: \`$CID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Push artifact to GHCR
         id: push
         run: |
@@ -159,6 +176,7 @@ jobs:
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             --annotation "com.github.attestable-image.pcr4=${{ steps.pcr.outputs.pcr4 }}" \
             --annotation "com.github.attestable-image.pcr7=${{ steps.pcr.outputs.pcr7 }}" \
+            --annotation "com.github.attestable-image.container-image-digest=${{ steps.container_image.outputs.container_image_digest }}" \
             --annotation "debug=${DEBUG_VALUE}" \
             "$RAW_IMAGE:application/octet-stream" \
             build-output/pcr_measurements.json:application/json; then
@@ -266,6 +284,7 @@ jobs:
             --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
             --output-file ami_build_result.json \
             --expected-workflow .github/workflows/build-attestable-image.yml \
+            --container-image-digest "${{ needs.build-and-publish.outputs.container_image_digest }}" \
             $ALLOW_DEBUG_FLAG
 
       - name: Upload AMI build result
@@ -290,6 +309,25 @@ jobs:
           echo "- **Snapshot ID**: \`${SNAPSHOT_ID}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Region**: \`${REGION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Timestamp**: \`${BUILD_TIMESTAMP}\`" >> $GITHUB_STEP_SUMMARY
+
+          # Single-entry verifier record (D-rec): image manifest digest -> PCR4 -> AMI id -> producing commit.
+          # Emitted only here, after the AMI exists; the image digest alone is additionally an ORAS
+          # annotation on the (immutable, already-attested) published artifact. The join for a remote
+          # verifier is PCR4. This is a clean subset of Change 2's per-flavor flavors.lock.
+          CID=$(jq -r '.verifier_record.container_image_digest // "unknown"' ami_build_result.json)
+          PCR4=$(jq -r '.verifier_record.pcr4 // .pcr_measurements.pcr4' ami_build_result.json)
+          COMMIT=$(jq -r '.verifier_record.producing_commit // "unknown"' ami_build_result.json)
+          {
+            echo ""
+            echo "### Verifier Record"
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Container image digest | \`${CID}\` |"
+            echo "| PCR4 | \`${PCR4}\` |"
+            echo "| AMI ID | \`${AMI_ID}\` |"
+            echo "| Producing commit | \`${COMMIT}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Verifier record: container_image_digest=${CID} pcr4=${PCR4} ami_id=${AMI_ID} producing_commit=${COMMIT}"
 
       - name: Write debug warning
         if: success() && github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true

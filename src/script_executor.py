@@ -1,9 +1,10 @@
 """Script execution for GitHub Actions Remote Executor using Docker SDK"""
 import contextvars
+import hashlib
+import json
 import os
 import shutil
 import subprocess
-import time
 import threading
 import logging
 from typing import Optional
@@ -40,6 +41,9 @@ class ScriptExecutor:
         output_collector: "OutputCollector | None" = None,
         temp_storage_path: str = "/tmp",
         container_image_digest: "str | None" = None,
+        baked_image_archive_path: str = "/opt/github-actions-remote-executor/baked-image/image.tar",
+        baked_image_manifest_path: str = "/opt/github-actions-remote-executor/baked-image/manifest.json",
+        bound_image_id: "str | None" = None,
         container_pids_limit: int = 256,
         enable_gpu: bool = False,
         gpu_devices: str = "all",
@@ -67,7 +71,17 @@ class ScriptExecutor:
             execution_manager: Manager for execution lifecycle and state
             output_collector: Collector for capturing stdout/stderr
             temp_storage_path: Base path for temporary file storage
-            container_image_digest: Optional SHA-256 digest to verify pulled image against
+            container_image_digest: Expected OCI **manifest** digest (the canonical anchor).
+                The baked OCI-manifest sidecar is verified offline against this value. It is
+                NOT the image ID — execution binds to the config digest derived from the
+                verified manifest, never to this manifest digest.
+            baked_image_archive_path: Path to the baked docker-archive (docker save format)
+                loaded into the daemon at startup
+            baked_image_manifest_path: Path to the baked OCI-manifest sidecar whose bytes are
+                re-hashed offline and compared to container_image_digest
+            bound_image_id: Pre-derived image ID to bind execution to without re-loading.
+                Used for the execution executor when a startup loader already verified
+                and loaded the baked image into the shared daemon.
             container_pids_limit: Maximum number of PIDs allowed in the container (fork bomb protection)
             enable_gpu: Whether to enable GPU passthrough via NVIDIA Container Toolkit CDI mode
             gpu_devices: NVIDIA_VISIBLE_DEVICES value (e.g. "all", "0", "0,1")
@@ -96,6 +110,14 @@ class ScriptExecutor:
         self._output_collector = output_collector
         self._temp_storage_path = temp_storage_path
         self._container_image_digest = container_image_digest
+        self._baked_image_archive_path = baked_image_archive_path
+        self._baked_image_manifest_path = baked_image_manifest_path
+        # The trusted image ID (config digest) derived from the verified baked
+        # manifest. Set by load_baked_image(); execution binds to it, never to the
+        # manifest digest. May be pre-set via bound_image_id for the execution
+        # executor, whose image was already verified+loaded into the shared daemon
+        # by the startup loader. None until the baked image has been verified+loaded.
+        self._derived_image_id: "str | None" = bound_image_id
         self._container_pids_limit = container_pids_limit
         self._enable_gpu = enable_gpu
         self._gpu_devices = gpu_devices
@@ -119,6 +141,25 @@ class ScriptExecutor:
     def cap_add(self) -> "list[str]":
         """The resolved capability set added on top of cap_drop=ALL (the attested list)."""
         return list(self._cap_add)
+
+    @property
+    def derived_image_id(self) -> "str | None":
+        """The trusted image ID (config digest) derived from the verified baked manifest.
+
+        None until load_baked_image() has verified the sidecar and loaded the archive.
+        """
+        return self._derived_image_id
+
+    @property
+    def execution_image_ref(self) -> str:
+        """The reference every containers.create() binds to.
+
+        Once the baked image is loaded this is the derived image ID (config digest),
+        so the loss of RepoDigests and the absence of a repo tag on the loaded archive
+        are irrelevant. Before load (and in unit tests that inject an image directly)
+        it falls back to the configured immutable reference.
+        """
+        return self._derived_image_id or self._immutable_image_ref
 
     def _compute_immutable_image_ref(self, container_image: str, container_image_digest: "str | None") -> str:
         """
@@ -282,7 +323,7 @@ class ScriptExecutor:
                 create_kwargs["tmpfs"] = {"/tmp": f"size={self._tmpfs_size},mode=1777" + (",exec" if self._tmpfs_exec else "")}
 
             container = self._docker_client.containers.create(
-                image=self._immutable_image_ref,
+                image=self.execution_image_ref,
                 name=container_name,
                 command=["bash", f"/workspace/{script_path}"],
                 mem_limit=self._memory_limit,
@@ -556,122 +597,154 @@ class ScriptExecutor:
         except Exception:
             return False
 
-    def pull_container_image(self) -> None:
-        """Pull the configured Container_Image if not already present locally.
+    def load_baked_image(self) -> None:
+        """Verify, derive, then load the image baked into the verity-sealed root.
 
-        Checks the local Docker image store first. If the image exists, skips
-        the pull. Otherwise pulls from the registry and verifies availability.
-        When CONTAINER_IMAGE_DIGEST is configured, verifies the pulled image
-        digest matches the expected value.
+        Replaces the former startup registry pull. The image is no longer a
+        runtime-asserted input: its bytes are measured into PCR4 at build time,
+        and at startup the executor proves — fully offline, with no daemon-
+        reported value trusted — that the baked bytes are the expected image,
+        in three separable steps:
+
+        1. **Verify**: recompute a byte-exact SHA-256 over the stored OCI-manifest
+           sidecar bytes and compare to the expected ``CONTAINER_IMAGE_DIGEST``
+           (a *manifest* digest). Pure hashing — no daemon, no network, no
+           index.json walk (the build emitted a single linux/amd64 manifest blob).
+        2. **Derive**: read the config descriptor out of the *verified* manifest;
+           its digest is the trusted **image ID** (a *config* digest), derived
+           entirely from verity-measured, digest-verified bytes.
+        3. **Load + bind**: ``docker load`` the baked docker-archive into the
+           rootless daemon and bind execution to the derived image ID. If the
+           loader was unfaithful (rewrote the config blob), no loaded image will
+           carry the derived ID and binding fails closed.
 
         Raises:
-            RuntimeError: If the Docker client is unavailable, the pull fails,
-                the image cannot be verified after pulling, or the digest
-                does not match the expected value.
+            RuntimeError: with the same fail-closed semantics as the former
+                startup pull, if the Docker client is unavailable, the expected
+                digest is absent/empty, the baked archive or sidecar is missing
+                or corrupt, the recomputed manifest digest mismatches, or no
+                loaded image carries the derived image ID.
+        """
+        # ---- Verify -------------------------------------------------------
+        manifest_bytes = self._read_baked_manifest()
+        self._verify_manifest_digest(manifest_bytes)
+
+        # ---- Derive -------------------------------------------------------
+        image_id = self._derive_image_id(manifest_bytes)
+
+        # ---- Load + bind --------------------------------------------------
+        self._load_baked_archive()
+        self._bind_derived_image_id(image_id)
+
+    def _read_baked_manifest(self) -> bytes:
+        """Read the baked OCI-manifest sidecar bytes exactly as stored on disk.
+
+        The OCI digest is over the on-disk bytes, so they are returned verbatim
+        and never re-parsed/re-serialized before hashing.
+        """
+        path = self._baked_image_manifest_path
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            raise RuntimeError(
+                f"Cannot read baked OCI-manifest sidecar '{path}': {e}"
+            )
+        if not data:
+            raise RuntimeError(
+                f"Baked OCI-manifest sidecar '{path}' is empty or corrupt"
+            )
+        return data
+
+    def _verify_manifest_digest(self, manifest_bytes: bytes) -> None:
+        """Recompute the manifest digest over the sidecar bytes and compare.
+
+        Pure offline hashing of the stored bytes (never a re-serialized form),
+        compared to the expected manifest digest. Fail-closed on a
+        missing/empty expected digest or any mismatch.
+        """
+        expected_digest = self._container_image_digest
+        if not expected_digest:
+            raise RuntimeError(
+                "Cannot verify baked container image: no expected manifest digest "
+                "configured (CONTAINER_IMAGE_DIGEST is absent or empty; this should "
+                "have been caught during config validation)"
+            )
+
+        actual_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+        if actual_digest != expected_digest:
+            raise RuntimeError(
+                "Baked container image manifest digest mismatch: "
+                f"expected {expected_digest}, recomputed {actual_digest} over the "
+                f"sidecar '{self._baked_image_manifest_path}'"
+            )
+        logger.info(
+            f"Baked OCI-manifest sidecar verified offline against expected digest {expected_digest}"
+        )
+
+    def _derive_image_id(self, manifest_bytes: bytes) -> str:
+        """Read the config descriptor out of the verified manifest; its digest is the image ID.
+
+        Only called after _verify_manifest_digest has confirmed the bytes, so the
+        config digest is trusted by construction. Distinct from the manifest digest;
+        the two are never conflated.
+        """
+        try:
+            manifest = json.loads(manifest_bytes)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"Verified baked manifest '{self._baked_image_manifest_path}' is not valid JSON: {e}"
+            )
+        config_digest = (manifest.get("config") or {}).get("digest")
+        if not config_digest or not isinstance(config_digest, str):
+            raise RuntimeError(
+                "Verified baked manifest has no config descriptor digest; cannot derive image ID"
+            )
+        logger.info(f"Derived trusted image ID (config digest) from verified manifest: {config_digest}")
+        return config_digest
+
+    def _load_baked_archive(self) -> None:
+        """`docker load` the baked docker-archive into the rootless daemon."""
+        if self._docker_client is None:
+            raise RuntimeError(
+                "Cannot load baked container image: Docker client is not available"
+            )
+        path = self._baked_image_archive_path
+        try:
+            with open(path, "rb") as archive:
+                self._docker_client.images.load(archive.read())
+        except OSError as e:
+            raise RuntimeError(f"Cannot read baked docker-archive '{path}': {e}")
+        except docker.errors.APIError as e:
+            raise RuntimeError(f"Failed to docker load baked archive '{path}': {e}")
+        logger.info(f"Loaded baked docker-archive '{path}' into the rootless daemon")
+
+    def _bind_derived_image_id(self, image_id: str) -> None:
+        """Confirm the loaded image carries the derived image ID, then bind to it.
+
+        Fail-closed if no loaded image matches the derived ID — that is the
+        signature of an unfaithful loader (one that rewrote the config blob), and
+        execution must never proceed against an image other than the one the
+        verified manifest commits to.
         """
         if self._docker_client is None:
             raise RuntimeError(
-                f"Cannot pull container image '{self._container_image}': Docker client is not available"
+                "Cannot bind baked container image: Docker client is not available"
             )
-
-        image_name = self._container_image
-
-        # Check if image already exists locally
-        image = None
         try:
-            image = self._docker_client.images.get(image_name)
-            logger.info(f"Container image '{image_name}' already present locally, skipping pull")
+            self._docker_client.images.get(image_id)
         except docker.errors.ImageNotFound:
-            logger.info(f"Container image '{image_name}' not found locally, pulling from registry...")
+            raise RuntimeError(
+                f"Baked image load did not yield the derived image ID {image_id}: the "
+                "loaded image's config digest does not match the verified manifest "
+                "(an unfaithful conversion rewrote the config blob); failing closed"
+            )
         except docker.errors.APIError as e:
-            logger.warning(f"Error checking local image '{image_name}': {e}. Attempting pull...")
-
-        # Pull the image if not already present
-        if image is None:
-            start = time.monotonic()
-            try:
-                image = self._docker_client.images.pull(image_name)
-                duration = time.monotonic() - start
-                size_bytes = image.attrs.get("Size", 0) if image.attrs else 0
-                size_mb = size_bytes / (1024 * 1024)
-                logger.info(
-                    f"Pulled container image '{image_name}' in {duration:.1f}s "
-                    f"(size: {size_mb:.1f} MB)"
-                )
-            except docker.errors.ImageNotFound:
-                raise RuntimeError(
-                    f"Container image '{image_name}' not found in registry"
-                )
-            except docker.errors.APIError as e:
-                raise RuntimeError(
-                    f"Failed to pull container image '{image_name}': {e}"
-                )
-
-            # Verify the image is available after pull
-            try:
-                image = self._docker_client.images.get(image_name)
-            except docker.errors.ImageNotFound:
-                raise RuntimeError(
-                    f"Container image '{image_name}' not available after pull"
-                )
-
-        # Verify image digest if configured
-        self._verify_image_digest(image, image_name)
-
-    def _verify_image_digest(self, image, image_name: str) -> None:
-        """Verify the pulled image digest matches the expected digest.
-
-        Determines the expected digest from either the CONTAINER_IMAGE_DIGEST
-        config or from a digest-pinned image reference (image@sha256:...).
-        
-        Digest verification is now mandatory - the server will not start if
-        no digest is configured (Requirements 34.7, 34.8).
-
-        Args:
-            image: Docker image object
-            image_name: The image reference string
-
-        Raises:
-            RuntimeError: If the digest does not match the expected value or
-                if no digest information is available.
-        """
-        # Determine expected digest: from config or from digest-pinned reference
-        expected_digest = self._container_image_digest
-        if expected_digest is None and "@sha256:" in image_name:
-            expected_digest = image_name.split("@sha256:", 1)[1]
-            if expected_digest:
-                expected_digest = f"sha256:{expected_digest}"
-
-        # Digest must be set by this point (enforced by config validation)
-        if expected_digest is None:
             raise RuntimeError(
-                f"Cannot verify digest for container image '{image_name}': "
-                f"no digest configured (this should have been caught during config validation)"
+                f"Failed to confirm derived image ID {image_id} after load: {e}"
             )
-
-        # Extract actual digest from image RepoDigests
-        actual_digest = None
-        repo_digests = image.attrs.get("RepoDigests", []) if image.attrs else []
-        for entry in repo_digests:
-            if "@sha256:" in entry:
-                actual_digest = "sha256:" + entry.split("@sha256:", 1)[1]
-                break
-
-        # Fallback to image.id if no RepoDigests available
-        if actual_digest is None and image.id:
-            actual_digest = image.id
-
-        if actual_digest is None:
-            raise RuntimeError(
-                f"Cannot verify digest for container image '{image_name}': "
-                f"no digest information available"
-            )
-
-        if actual_digest != expected_digest:
-            raise RuntimeError(
-                f"Container image digest mismatch for '{image_name}': "
-                f"expected {expected_digest}, got {actual_digest}"
-            )
+        self._derived_image_id = image_id
+        logger.info(f"Bound execution to derived image ID {image_id}")
 
     def _cleanup_temp_files(self, execution_id: str, repo_path: str) -> None:
         """
