@@ -503,30 +503,30 @@ skopeo --version
 BAKE_DIR="${TEMP_IMAGE_DIR}/root/opt/github-actions-remote-executor/baked-image"
 mkdir -p "${BAKE_DIR}"
 
-OCI_LAYOUT_PARENT=$(mktemp -d)
-OCI_LAYOUT="${OCI_LAYOUT_PARENT}/oci-layout"
-
-# 1. Copy by digest into an OCI layout, pinning the linux/amd64 platform. This is
-#    digest-preserving (no rebuild); the manifest blob lands at blobs/sha256/<hex>.
-echo "Copying ${SRC_REF} into OCI layout (linux/amd64)..."
-if ! skopeo copy --override-os linux --override-arch amd64 \
-        "${SRC_REF}" "oci:${OCI_LAYOUT}:baked"; then
-    echo "::error::skopeo copy of ${SRC_REF} into OCI layout failed"
+# 1. Emit the sidecar as the RAW registry manifest addressed by the expected
+#    digest. Fetching the raw manifest by digest is byte-identical for ANY source
+#    media type (OCI or docker schema2). Reading it back from an OCI layout is NOT
+#    safe: skopeo re-serializes/re-digests a docker-schema2 source manifest when
+#    storing it in an oci layout, so sha256(layout-blob) != the registry digest
+#    (C1-a spike, column A). The raw fetch avoids that entirely.
+echo "Fetching raw linux/amd64 manifest as sidecar..."
+if ! skopeo inspect --raw "${SRC_REF}" > "${BAKE_DIR}/manifest.json"; then
+    echo "::error::skopeo inspect --raw of ${SRC_REF} failed"
     exit 1
 fi
 
-# 2. Locate the manifest blob addressed by the expected digest. Its mere presence
-#    in the content-addressed store asserts byte-identity (sha256(blob)==digest).
-SIDECAR_SRC="${OCI_LAYOUT}/blobs/sha256/${DIGEST_HEX}"
-if [ ! -f "${SIDECAR_SRC}" ]; then
-    echo "::error::No blob addressed by ${CONTAINER_IMAGE_DIGEST} in the OCI layout — the supplied digest is not the copied linux/amd64 manifest digest"
+# 1a. Assert byte-identity: sha256(sidecar) == expected manifest digest (task 1.3).
+ACTUAL_SIDECAR_HEX=$(sha256sum "${BAKE_DIR}/manifest.json" | cut -d' ' -f1)
+if [ "${ACTUAL_SIDECAR_HEX}" != "${DIGEST_HEX}" ]; then
+    echo "::error::Baked sidecar digest mismatch: expected ${DIGEST_HEX}, got ${ACTUAL_SIDECAR_HEX} — is CONTAINER_IMAGE_DIGEST the per-platform manifest digest?"
     exit 1
 fi
 
-# 2a. Fail if the digest resolves to a multi-platform index rather than a single
-#     manifest (D2 constraint 1), and confirm it is an image manifest with a config.
-MEDIA_TYPE=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('mediaType',''))" "${SIDECAR_SRC}")
-HAS_CONFIG=$(python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print('yes' if isinstance(m.get('config'),dict) and m['config'].get('digest') else 'no')" "${SIDECAR_SRC}")
+# 1b. Fail if the digest resolves to a multi-platform index rather than a single
+#     manifest (D2 constraint 1), and confirm it is an image manifest with a config
+#     descriptor (the runtime derives the image ID from its config.digest).
+MEDIA_TYPE=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('mediaType',''))" "${BAKE_DIR}/manifest.json")
+HAS_CONFIG=$(python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print('yes' if isinstance(m.get('config'),dict) and m['config'].get('digest') else 'no')" "${BAKE_DIR}/manifest.json")
 case "${MEDIA_TYPE}" in
     *image.index*|*manifest.list*)
         echo "::error::CONTAINER_IMAGE_DIGEST resolves to a multi-platform index (${MEDIA_TYPE}); a single linux/amd64 manifest digest is required (D2 constraint 1)"
@@ -537,25 +537,22 @@ if [ "${HAS_CONFIG}" != "yes" ]; then
     exit 1
 fi
 
-# 3. Emit the OCI manifest blob byte-for-byte as the sidecar, and re-verify
-#    sha256(sidecar) == expected digest (explicit assertion of task 1.3).
-cp "${SIDECAR_SRC}" "${BAKE_DIR}/manifest.json"
-ACTUAL_SIDECAR_HEX=$(sha256sum "${BAKE_DIR}/manifest.json" | cut -d' ' -f1)
-if [ "${ACTUAL_SIDECAR_HEX}" != "${DIGEST_HEX}" ]; then
-    echo "::error::Baked sidecar digest mismatch: expected ${DIGEST_HEX}, got ${ACTUAL_SIDECAR_HEX}"
+# 2. Produce the docker-archive via an OCI-layout intermediate. The default copy is
+#    config-blob-preserving, so the runtime-derived image ID (the sidecar's
+#    config.digest) equals the loaded image's ID — validated by the C1-a spike
+#    (column B PASS for both media types). The layout's own (possibly re-digested)
+#    manifest is irrelevant; the raw sidecar above carries the canonical anchor.
+OCI_LAYOUT_PARENT=$(mktemp -d)
+OCI_LAYOUT="${OCI_LAYOUT_PARENT}/oci-layout"
+echo "Copying ${SRC_REF} into OCI layout (linux/amd64) and converting to docker-archive..."
+if ! skopeo copy --override-os linux --override-arch amd64 "${SRC_REF}" "oci:${OCI_LAYOUT}:baked"; then
+    echo "::error::skopeo copy of ${SRC_REF} into OCI layout failed"
     exit 1
 fi
-
-# 4. Convert the OCI layout into a docker-archive (config-preserving). The
-#    archive's manifest digest is not load-bearing — the sidecar carries the
-#    anchor; the archive's only obligation is to preserve the config blob so the
-#    runtime-derived image ID matches the verified manifest's config digest.
-echo "Converting OCI layout -> docker-archive..."
 if ! skopeo copy "oci:${OCI_LAYOUT}:baked" "docker-archive:${BAKE_DIR}/image.tar"; then
     echo "::error::skopeo conversion oci -> docker-archive failed"
     exit 1
 fi
-
 rm -rf "${OCI_LAYOUT_PARENT}"
 
 echo "✓ Baked execution image into root tree:"
