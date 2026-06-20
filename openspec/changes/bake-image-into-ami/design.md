@@ -143,7 +143,15 @@ that treats no daemon-reported value as trusted:
 1. **Verify** — recompute the manifest digest over the baked layout's on-disk manifest blob
    and compare to the expected `container_image_digest`. Pure offline hashing (plain SHA-256 of
    the manifest bytes); no daemon, no network. Fail closed on mismatch, exactly as startup
-   fails closed today.
+   fails closed today. Two subtleties the implementation must respect: (a) locate the manifest
+   blob via the layout's `index.json`, and if `index.json` is itself an OCI image *index* select
+   the `linux/amd64` child manifest (never an index digest — D2 constraint 1); (b) hash the
+   **stored manifest blob bytes exactly**, never a re-canonicalized/re-serialized JSON form — the
+   OCI digest is over the on-disk bytes, so any reformat would diverge from the expected digest.
+   Note this also makes the binding self-enforcing: if a loader rewrites the config blob, the
+   loaded image's ID will not equal the derived image ID, so `containers.create()` fails closed
+   with no matching image — the faithfulness spike de-risks "does it work," but production is
+   protected regardless of loader choice.
 2. **Derive** — read the config descriptor out of that verified manifest; its digest is the
    trusted **image ID**, derived entirely from verity-measured, digest-verified bytes.
 3. **Load + bind** — load the layout into the existing rootless daemon (the legacy graphdriver
@@ -180,13 +188,24 @@ not affect the build-side artifact or its PCR4 contribution.
 ### Verifier record (D-rec) and external self-description via build-time surfaces
 
 The build emits a **single-entry verifier record** mapping the baked image's manifest digest →
-PCR4 → AMI id → producing commit, **published through the build's publish-time surfaces**: the
-GHA job log, the step summary (alongside the existing PCR/attestation reporting), an ORAS
-annotation on the published artifact (alongside the existing `pcr4`/`pcr7` annotations), and a
-tag on the registered AMI. This is *not* a committed in-repo file in this change — that durable,
-committed form is Change 2's `flavors.lock`. The join for a remote verifier is **PCR4**: read
-the published `abcd → PCR4 → AMI` record, obtain a live attestation showing that PCR4, and
-conclude "this instance runs `abcd`". No runtime attestation / `user_data` change is involved.
+PCR4 → AMI id → producing commit. The surfaces are **not uniform across fields**, because of a
+pipeline-timing constraint: the KIWI artifact is pushed (with its `pcr4`/`pcr7` ORAS annotations)
+and Sigstore-attested in `build-and-publish`, *before* `build-ami` runs and the AMI id exists.
+An ORAS annotation lives in the artifact manifest, so amending one after the fact changes the
+artifact digest and breaks the attestation `build-ami` verifies against — and the AMI id is not
+known at publish time anyway. So the record is split:
+
+- the **container image manifest digest** is carried as an ORAS annotation on the published
+  artifact (alongside the existing `pcr4`/`pcr7` annotations), fixed at publish time;
+- the **full record including the AMI id** is emitted only through surfaces available *after* the
+  AMI exists — the GHA job log, the step summary (alongside the existing PCR/attestation
+  reporting), and a **tag on the registered AMI**.
+
+This is *not* a committed in-repo file in this change — that durable, committed form is Change 2's
+`flavors.lock`, which inherits the same split (the AMI-id binding is AMI-side, not annotated onto
+the immutable attested artifact). The join for a remote verifier is **PCR4**: read the published
+`abcd → PCR4 → AMI` record, obtain a live attestation showing that PCR4, and conclude "this
+instance runs `abcd`". No runtime attestation / `user_data` change is involved.
 
 ## Risks / Trade-offs
 
