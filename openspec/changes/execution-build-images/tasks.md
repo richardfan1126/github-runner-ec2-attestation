@@ -23,9 +23,9 @@
 
 ## 4. Per-flavor image build and publish (image-build delta)
 
-- [ ] 4.1 Build one execution-container image per image-level matrix flavor from `flavors/<flavor>/Dockerfile` and publish to GHCR by immutable digest at `ghcr.io/<owner>/<repo>/<flavor>`, capturing the amd64 per-platform manifest digest
-- [ ] 4.2 Parameterize `.github/scripts/build-kiwi-image.sh` from one flavor to N, baking the selected flavor's published image as a digest-preserving OCI layout into the dm-verity-sealed erofs root (reusing the `bake-image-into-ami` offline-import/verify/image-ID-binding mechanism)
-- [ ] 4.3 For AMI-only matrix entries, bake reusing the flavor's existing image digest from `flavors.lock` without rebuilding the image
+- [x] 4.1 Build one execution-container image per image-level matrix flavor from `flavors/<flavor>/Dockerfile` and publish to GHCR by immutable digest at `ghcr.io/<owner>/<repo>/<flavor>`, capturing the amd64 per-platform manifest digest
+- [x] 4.2 Parameterize `.github/scripts/build-kiwi-image.sh` from one flavor to N, baking the selected flavor's published image as a digest-preserving OCI layout into the dm-verity-sealed erofs root (reusing the `bake-image-into-ami` offline-import/verify/image-ID-binding mechanism)
+- [x] 4.3 For AMI-only matrix entries, bake reusing the flavor's existing image digest from `flavors.lock` without rebuilding the image
 
 ## 5. Per-flavor AMI build matrix (ami-build delta)
 
