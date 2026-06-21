@@ -52,6 +52,10 @@ something this change must **preserve** through the new merge layers.
   `deployment` capability.
 - Any change to the guest build flow (`remote-executor` execution, cloning,
   `request-encryption`). Guests still ship their own source and build scripts.
+- **Multi-architecture flavors.** The system is **amd64-only** by design: D11 pins
+  the amd64 per-platform manifest digest (never a multi-arch index), inherited from
+  Change 1's bake path. arm64/Graviton build environments are out of scope and
+  would require revisiting the bake mechanism, not just adding a flavor.
 
 ## Decisions
 
@@ -143,7 +147,10 @@ the de-duplication goal.
 **Decision**: `ALLOWED_REPOSITORIES` (and its sibling `EXPECTED_AUDIENCE`) is a
 per-flavor declared value (bucket ②). Its **default is deny-all** — a flavor that
 declares no allowlist is unusable (fail closed), so each flavor must name the
-guest repos permitted to use it.
+guest repos permitted to use it. **`flavors/default/env` therefore carries
+neither key**: leaving an allowlist in the shared base would make every flavor
+inherit it silently and defeat deny-all (see Migration Plan step 1). These two
+keys live only in real flavor `env` files.
 
 Because the allowlist is baked into the flavor's verity root, "which guests may
 use this flavor" is enforced **cryptographically at the executor and bound by
@@ -151,6 +158,16 @@ PCR4** — not merely by endpoint addressing. This is the *authorization* half o
 Q9: a caller reaching the wrong flavor's executor is rejected by the baked OIDC
 allowlist. The *addressing* half (provisioning/discovering one endpoint per
 flavor) is a `deployment` concern and out of scope here (Non-Goals).
+
+**Layered fail-closed**: deny-all is enforced at two layers, not one. Because
+`src/config.py` treats `ALLOWED_REPOSITORIES` and `EXPECTED_AUDIENCE` as
+**required** (unset → `load_config()` raises, not a hardened fallback like the
+bucket-① keys), a flavor that declares neither key fails the **build-time**
+config-resolution gate ("Unresolvable config fails the build", `container-security`)
+— such a flavor never ships an AMI at all. Should a flavor somehow ship with an
+empty allowlist, the **runtime** executor still denies every caller. The
+build-time gate is the primary defense (a deny-all flavor cannot exist as a
+registered AMI); the runtime denial is defense-in-depth.
 
 **Trade-off**: changing who may call a flavor is a full AMI rebuild (PCR4-bound),
 consistent with D3's attested-at-rest posture.
@@ -214,6 +231,24 @@ record to N flavors with the same fields. An **optional SSM Parameter Store
 mirror** for the `deployment` side to consume is left as an open question (it is a
 consumption convenience, not the source of truth).
 
+### D15 — Two verification surfaces: config-audit vs. provenance-trace
+
+**Decision**: name and separate the two things a verifier can do, so the
+"effective env is reconstructible" scenario (`execution-build-images`) is not
+misread as an image-reproducibility promise.
+
+- **Config audit (deterministic, reconstructible):** the effective env is a pure
+  `KEY=VALUE` precedence merge over committed files (`code defaults ◀
+  default/env ◀ flavor/env`) plus one recorded injected digest. A verifier holding
+  the producing commit can re-derive it exactly and confirm it matches what PCR4
+  commits to. This is deterministic because it is just config merging.
+- **Provenance trace (not bit-reproducible):** the image/AMI themselves are **not**
+  claimed to rebuild bit-for-bit. The trust anchor is the attestation tracing
+  PCR → GHA run → producing commit, not a reproducible rebuild.
+
+The config audit is layered *under* the provenance trace; the "deterministic"
+language applies only to the env merge, never to the image bytes.
+
 ### D14 — Terminology: "flavor" (resolves terminology)
 
 **Decision**: the user-facing term is **flavor** (a "build-environment flavor"),
@@ -248,10 +283,14 @@ form.
 
 1. Create `flavors/default/env` from the current
    `kiwi-descriptions/root/etc/github-actions-remote-executor/env`, **stripping the
-   bucket-③ keys** (`CONTAINER_IMAGE`, `CONTAINER_IMAGE_DIGEST`).
+   bucket-③ keys** (`CONTAINER_IMAGE`, `CONTAINER_IMAGE_DIGEST`) **and the
+   per-flavor authorization keys** (`ALLOWED_REPOSITORIES`, `EXPECTED_AUDIENCE`).
+   The shared base must carry no allowlist or audience, or deny-all (D9) would be
+   silently defeated for every flavor.
 2. Create the first real flavor directory (e.g. the existing rust-build demo) with
    its `Dockerfile` (+ supplements) and a minimal `env` declaring its
-   `ALLOWED_REPOSITORIES` and any resource overrides.
+   `ALLOWED_REPOSITORIES`, `EXPECTED_AUDIENCE` (moved out of the old env in step 1),
+   and any resource overrides.
 3. Add `detect-changes` + dynamic matrix to the workflow (D12); parameterize the
    KIWI build 1 → N; bake each flavor's OCI layout (reusing Change 1's path).
 4. Introduce the bucket-③ validator (D11) and extend the config summary per flavor.

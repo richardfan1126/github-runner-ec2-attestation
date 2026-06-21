@@ -67,12 +67,17 @@ The configuration baked into a flavor's verity root SHALL be computed by a fixed
 
 ### Requirement: Per-flavor repository authorization defaults to deny-all
 
-`ALLOWED_REPOSITORIES` (and its sibling `EXPECTED_AUDIENCE`) SHALL be a per-flavor declared value whose default is deny-all. A flavor that declares no allowlist SHALL be unusable (fail closed). Because the allowlist is part of the effective env baked into the verity root and bound by PCR4, which guests may use a flavor is enforced cryptographically at the executor, not merely by endpoint addressing.
+`ALLOWED_REPOSITORIES` (and its sibling `EXPECTED_AUDIENCE`) SHALL be a per-flavor declared value whose default is deny-all. `flavors/default/env` SHALL carry neither key, so no flavor inherits an allowlist or audience silently. A flavor that declares no allowlist SHALL be unusable, enforced at two layers: the **build-time** config-resolution gate (these keys are required by the executor's loader, so an unresolvable merged env fails that flavor's build before any AMI is registered) and, as defense-in-depth, the **runtime** executor denying every caller. Because the allowlist is part of the effective env baked into the verity root and bound by PCR4, which guests may use a flavor is enforced cryptographically at the executor, not merely by endpoint addressing.
 
-#### Scenario: Flavor with no allowlist is unusable
+#### Scenario: Flavor with no allowlist fails the build (primary gate)
 
-- **WHEN** a flavor `env` declares no `ALLOWED_REPOSITORIES` and `flavors/default/env` supplies none
-- **THEN** the effective configuration denies all callers (fail closed) rather than allowing any
+- **WHEN** a flavor `env` declares no `ALLOWED_REPOSITORIES`/`EXPECTED_AUDIENCE` and `flavors/default/env` supplies none
+- **THEN** the merged effective env is unresolvable by the executor's config loader and that flavor's build fails before its AMI is registered, so a deny-all flavor never ships
+
+#### Scenario: Empty allowlist denies all at runtime (defense-in-depth)
+
+- **WHEN** an executor nonetheless boots with an empty `ALLOWED_REPOSITORIES`
+- **THEN** it denies all callers (fail closed) rather than allowing any
 
 #### Scenario: Allowlist is bound by PCR4
 
