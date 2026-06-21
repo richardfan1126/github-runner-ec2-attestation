@@ -631,6 +631,7 @@ jobs:
             --output-file ami_build_result.json \
             --expected-workflow .github/workflows/build-attestable-image.yml \
             --container-image-digest "${{ steps.ctx.outputs.container_image_digest }}" \
+            --producing-commit "${{ github.sha }}" \
             $ALLOW_DEBUG_FLAG
 
       - name: Upload AMI build result
@@ -696,3 +697,84 @@ jobs:
             -var "instance_type=c5.9xlarge" \
             -var "allowed_ssh_cidr=0.0.0.0/0" \
           || echo "::warning::Terraform destroy encountered errors. Manual cleanup may be required."
+
+  update-flavors-lock:
+    needs: [detect-changes, build-ami]
+    # Skip debug builds (enable_ssh=true) — those AMIs must not enter flavors.lock (task 6.4).
+    # Cascading skip from build-ami handles develop-skip and empty-matrix cases automatically.
+    if: "!(github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true)"
+    runs-on: ubuntu-24.04
+    # Serialize flavors.lock write-backs: only one update runs at a time per ref;
+    # queued runs proceed in order rather than being cancelled (task 6.3).
+    concurrency:
+      group: flavors-lock-update-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Download all AMI build results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ami-build-result-*
+          path: ami-results/
+
+      - name: Update flavors.lock
+        env:
+          AMI_MATRIX: ${{ needs.detect-changes.outputs.ami_matrix }}
+        run: |
+          # Start from the existing lock (carry forward unchanged entries) or an empty object.
+          LOCK='{}'
+          if [ -f flavors.lock ]; then
+            LOCK=$(cat flavors.lock)
+          fi
+
+          # For each flavor rebuilt in this run, merge in the new verifier record.
+          # ami-results/ami-build-result-<flavor>/ami_build_result.json is the per-flavor output.
+          FLAVORS=$(echo "$AMI_MATRIX" | jq -r '.include[].flavor')
+          for FLAVOR in $FLAVORS; do
+            RESULT_FILE="ami-results/ami-build-result-${FLAVOR}/ami_build_result.json"
+            if [ -f "$RESULT_FILE" ]; then
+              ENTRY=$(jq '{
+                container_image_digest: .verifier_record.container_image_digest,
+                pcr4: .verifier_record.pcr4,
+                ami_id: .verifier_record.ami_id,
+                producing_commit: .verifier_record.producing_commit
+              }' "$RESULT_FILE")
+              LOCK=$(echo "$LOCK" | jq --arg f "$FLAVOR" --argjson e "$ENTRY" '.[$f] = $e')
+            else
+              echo "::warning::No build result for flavor '${FLAVOR}' — entry not updated"
+            fi
+          done
+
+          # Write sorted, pretty-printed JSON for stable diffs.
+          printf '%s\n' "$LOCK" | jq --sort-keys '.' > flavors.lock
+          echo "flavors.lock after update:"
+          cat flavors.lock
+
+      - name: Commit and push flavors.lock
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet flavors.lock; then
+            echo "No changes to flavors.lock — skipping commit"
+            exit 0
+          fi
+
+          git add flavors.lock
+          git commit -m "chore: update flavors.lock after AMI build [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Write flavors.lock summary
+        run: |
+          echo "## flavors.lock Updated" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`json" >> "$GITHUB_STEP_SUMMARY"
+          cat flavors.lock >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"

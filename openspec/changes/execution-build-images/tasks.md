@@ -35,10 +35,10 @@
 
 ## 6. flavors.lock durable record (D13, container-security delta)
 
-- [ ] 6.1 Define the `flavors.lock` schema: per-flavor `{image manifest digest, PCR4, AMI id, producing commit}`, generalizing Change 1's single-entry verifier record with the same field set
-- [ ] 6.2 After each AMI is registered, write that flavor's entry to `flavors.lock`, recording `producing commit` as the source commit `C_src` (not the pipeline's write-back commit) — note `scripts/build-ami.py` today records `producing_commit` as the run's own SHA, so it must learn the `C_src` vs. write-back-commit distinction when generalizing its single-entry `verifier_record`
-- [ ] 6.3 Carry forward unchanged entries for flavors not rebuilt; commit `flavors.lock` back to git; serialize updates via a concurrency group
-- [ ] 6.4 Ensure a `workflow_dispatch` debug/SSH build targeting a single flavor does NOT overwrite that flavor's production `flavors.lock` entry (compose with the existing `debug=true` gate)
+- [x] 6.1 Define the `flavors.lock` schema: per-flavor `{image manifest digest, PCR4, AMI id, producing commit}`, generalizing Change 1's single-entry verifier record with the same field set
+- [x] 6.2 After each AMI is registered, write that flavor's entry to `flavors.lock`, recording `producing commit` as the source commit `C_src` (not the pipeline's write-back commit) — note `scripts/build-ami.py` today records `producing_commit` as the run's own SHA, so it must learn the `C_src` vs. write-back-commit distinction when generalizing its single-entry `verifier_record`
+- [x] 6.3 Carry forward unchanged entries for flavors not rebuilt; commit `flavors.lock` back to git; serialize updates via a concurrency group
+- [x] 6.4 Ensure a `workflow_dispatch` debug/SSH build targeting a single flavor does NOT overwrite that flavor's production `flavors.lock` entry (compose with the existing `debug=true` gate)
 
 ## 7. Attestation binding and summary (container-security delta)
 

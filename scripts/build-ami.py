@@ -1579,6 +1579,15 @@ def parse_arguments() -> argparse.Namespace:
              'verifier record so external verifiers can map AMI -> image digest.'
     )
 
+    parser.add_argument(
+        '--producing-commit',
+        type=str,
+        default=None,
+        help='The source commit (C_src) that triggered this build — the git SHA '
+             'of the commit being built, NOT any write-back commit the pipeline '
+             'creates afterward. Defaults to the GITHUB_SHA environment variable.'
+    )
+
     return parser.parse_args()
 
 def main() -> int:
@@ -1712,8 +1721,9 @@ def main() -> int:
         snapshot_id = upload_snapshot(ssh_client, args.region)
         wait_for_snapshot(ec2_client, snapshot_id)
         ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
-        # Producing commit for the verifier record (GitHub Actions sets GITHUB_SHA).
-        producing_commit = os.environ.get("GITHUB_SHA")
+        # C_src: the source commit that triggered this build.  Prefer the explicit
+        # CLI arg (so the workflow can document intent); fall back to GITHUB_SHA.
+        producing_commit = args.producing_commit or os.environ.get("GITHUB_SHA")
         ami_id = register_ami(
             ec2_client, snapshot_id, architecture, ami_name,
             container_image_digest=args.container_image_digest,
