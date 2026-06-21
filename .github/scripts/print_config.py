@@ -165,6 +165,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Path to the EnvironmentFile-style env file to resolve.",
     )
+    parser.add_argument(
+        "--flavor",
+        default=None,
+        help="Flavor name to include as a labeled header in the output.",
+    )
     args = parser.parse_args(argv)
 
     if not args.env_file.is_file():
@@ -176,9 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config()
     except (ConfigurationError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
+        flavor_label = f" (flavor: {args.flavor})" if args.flavor else ""
+        print(f"Configuration unresolvable{flavor_label}: {exc}", file=sys.stderr)
         return 1
 
+    if args.flavor:
+        print(f"### Config: {args.flavor}\n")
     print(render_table(config))
     return 0
 

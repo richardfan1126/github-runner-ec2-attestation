@@ -21,6 +21,7 @@ set -e -o pipefail
 # Parse command-line arguments
 ENABLE_SSH="false"
 ENABLE_GPU="false"
+EFFECTIVE_ENV_FILE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --enable-ssh)
@@ -30,6 +31,10 @@ while [ $# -gt 0 ]; do
         --enable-gpu)
             ENABLE_GPU="true"
             shift
+            ;;
+        --env-file)
+            EFFECTIVE_ENV_FILE="$2"
+            shift 2
             ;;
         *)
             echo "::error::Unknown argument: $1"
@@ -68,6 +73,20 @@ trap "rm -rf ${TEMP_IMAGE_DIR}" EXIT
 
 echo "Copying image description files to temporary directory..."
 cp -r "${IMAGE_DESCRIPTION_DIR}"/* "${TEMP_IMAGE_DIR}/"
+
+# Place the effective env (produced by merge_env.py, task 2.1) into the root
+# overlay so it is baked into the verity-sealed erofs and measured into PCR4.
+# The file must exist before the bake section reads CONTAINER_IMAGE/_DIGEST from it.
+# In the flavor model this file is never committed; it is always merge-generated.
+if [ -n "${EFFECTIVE_ENV_FILE}" ]; then
+    if [ ! -f "${EFFECTIVE_ENV_FILE}" ]; then
+        echo "::error::--env-file not found: ${EFFECTIVE_ENV_FILE}"
+        exit 1
+    fi
+    mkdir -p "${TEMP_IMAGE_DIR}/root/etc/github-actions-remote-executor"
+    cp "${EFFECTIVE_ENV_FILE}" "${TEMP_IMAGE_DIR}/root/etc/github-actions-remote-executor/env"
+    echo "✓ Effective env installed from ${EFFECTIVE_ENV_FILE}"
+fi
 
 # Conditionally remove SSH-related ignore directives when --enable-ssh is passed
 if [ "${ENABLE_SSH}" = "true" ]; then

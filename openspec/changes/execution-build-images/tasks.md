@@ -7,11 +7,11 @@
 
 ## 2. Effective-config merge and validation (D7, D8, D10, D11)
 
-- [ ] 2.1 Implement the fixed-precedence merge `code defaults ◀ flavors/default/env ◀ flavors/<flavor>/env ◀ pipeline-injected bucket ③`, producing a deterministic effective env, routed through `src/config.py::load_config()` so no second schema exists
-- [ ] 2.2 Implement the pre-bake validator (D11, D16) that fails the build fast over every committed `env` (default or flavor) on two checks: (a) any hand-set bucket-③ key (`CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST`), and (b) any **unknown key** — anything not in the recognized-key set derived from `ServerConfig`'s field→env-var enumeration (the same enumeration `print_config.py` walks, so no second schema); place it alongside `print_config.py`/`load_config()`
-- [ ] 2.3 Implement derived-digest injection: after image push, inject `CONTAINER_IMAGE=ghcr.io/<owner>/<repo>/<flavor>` and `CONTAINER_IMAGE_DIGEST=sha256:…` (amd64 per-platform manifest digest, never a multi-arch index) into the effective env before bake
-- [ ] 2.4 Enforce deny-all authorization: confirm the merged env fails the build-time config-resolution gate when a flavor supplies no `ALLOWED_REPOSITORIES`/`EXPECTED_AUDIENCE` (required keys in `load_config()`), so a deny-all flavor never ships an AMI
-- [ ] 2.5 Extend `print_config.py` to print the **effective merged** config per flavor (grouped by category, "Other" last, no redaction), labeled with the flavor name; fail the flavor's build if the config is unresolvable
+- [x] 2.1 Implement the fixed-precedence merge `code defaults ◀ flavors/default/env ◀ flavors/<flavor>/env ◀ pipeline-injected bucket ③`, producing a deterministic effective env, routed through `src/config.py::load_config()` so no second schema exists
+- [x] 2.2 Implement the pre-bake validator (D11, D16) that fails the build fast over every committed `env` (default or flavor) on two checks: (a) any hand-set bucket-③ key (`CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST`), and (b) any **unknown key** — anything not in the recognized-key set derived from `ServerConfig`'s field→env-var enumeration (the same enumeration `print_config.py` walks, so no second schema); place it alongside `print_config.py`/`load_config()`
+- [x] 2.3 Implement derived-digest injection: after image push, inject `CONTAINER_IMAGE=ghcr.io/<owner>/<repo>/<flavor>` and `CONTAINER_IMAGE_DIGEST=sha256:…` (amd64 per-platform manifest digest, never a multi-arch index) into the effective env before bake
+- [x] 2.4 Enforce deny-all authorization: confirm the merged env fails the build-time config-resolution gate when a flavor supplies no `ALLOWED_REPOSITORIES`/`EXPECTED_AUDIENCE` (required keys in `load_config()`), so a deny-all flavor never ships an AMI
+- [x] 2.5 Extend `print_config.py` to print the **effective merged** config per flavor (grouped by category, "Other" last, no redaction), labeled with the flavor name; fail the flavor's build if the config is unresolvable
 
 ## 3. Flavor enumeration and selective rebuild (D12)
 

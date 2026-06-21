@@ -42,7 +42,22 @@ jobs:
         run: |
           docker build -t kiwi-builder:latest -f .github/docker/Dockerfile.kiwi-builder .
       
+      - name: Validate committed env files
+        run: |
+          uv run python .github/scripts/validate_env.py \
+            flavors/default/env \
+            flavors/rust-build/env
+
       - name: Build KIWI image
+        # TODO (execution-build-images task 4.1/4.2): pass --flavor and --env-file once
+        # the per-flavor image build pushes the container image and merge_env.py injects
+        # CONTAINER_IMAGE + CONTAINER_IMAGE_DIGEST.  Example (post-task-4):
+        #   uv run python .github/scripts/merge_env.py \
+        #     --flavor rust-build \
+        #     --container-image ghcr.io/${REPO}/rust-build \
+        #     --container-image-digest sha256:... \
+        #     --output effective-rust-build.env
+        #   .github/scripts/build-kiwi-image.sh $SSH_FLAG --env-file effective-rust-build.env
         run: |
           chmod +x .github/scripts/build-kiwi-image.sh
           SSH_FLAG=""
@@ -52,15 +67,17 @@ jobs:
           .github/scripts/build-kiwi-image.sh $SSH_FLAG
 
       - name: Print effective configuration to summary
-        # TODO (execution-build-images task 2.5): replace with per-flavor effective env
-        # printed after the merge step generates flavors/<f>/effective.env.
-        # The old single-flavor committed env file has been removed; this step will be
-        # re-wired once the merge pipeline (task 2.1) and print_config per-flavor
-        # extension (task 2.5) are in place.
+        # TODO (execution-build-images task 4.1/4.2): run after merge_env.py produces
+        # the effective env (which requires the flavor image digest from the push step).
+        # Post-task-4 invocation will be:
+        #   uv run python .github/scripts/print_config.py \
+        #     --env-file effective-rust-build.env \
+        #     --flavor rust-build \
+        #     >> "$GITHUB_STEP_SUMMARY"
         run: |
           echo "### Effective Server Configuration" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "> ⚠️ Per-flavor config summary not yet implemented (execution-build-images task 2.5)." >> "$GITHUB_STEP_SUMMARY"
+          echo "> ⚠️ Per-flavor config summary not yet wired (execution-build-images task 4.1/4.2 needed for image digest)." >> "$GITHUB_STEP_SUMMARY"
 
       - name: SSH debug warning
         if: github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true
