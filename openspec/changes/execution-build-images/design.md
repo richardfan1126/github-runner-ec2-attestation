@@ -195,6 +195,37 @@ The injected digest is the per-platform **amd64 manifest** digest (never a
 multi-arch index), per Change 1's D2 byte-identity constraint, carried forward
 unchanged per flavor.
 
+### D16 — The pre-bake validator also rejects unknown keys (closes the silent-typo gap)
+
+**Decision**: the D11 pre-bake validator does **two** checks over every committed
+`env` (`flavors/default/env` and each `flavors/<f>/env`), not one:
+
+1. **No hand-set bucket ③** — reject any `CONTAINER_IMAGE` / `CONTAINER_IMAGE_DIGEST`
+   (D11).
+2. **No unknown keys** — reject any `KEY` that is not a recognized executor
+   configuration key. The recognized-key set is derived from `ServerConfig`'s own
+   field→env-var enumeration — **the same enumeration `print_config.py` walks** —
+   so it cannot drift from the executor's real schema, and adding a config key in
+   `src/config.py` automatically makes it a legal `env` key. No second schema.
+
+**Rationale**: the effective env is a last-wins `KEY=VALUE` overlay (D8), and
+`src/config.py::load_config()` ignores keys it does not recognize. Without check 2,
+a misspelled key in a committed `env` is **silently dropped**: e.g.
+`NO_NEW_PRIVILEGE=true` (missing the `S`) leaves the real `NO_NEW_PRIVILEGES` at
+its hardened default — which happens to fail *safe*, but invisibly — while a
+misspelled *relaxation* a developer believes is in effect is silently not, and a
+key removed from a newer `src/config.py` lingers as dead config. Secure-by-default
+must not be bypassable by a typo in either direction, so an unrecognized key
+**fails the build loudly** before any bake step, exactly like a hand-set bucket-③
+key. The check lives in the same validator pass alongside
+`print_config.py`/`load_config()`.
+
+**Constraint locked in**: the executor `env` file carries **only** `ServerConfig`
+keys — no systemd-only variables, no non-config passengers share that file. This
+holds today (every key in the migrated env maps to a `ServerConfig` setting). If a
+non-config key ever needs to live there, check 2 would need an explicit allowlist
+escape hatch; until then, strict rejection is the rule.
+
 ### D12 — Selective-rebuild invalidation graph for the co-located layout (refines D4)
 
 **Decision**: `detect-changes` maps changed paths to affected flavors using a

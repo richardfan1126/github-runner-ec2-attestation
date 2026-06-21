@@ -100,7 +100,7 @@ The merge SHALL preserve secure-by-default: any bucket-① key left unset at eve
 
 ### Requirement: Derived image identity is injected and validated, never hand-declared
 
-The pipeline SHALL, after building `flavors/<flavor>/Dockerfile` and pushing it to GHCR by digest, inject `CONTAINER_IMAGE=ghcr.io/<owner>/<repo>/<flavor>` and `CONTAINER_IMAGE_DIGEST=sha256:…` into the effective env before bake. The injected digest SHALL be the per-platform **amd64 manifest** digest, never a multi-arch index digest. A **pre-bake validator** SHALL reject any committed `env` (whether `flavors/default/env` or a flavor `env`) that hand-sets a bucket-③ key, failing the build before bake. The validator runs at build time only; it does not run at executor startup, where these keys are legitimately present in the baked env.
+The pipeline SHALL, after building `flavors/<flavor>/Dockerfile` and pushing it to GHCR by digest, inject `CONTAINER_IMAGE=ghcr.io/<owner>/<repo>/<flavor>` and `CONTAINER_IMAGE_DIGEST=sha256:…` into the effective env before bake. The injected digest SHALL be the per-platform **amd64 manifest** digest, never a multi-arch index digest. A **pre-bake validator** SHALL reject, before any bake step, any committed `env` (whether `flavors/default/env` or a flavor `env`) that (a) hand-sets a bucket-③ key, or (b) declares a key that is not a recognized executor configuration key. The recognized-key set SHALL be derived from the executor configuration object's own field→env-var enumeration (the same enumeration the build-time configuration summary walks), so no second schema exists to drift from the executor's. The validator runs at build time only; it does not run at executor startup, where bucket-③ keys are legitimately present in the baked env.
 
 #### Scenario: Hand-set bucket-③ key fails the build
 
@@ -116,6 +116,11 @@ The pipeline SHALL, after building `flavors/<flavor>/Dockerfile` and pushing it 
 
 - **WHEN** the pipeline injects the digest
 - **THEN** it injects the amd64 per-platform manifest digest, not the multi-arch index digest
+
+#### Scenario: Unknown or misspelled key fails the build
+
+- **WHEN** a committed `env` declares a key that is not in the executor configuration object's enumeration (e.g. `NO_NEW_PRIVILEGE=true`, a misspelling of `NO_NEW_PRIVILEGES`)
+- **THEN** the pre-bake validator fails the build before any bake step, rather than silently dropping the key and leaving the intended setting at its unstated default
 
 ### Requirement: Selective rebuild via a two-level invalidation graph
 

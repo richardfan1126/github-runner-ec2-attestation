@@ -8,7 +8,7 @@
 ## 2. Effective-config merge and validation (D7, D8, D10, D11)
 
 - [ ] 2.1 Implement the fixed-precedence merge `code defaults ◀ flavors/default/env ◀ flavors/<flavor>/env ◀ pipeline-injected bucket ③`, producing a deterministic effective env, routed through `src/config.py::load_config()` so no second schema exists
-- [ ] 2.2 Implement the bucket-③ pre-bake validator that fails the build fast if any committed `env` (default or flavor) hand-sets `CONTAINER_IMAGE` or `CONTAINER_IMAGE_DIGEST`; place it alongside `print_config.py`/`load_config()`
+- [ ] 2.2 Implement the pre-bake validator (D11, D16) that fails the build fast over every committed `env` (default or flavor) on two checks: (a) any hand-set bucket-③ key (`CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST`), and (b) any **unknown key** — anything not in the recognized-key set derived from `ServerConfig`'s field→env-var enumeration (the same enumeration `print_config.py` walks, so no second schema); place it alongside `print_config.py`/`load_config()`
 - [ ] 2.3 Implement derived-digest injection: after image push, inject `CONTAINER_IMAGE=ghcr.io/<owner>/<repo>/<flavor>` and `CONTAINER_IMAGE_DIGEST=sha256:…` (amd64 per-platform manifest digest, never a multi-arch index) into the effective env before bake
 - [ ] 2.4 Enforce deny-all authorization: confirm the merged env fails the build-time config-resolution gate when a flavor supplies no `ALLOWED_REPOSITORIES`/`EXPECTED_AUDIENCE` (required keys in `load_config()`), so a deny-all flavor never ships an AMI
 - [ ] 2.5 Extend `print_config.py` to print the **effective merged** config per flavor (grouped by category, "Other" last, no redaction), labeled with the flavor name; fail the flavor's build if the config is unresolvable
@@ -36,7 +36,7 @@
 ## 6. flavors.lock durable record (D13, container-security delta)
 
 - [ ] 6.1 Define the `flavors.lock` schema: per-flavor `{image manifest digest, PCR4, AMI id, producing commit}`, generalizing Change 1's single-entry verifier record with the same field set
-- [ ] 6.2 After each AMI is registered, write that flavor's entry to `flavors.lock`, recording `producing commit` as the source commit `C_src` (not the pipeline's write-back commit)
+- [ ] 6.2 After each AMI is registered, write that flavor's entry to `flavors.lock`, recording `producing commit` as the source commit `C_src` (not the pipeline's write-back commit) — note `scripts/build-ami.py` today records `producing_commit` as the run's own SHA, so it must learn the `C_src` vs. write-back-commit distinction when generalizing its single-entry `verifier_record`
 - [ ] 6.3 Carry forward unchanged entries for flavors not rebuilt; commit `flavors.lock` back to git; serialize updates via a concurrency group
 - [ ] 6.4 Ensure a `workflow_dispatch` debug/SSH build targeting a single flavor does NOT overwrite that flavor's production `flavors.lock` entry (compose with the existing `debug=true` gate)
 
@@ -48,7 +48,7 @@
 ## 8. Tests and documentation
 
 - [ ] 8.1 Test the precedence merge: flavor delta overrides shared default; unset bucket-① key falls through to hardened default; effective env is reconstructible from committed inputs + recorded digest
-- [ ] 8.2 Test the bucket-③ validator rejects hand-set `CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST` (including migration leftovers in `default/env`)
+- [ ] 8.2 Test the pre-bake validator rejects (a) hand-set `CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST` (including migration leftovers in `default/env`) and (b) an unknown/misspelled key (e.g. `NO_NEW_PRIVILEGE=true`), failing the build rather than silently dropping it; confirm a valid key in `ServerConfig`'s enumeration passes
 - [ ] 8.3 Test flavor enumeration excludes `default` explicitly; test `detect-changes` mapping for each level and the fail-safe/loop-guard edge cases
 - [ ] 8.4 Test deny-all: a flavor with no allowlist fails the build-time gate; an executor booted with empty allowlist denies all callers
 - [ ] 8.5 Update project docs (README/specs references) for the flavor model, the `flavors/` layout, the merge precedence, and how to add a flavor
