@@ -52,16 +52,15 @@ jobs:
           .github/scripts/build-kiwi-image.sh $SSH_FLAG
 
       - name: Print effective configuration to summary
+        # TODO (execution-build-images task 2.5): replace with per-flavor effective env
+        # printed after the merge step generates flavors/<f>/effective.env.
+        # The old single-flavor committed env file has been removed; this step will be
+        # re-wired once the merge pipeline (task 2.1) and print_config per-flavor
+        # extension (task 2.5) are in place.
         run: |
-          ENV_FILE="kiwi-descriptions/root/etc/github-actions-remote-executor/env"
-          {
-            echo "### Effective Server Configuration (built into image)"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-          if ! uv run python .github/scripts/print_config.py --env-file "$ENV_FILE" >> "$GITHUB_STEP_SUMMARY"; then
-            echo "::error::Failed to resolve effective configuration from $ENV_FILE"
-            exit 1
-          fi
+          echo "### Effective Server Configuration" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> ⚠️ Per-flavor config summary not yet implemented (execution-build-images task 2.5)." >> "$GITHUB_STEP_SUMMARY"
 
       - name: SSH debug warning
         if: github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true
@@ -135,20 +134,15 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Extract baked container image digest
+        # TODO (execution-build-images task 4.1): CONTAINER_IMAGE_DIGEST is now a
+        # pipeline-injected bucket-③ value, produced after the flavor's Dockerfile is
+        # built and pushed to GHCR.  It no longer lives in any committed env file.
+        # This step will be re-wired in task 4.1 to capture the digest from the image
+        # push step output rather than reading it from a committed file.
         id: container_image
         run: |
-          ENV_FILE="kiwi-descriptions/root/etc/github-actions-remote-executor/env"
-          CID=$(grep -E '^CONTAINER_IMAGE_DIGEST=' "$ENV_FILE" | head -n1 | cut -d= -f2-)
-          if [ -z "$CID" ]; then
-            echo "::error::CONTAINER_IMAGE_DIGEST missing or empty in $ENV_FILE"
-            exit 1
-          fi
-          echo "container_image_digest=$CID" >> $GITHUB_OUTPUT
-          echo "Baked container image digest: $CID"
-          {
-            echo "### Baked Container Image"
-            echo "- **Container image digest**: \`$CID\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "container_image_digest=unknown" >> $GITHUB_OUTPUT
+          echo "::warning::container_image_digest not yet wired for flavor model (execution-build-images task 4.1)"
 
       - name: Push artifact to GHCR
         id: push

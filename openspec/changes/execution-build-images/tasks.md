@@ -1,9 +1,9 @@
 ## 1. Flavor layout migration (D6, D8)
 
-- [ ] 1.1 Create `flavors/default/env` from the current `kiwi-descriptions/root/etc/github-actions-remote-executor/env`, **stripping** the bucket-③ keys (`CONTAINER_IMAGE`, `CONTAINER_IMAGE_DIGEST`) and the per-flavor authorization keys (`ALLOWED_REPOSITORIES`, `EXPECTED_AUDIENCE`); keep only shared bucket-② declared values (ports, timeouts, rate limits, retention, paths, resource defaults)
-- [ ] 1.2 Create the first real flavor `flavors/<flavor>/` (e.g. the rust-build demo) with its `Dockerfile` (+ supplements) satisfying the hardened contract (rootless `65534`, world-exec tools on PATH, pinned, no run-time install)
-- [ ] 1.3 Add a minimal `flavors/<flavor>/env` declaring this flavor's `ALLOWED_REPOSITORIES` and `EXPECTED_AUDIENCE` (moved out of step 1.1) plus any resource/limit overrides
-- [ ] 1.4 Remove the old single-flavor `kiwi-descriptions/root/etc/github-actions-remote-executor/env` from the source tree (it is now produced by the merge), updating any references to it
+- [x] 1.1 Create `flavors/default/env` from the current `kiwi-descriptions/root/etc/github-actions-remote-executor/env`, **stripping** the bucket-③ keys (`CONTAINER_IMAGE`, `CONTAINER_IMAGE_DIGEST`) and the per-flavor authorization keys (`ALLOWED_REPOSITORIES`, `EXPECTED_AUDIENCE`); keep only shared bucket-② declared values (ports, timeouts, rate limits, retention, paths, resource defaults)
+- [x] 1.2 Create the first real flavor `flavors/<flavor>/` (e.g. the rust-build demo) with its `Dockerfile` (+ supplements) satisfying the hardened contract (rootless `65534`, world-exec tools on PATH, pinned, no run-time install)
+- [x] 1.3 Add a minimal `flavors/<flavor>/env` declaring this flavor's `ALLOWED_REPOSITORIES` and `EXPECTED_AUDIENCE` (moved out of step 1.1) plus any resource/limit overrides
+- [x] 1.4 Remove the old single-flavor `kiwi-descriptions/root/etc/github-actions-remote-executor/env` from the source tree (it is now produced by the merge), updating any references to it
 
 ## 2. Effective-config merge and validation (D7, D8, D10, D11)
 

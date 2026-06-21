@@ -6,6 +6,12 @@ baked-sidecar path (see test_baked_image_load.py). What remains relevant here is
 that the expected manifest digest (CONTAINER_IMAGE_DIGEST) — the canonical anchor
 the baked sidecar is verified against — is still present in the shipped env files.
 
+In the flavor-based model (execution-build-images change), CONTAINER_IMAGE_DIGEST
+is a bucket-③ derived value injected by the pipeline after each flavor's image is
+built and pushed to GHCR.  It MUST NOT appear in any committed env file
+(flavors/default/env or flavors/<f>/env); the pre-bake validator enforces this.
+The test for that validator is in test_pre_bake_validator_properties.py (task 8.2).
+
 **Validates: Requirements 34.7**
 """
 
@@ -45,34 +51,4 @@ def test_env_example_contains_container_image_digest_entry():
     assert "CONTAINER_IMAGE_DIGEST" in entries, (
         ".env.example must contain a CONTAINER_IMAGE_DIGEST entry so operators "
         "are prompted to configure the manifest-digest anchor"
-    )
-
-
-def test_kiwi_env_file_contains_container_image_digest_entry():
-    """
-    Property 170: Container Image Digest Default Configuration
-
-    Parse kiwi-descriptions/root/etc/github-actions-remote-executor/env to
-    verify it contains a CONTAINER_IMAGE_DIGEST entry, confirming the baked AMI
-    environment file carries the manifest-digest anchor the offline verify step
-    compares the baked sidecar against.
-
-    **Validates: Requirements 34.7**
-    """
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    kiwi_env_path = os.path.join(
-        repo_root,
-        "kiwi-descriptions",
-        "root",
-        "etc",
-        "github-actions-remote-executor",
-        "env",
-    )
-
-    entries = _parse_env_file(kiwi_env_path)
-
-    assert "CONTAINER_IMAGE_DIGEST" in entries, (
-        "kiwi-descriptions/root/etc/github-actions-remote-executor/env must "
-        "contain a CONTAINER_IMAGE_DIGEST entry so the baked AMI carries the "
-        "manifest-digest anchor"
     )

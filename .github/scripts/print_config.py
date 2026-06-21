@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build-time helper: print the effective server configuration baked into the AMI.
 
-Loads an ``EnvironmentFile``-style env file (the image's baked-in
-``kiwi-descriptions/root/etc/github-actions-remote-executor/env``) through the
-application's *own* ``load_config()`` — the single source of truth — and renders
-every ``ServerConfig`` field on stdout as GitHub-Flavored Markdown.
+Loads an ``EnvironmentFile``-style env file (the flavor's generated effective env,
+produced at build time by merging ``flavors/default/env`` ◀ ``flavors/<f>/env`` ◀
+pipeline-injected bucket-③ values) through the application's *own* ``load_config()``
+— the single source of truth — and renders every ``ServerConfig`` field on stdout as
+GitHub-Flavored Markdown.
 
 The output is **grouped by configuration category** into labeled ``####``
 subsections in a stable, map-defined order (``CONFIG_CATEGORIES``), each its own
