@@ -221,13 +221,16 @@ def main(argv: list[str] | None = None) -> int:
     ami_only_flavors: list[str] = result["ami_only_flavors"]  # type: ignore[assignment]
     reason: str = result["reason"]  # type: ignore[assignment]
 
+    all_ami_flavors = sorted(set(image_flavors) | set(ami_only_flavors))
     output = {
         "image_matrix": _gha_matrix(image_flavors),
         "ami_only_matrix": _gha_matrix(ami_only_flavors),
+        "ami_matrix": _gha_matrix(all_ami_flavors),
         "all_flavors": flavors,
         "reason": reason,
         "has_image_builds": bool(image_flavors),
         "has_ami_only_builds": bool(ami_only_flavors),
+        "has_ami_builds": bool(all_ami_flavors),
     }
     print(json.dumps(output))
 

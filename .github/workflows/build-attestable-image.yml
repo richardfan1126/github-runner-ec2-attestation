@@ -28,8 +28,10 @@ jobs:
     outputs:
       image_matrix: ${{ steps.matrix.outputs.image_matrix }}
       ami_only_matrix: ${{ steps.matrix.outputs.ami_only_matrix }}
+      ami_matrix: ${{ steps.matrix.outputs.ami_matrix }}
       has_image_builds: ${{ steps.matrix.outputs.has_image_builds }}
       has_ami_only_builds: ${{ steps.matrix.outputs.has_ami_only_builds }}
+      has_ami_builds: ${{ steps.matrix.outputs.has_ami_builds }}
       reason: ${{ steps.matrix.outputs.reason }}
     steps:
       - name: Checkout repository
@@ -68,8 +70,10 @@ jobs:
 
           echo "image_matrix=$(echo "$RESULT" | jq -c '.image_matrix')" >> $GITHUB_OUTPUT
           echo "ami_only_matrix=$(echo "$RESULT" | jq -c '.ami_only_matrix')" >> $GITHUB_OUTPUT
+          echo "ami_matrix=$(echo "$RESULT" | jq -c '.ami_matrix')" >> $GITHUB_OUTPUT
           echo "has_image_builds=$(echo "$RESULT" | jq -r '.has_image_builds')" >> $GITHUB_OUTPUT
           echo "has_ami_only_builds=$(echo "$RESULT" | jq -r '.has_ami_only_builds')" >> $GITHUB_OUTPUT
+          echo "has_ami_builds=$(echo "$RESULT" | jq -r '.has_ami_builds')" >> $GITHUB_OUTPUT
           echo "reason=$(echo "$RESULT" | jq -r '.reason')" >> $GITHUB_OUTPUT
 
       - name: Write rebuild decision to summary
@@ -82,13 +86,6 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.detect-changes.outputs.image_matrix) }}
       max-parallel: 2
-    outputs:
-      # Matrix outputs: last-instance-wins. Task 5 restructures build-ami into a
-      # per-flavor matrix that no longer relies on these single-shot references.
-      artifact_ref: ${{ steps.push.outputs.artifact_ref_digest }}
-      artifact_ref_tag: ${{ steps.push.outputs.artifact_ref }}
-      container_image_digest: ${{ steps.build_flavor_image.outputs.container_image_digest }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -292,6 +289,21 @@ jobs:
           subject-name: ${{ steps.push.outputs.subject_name }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - name: Save build context for AMI job
+        run: |
+          jq -n \
+            --arg artifact_ref "${{ steps.push.outputs.artifact_ref_digest }}" \
+            --arg container_image_digest "${{ steps.build_flavor_image.outputs.container_image_digest }}" \
+            '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest}' \
+            > build-context.json
+
+      - name: Upload build context for AMI job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: build-context-${{ matrix.flavor }}
+          path: build-context.json
+          retention-days: 1
 
       - name: Generate workflow summary
         run: |
@@ -516,6 +528,21 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
+      - name: Save build context for AMI job
+        run: |
+          jq -n \
+            --arg artifact_ref "${{ steps.push.outputs.artifact_ref_digest }}" \
+            --arg container_image_digest "${{ steps.lock.outputs.container_image_digest }}" \
+            '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest}' \
+            > build-context.json
+
+      - name: Upload build context for AMI job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: build-context-${{ matrix.flavor }}
+          path: build-context.json
+          retention-days: 1
+
       - name: Generate workflow summary
         run: |
           echo "## Build Complete (${{ matrix.flavor }} — AMI-only rebuild) ✅" >> $GITHUB_STEP_SUMMARY
@@ -534,13 +561,21 @@ jobs:
           echo "- **Attestation ID**: \`${{ steps.attest.outputs.attestation-id }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Attestation URL**: ${{ steps.attest.outputs.attestation-url }}" >> $GITHUB_STEP_SUMMARY
 
-  # TODO (execution-build-images task 5): restructure build-ami into a per-flavor
-  # matrix consuming KIWI artifact refs from both build-and-publish and
-  # build-kiwi-ami-only, registering one attestable AMI per flavor.
   build-ami:
-    needs: build-and-publish
+    needs: [detect-changes, build-and-publish, build-kiwi-ami-only]
+    # Run when detect-changes succeeded and both upstream matrix jobs ended cleanly (success or skipped).
+    # develop-skip: AMIs are only registered on main or workflow_dispatch (task 5.2).
+    if: |
+      always() &&
+      needs.detect-changes.result == 'success' &&
+      (needs.build-and-publish.result == 'success' || needs.build-and-publish.result == 'skipped') &&
+      (needs.build-kiwi-ami-only.result == 'success' || needs.build-kiwi-ami-only.result == 'skipped') &&
+      needs.detect-changes.outputs.has_ami_builds == 'true' &&
+      (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.ami_matrix) }}
+      max-parallel: 2
 
     permissions:
       id-token: write
@@ -570,25 +605,39 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-extras
 
-      - name: Build AMI
+      - name: Download build context for ${{ matrix.flavor }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: build-context-${{ matrix.flavor }}
+          path: .
+
+      - name: Read build context
+        id: ctx
+        run: |
+          ARTIFACT_REF=$(jq -r '.artifact_ref' build-context.json)
+          CONTAINER_IMAGE_DIGEST=$(jq -r '.container_image_digest' build-context.json)
+          echo "artifact_ref=${ARTIFACT_REF}" >> $GITHUB_OUTPUT
+          echo "container_image_digest=${CONTAINER_IMAGE_DIGEST}" >> $GITHUB_OUTPUT
+
+      - name: Build AMI (${{ matrix.flavor }})
         run: |
           ALLOW_DEBUG_FLAG=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
             ALLOW_DEBUG_FLAG="--allow-debug"
           fi
           uv run python scripts/build-ami.py \
-            --artifact-ref "${{ needs.build-and-publish.outputs.artifact_ref }}" \
+            --artifact-ref "${{ steps.ctx.outputs.artifact_ref }}" \
             --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
             --output-file ami_build_result.json \
             --expected-workflow .github/workflows/build-attestable-image.yml \
-            --container-image-digest "${{ needs.build-and-publish.outputs.container_image_digest }}" \
+            --container-image-digest "${{ steps.ctx.outputs.container_image_digest }}" \
             $ALLOW_DEBUG_FLAG
 
       - name: Upload AMI build result
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ami-build-result
+          name: ami-build-result-${{ matrix.flavor }}
           path: ami_build_result.json
           retention-days: 90
 
@@ -599,7 +648,7 @@ jobs:
           SNAPSHOT_ID=$(jq -r '.snapshot_id' ami_build_result.json)
           REGION=$(jq -r '.region' ami_build_result.json)
           BUILD_TIMESTAMP=$(jq -r '.build_timestamp' ami_build_result.json)
-          echo "## AMI Build Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "## AMI Build Complete (${{ matrix.flavor }}) ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### AMI Details" >> $GITHUB_STEP_SUMMARY
           echo "- **AMI ID**: \`${AMI_ID}\`" >> $GITHUB_STEP_SUMMARY
@@ -607,16 +656,12 @@ jobs:
           echo "- **Region**: \`${REGION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Timestamp**: \`${BUILD_TIMESTAMP}\`" >> $GITHUB_STEP_SUMMARY
 
-          # Single-entry verifier record (D-rec): image manifest digest -> PCR4 -> AMI id -> producing commit.
-          # Emitted only here, after the AMI exists; the image digest alone is additionally an ORAS
-          # annotation on the (immutable, already-attested) published artifact. The join for a remote
-          # verifier is PCR4. This is a clean subset of Change 2's per-flavor flavors.lock.
           CID=$(jq -r '.verifier_record.container_image_digest // "unknown"' ami_build_result.json)
           PCR4=$(jq -r '.verifier_record.pcr4 // .pcr_measurements.pcr4' ami_build_result.json)
           COMMIT=$(jq -r '.verifier_record.producing_commit // "unknown"' ami_build_result.json)
           {
             echo ""
-            echo "### Verifier Record"
+            echo "### Verifier Record (${{ matrix.flavor }})"
             echo "| Field | Value |"
             echo "| --- | --- |"
             echo "| Container image digest | \`${CID}\` |"
@@ -637,7 +682,7 @@ jobs:
       - name: Write failure summary
         if: failure()
         run: |
-          echo "## AMI Build Failed ❌" >> $GITHUB_STEP_SUMMARY
+          echo "## AMI Build Failed (${{ matrix.flavor }}) ❌" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The AMI build step failed. Check the job logs for details." >> $GITHUB_STEP_SUMMARY
 

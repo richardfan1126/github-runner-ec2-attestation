@@ -29,9 +29,9 @@
 
 ## 5. Per-flavor AMI build matrix (ami-build delta)
 
-- [ ] 5.1 Run the `build-ami` stage once per matrix flavor (one attestable AMI per flavor carrying its baked OCI layout and effective sandbox config; never a shared AMI), with bounded `max-parallel`
-- [ ] 5.2 Apply the existing `develop`-skip rule: on `develop` build/publish changed-flavor images but register no AMIs; full vertical (AMI registration) only on `main`
-- [ ] 5.3 Verify two flavors with differing effective sandbox config produce AMIs with distinct PCR4 values
+- [x] 5.1 Run the `build-ami` stage once per matrix flavor (one attestable AMI per flavor carrying its baked OCI layout and effective sandbox config; never a shared AMI), with bounded `max-parallel`
+- [x] 5.2 Apply the existing `develop`-skip rule: on `develop` build/publish changed-flavor images but register no AMIs; full vertical (AMI registration) only on `main`
+- [x] 5.3 Verify two flavors with differing effective sandbox config produce AMIs with distinct PCR4 values
 
 ## 6. flavors.lock durable record (D13, container-security delta)
 
