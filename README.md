@@ -14,9 +14,77 @@ The GitHub Actions Remote Executor runs on an Attestable EC2 instance with Nitro
 - GitHub personal access token
 - GitHub Actions OIDC token (for authenticating workflow requests)
 
+## Flavor Model
+
+Each AMI variant is called a **flavor**. Flavors share a common base image but carry their own execution container image and authorization policy. The `flavors/` directory is the manifest — every subdirectory (except `default`) is a buildable flavor, and `flavors.lock` records the current deployed state of all flavors.
+
+### Directory layout
+
+```
+flavors/
+  default/
+    env             # Shared bucket-② values (ports, timeouts, resource limits)
+  <flavor>/
+    Dockerfile      # Execution container image definition
+    env             # Per-flavor deltas: ALLOWED_REPOSITORIES, EXPECTED_AUDIENCE, overrides
+    [extra files]   # Anything else needed by the Dockerfile
+flavors.lock        # Durable record: per-flavor {image digest, PCR4, AMI id, producing commit}
+```
+
+### Merge precedence
+
+The effective configuration baked into each AMI is produced by a fixed-precedence overlay:
+
+```
+code defaults (bucket ①)
+  ◀── flavors/default/env   (shared declared values — bucket ②)
+  ◀── flavors/<f>/env       (per-flavor deltas — bucket ②)
+  ◀── pipeline inject       (CONTAINER_IMAGE + CONTAINER_IMAGE_DIGEST — bucket ③)
+      = effective env  →  baked into dm-verity-sealed root  →  PCR4-bound
+```
+
+- **Bucket ①** — security-hardened code defaults (`CONTAINER_USER=65534:65534`, `NO_NEW_PRIVILEGES=true`, `CONTAINER_NETWORK_MODE=none`, etc.). Any deviation is a *relaxation* and is surfaced non-silently in the build summary and recorded in `flavors.lock`.
+- **Bucket ②** — declared configuration values that live in committed env files. `flavors/default/env` holds shared values inherited by all flavors; `flavors/<f>/env` holds per-flavor overrides and the required authorization keys (`ALLOWED_REPOSITORIES`, `EXPECTED_AUDIENCE`).
+- **Bucket ③** — pipeline outputs (`CONTAINER_IMAGE`, `CONTAINER_IMAGE_DIGEST`) injected after the flavor's Dockerfile has been built and pushed. These must **never** appear in a committed env file.
+
+The build-time pre-bake validator (`validate_env.py`) enforces this: it rejects any committed env file that contains a bucket-③ key or an unrecognized key (typo guard).
+
+### Deny-all by design
+
+A flavor that omits `ALLOWED_REPOSITORIES` or `EXPECTED_AUDIENCE` fails the build-time config-resolution gate before any AMI is registered. An executor started without at least one authorized repository in its allowlist refuses to start. There is no way to ship an AMI that accepts arbitrary callers.
+
+### Adding a new flavor
+
+1. Create `flavors/<name>/Dockerfile` — the execution container image. It must run as a non-root user (`65534` recommended), have required tools on `PATH`, and use pinned base images.
+2. Create `flavors/<name>/env` with at minimum:
+   ```ini
+   ALLOWED_REPOSITORIES=owner/repo1,owner/repo2
+   EXPECTED_AUDIENCE=<expected-aud-claim>
+   ```
+   Add any resource or security overrides here. Do **not** set `CONTAINER_IMAGE` or `CONTAINER_IMAGE_DIGEST` — those are injected by the pipeline.
+3. Push. The `detect-changes` CI job automatically detects the new flavor directory and schedules an image-level build for it.
+
+### flavors.lock
+
+After each successful AMI build the pipeline commits `flavors.lock`, a JSON file recording the current state of every flavor:
+
+```json
+{
+  "rust-build": {
+    "container_image_digest": "sha256:...",
+    "pcr4": "<hex>",
+    "ami_id": "ami-...",
+    "producing_commit": "<sha>",
+    "relaxations": {}
+  }
+}
+```
+
+`relaxations: {}` means the flavor carries the full hardened posture. Non-empty relaxations list the bucket-① fields that were overridden, so a verifier can see exactly which security defaults were relaxed without reading the env files.
+
 ## Configuration
 
-All configuration is done through environment variables. See `.env.example` for available options. The environment variables baked into the AMI are defined in `kiwi-descriptions/root/etc/github-actions-remote-executor/env`.
+All configuration is done through environment variables. The effective set of variables baked into each AMI flavor is produced by the merge described above (shared `flavors/default/env` ◀ per-flavor `flavors/<f>/env` ◀ pipeline-injected bucket ③).
 
 - `SERVER_PORT`: HTTP server listening port (default: 8080)
 - `MAX_CONCURRENT_EXECUTIONS`: Maximum concurrent script executions (default: 10)
@@ -141,7 +209,7 @@ The script performs the following steps:
 
 ### Build Output
 
-On success, the script writes `ami_build_result.json` (or the path specified by `--output-file`):
+On success, the script writes `ami_build_result.json` (or the path specified by `--output-file`) for each flavor:
 
 ```json
 {
@@ -152,9 +220,18 @@ On success, the script writes `ami_build_result.json` (or the path specified by 
   "pcr_measurements": {
     "pcr4": "<hex>",
     "pcr7": "<hex>"
+  },
+  "verifier_record": {
+    "container_image_digest": "sha256:...",
+    "pcr4": "<hex>",
+    "ami_id": "ami-...",
+    "producing_commit": "<sha>",
+    "relaxations": {}
   }
 }
 ```
+
+The CI pipeline also commits an updated `flavors.lock` to the repository after all flavors are built, recording the durable deployed state of every flavor.
 
 ## Deploying the Instance
 

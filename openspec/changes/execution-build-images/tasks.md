@@ -47,8 +47,8 @@
 
 ## 8. Tests and documentation
 
-- [ ] 8.1 Test the precedence merge: flavor delta overrides shared default; unset bucket-① key falls through to hardened default; effective env is reconstructible from committed inputs + recorded digest
-- [ ] 8.2 Test the pre-bake validator rejects (a) hand-set `CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST` (including migration leftovers in `default/env`) and (b) an unknown/misspelled key (e.g. `NO_NEW_PRIVILEGE=true`), failing the build rather than silently dropping it; confirm a valid key in `ServerConfig`'s enumeration passes
-- [ ] 8.3 Test flavor enumeration excludes `default` explicitly; test `detect-changes` mapping for each level and the fail-safe/loop-guard edge cases
-- [ ] 8.4 Test deny-all: a flavor with no allowlist fails the build-time gate; an executor booted with empty allowlist denies all callers
-- [ ] 8.5 Update project docs (README/specs references) for the flavor model, the `flavors/` layout, the merge precedence, and how to add a flavor
+- [x] 8.1 Test the precedence merge: flavor delta overrides shared default; unset bucket-① key falls through to hardened default; effective env is reconstructible from committed inputs + recorded digest
+- [x] 8.2 Test the pre-bake validator rejects (a) hand-set `CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST` (including migration leftovers in `default/env`) and (b) an unknown/misspelled key (e.g. `NO_NEW_PRIVILEGE=true`), failing the build rather than silently dropping it; confirm a valid key in `ServerConfig`'s enumeration passes
+- [x] 8.3 Test flavor enumeration excludes `default` explicitly; test `detect-changes` mapping for each level and the fail-safe/loop-guard edge cases
+- [x] 8.4 Test deny-all: a flavor with no allowlist fails the build-time gate; an executor booted with empty allowlist denies all callers
+- [x] 8.5 Update project docs (README/specs references) for the flavor model, the `flavors/` layout, the merge precedence, and how to add a flavor
