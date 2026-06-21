@@ -15,11 +15,11 @@
 
 ## 3. Flavor enumeration and selective rebuild (D12)
 
-- [ ] 3.1 Implement flavor enumeration as `ls flavors/` minus the explicitly-excluded `default` entry (directory tree is the manifest; no central index)
-- [ ] 3.2 Implement the `detect-changes` job: map changed paths to affected flavors on three levels — global invalidators → all flavors; `flavors/<f>/**` except `env` → image level (image + AMI); `flavors/<f>/env` alone → AMI-only level
-- [ ] 3.3 Emit a dynamic build matrix from `detect-changes`, distinguishing image-level vs AMI-only entries, with bounded `max-parallel`
-- [ ] 3.4 Implement fail-safe/edge rules: no diff baseline → build ALL; empty changed set → empty matrix (skip cleanly, `flavors.lock` untouched); `flavors.lock`-only diff → empty matrix (write-back loop guard); `workflow_dispatch` override forces a flavor or `all`
-- [ ] 3.5 Record the `detect-changes` rebuild decision (commit → flavors) in the GitHub Actions run summary
+- [x] 3.1 Implement flavor enumeration as `ls flavors/` minus the explicitly-excluded `default` entry (directory tree is the manifest; no central index)
+- [x] 3.2 Implement the `detect-changes` job: map changed paths to affected flavors on three levels — global invalidators → all flavors; `flavors/<f>/**` except `env` → image level (image + AMI); `flavors/<f>/env` alone → AMI-only level
+- [x] 3.3 Emit a dynamic build matrix from `detect-changes`, distinguishing image-level vs AMI-only entries, with bounded `max-parallel`
+- [x] 3.4 Implement fail-safe/edge rules: no diff baseline → build ALL; empty changed set → empty matrix (skip cleanly, `flavors.lock` untouched); `flavors.lock`-only diff → empty matrix (write-back loop guard); `workflow_dispatch` override forces a flavor or `all`
+- [x] 3.5 Record the `detect-changes` rebuild decision (commit → flavors) in the GitHub Actions run summary
 
 ## 4. Per-flavor image build and publish (image-build delta)
 

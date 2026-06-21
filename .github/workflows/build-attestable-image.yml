@@ -11,6 +11,10 @@ on:
         description: 'Enable SSH debug access in the built image (NOT for production use)'
         type: boolean
         default: false
+      force_flavor:
+        description: 'Force rebuild of a specific flavor (or "all"). Leave empty for automatic change detection.'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -19,6 +23,62 @@ permissions:
   id-token: write
 
 jobs:
+  detect-changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      image_matrix: ${{ steps.matrix.outputs.image_matrix }}
+      ami_only_matrix: ${{ steps.matrix.outputs.ami_only_matrix }}
+      has_image_builds: ${{ steps.matrix.outputs.has_image_builds }}
+      has_ami_only_builds: ${{ steps.matrix.outputs.has_ami_only_builds }}
+      reason: ${{ steps.matrix.outputs.reason }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+
+      - name: Compute build matrix
+        id: matrix
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          FORCE_FLAVOR: ${{ inputs.force_flavor }}
+        run: |
+          ARGS=""
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "$FORCE_FLAVOR" ]; then
+            ARGS="--force-flavor $FORCE_FLAVOR"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            # workflow_dispatch without force_flavor: no push baseline, rebuild all
+            ARGS="--no-diff-baseline"
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            # New branch or force push: no diff baseline
+            ARGS="--no-diff-baseline"
+          else
+            git diff --name-only "$BEFORE" "$AFTER" > changed_files.txt
+            ARGS="--changed-files changed_files.txt"
+          fi
+
+          RESULT=$(uv run python .github/scripts/detect_changes.py \
+            $ARGS \
+            --summary-file detect_summary.md)
+
+          echo "image_matrix=$(echo "$RESULT" | jq -c '.image_matrix')" >> $GITHUB_OUTPUT
+          echo "ami_only_matrix=$(echo "$RESULT" | jq -c '.ami_only_matrix')" >> $GITHUB_OUTPUT
+          echo "has_image_builds=$(echo "$RESULT" | jq -r '.has_image_builds')" >> $GITHUB_OUTPUT
+          echo "has_ami_only_builds=$(echo "$RESULT" | jq -r '.has_ami_only_builds')" >> $GITHUB_OUTPUT
+          echo "reason=$(echo "$RESULT" | jq -r '.reason')" >> $GITHUB_OUTPUT
+
+      - name: Write rebuild decision to summary
+        run: cat detect_summary.md >> "$GITHUB_STEP_SUMMARY"
+
+  # TODO (execution-build-images task 4.1): replace build-and-publish with a
+  # matrix job over needs.detect-changes.outputs.image_matrix, one image build
+  # per flavor.  The detect-changes outputs are wired and ready; consumption
+  # begins in task 4.
   build-and-publish:
     runs-on: ubuntu-24.04
     outputs:
@@ -44,9 +104,10 @@ jobs:
       
       - name: Validate committed env files
         run: |
-          uv run python .github/scripts/validate_env.py \
-            flavors/default/env \
-            flavors/rust-build/env
+          # Enumerate all committed env files dynamically (flavors/default/env + flavors/*/env).
+          # New flavors are picked up automatically without editing this step.
+          mapfile -t ENV_FILES < <(find flavors -name env -type f | sort)
+          uv run python .github/scripts/validate_env.py "${ENV_FILES[@]}"
 
       - name: Build KIWI image
         # TODO (execution-build-images task 4.1/4.2): pass --flavor and --env-file once
