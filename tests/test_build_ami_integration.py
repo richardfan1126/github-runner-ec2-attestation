@@ -33,6 +33,7 @@ def make_mock_args(output_file="test_output.json"):
     args.output_file = output_file
     args.container_image_digest = "sha256:" + "c" * 64
     args.producing_commit = None
+    args.relaxations_file = None
     return args
 
 

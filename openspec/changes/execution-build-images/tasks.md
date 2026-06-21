@@ -42,8 +42,8 @@
 
 ## 7. Attestation binding and summary (container-security delta)
 
-- [ ] 7.1 Confirm each flavor's effective sandbox config is baked into the verity root and bound by PCR4 (attested-at-rest, not `user_data`-asserted)
-- [ ] 7.2 Surface every relaxation of a bucket-① hardened default non-silently: baked, reflected in PCR4, shown in the per-flavor config summary, and recorded in `flavors.lock`
+- [x] 7.1 Confirm each flavor's effective sandbox config is baked into the verity root and bound by PCR4 (attested-at-rest, not `user_data`-asserted)
+- [x] 7.2 Surface every relaxation of a bucket-① hardened default non-silently: baked, reflected in PCR4, shown in the per-flavor config summary, and recorded in `flavors.lock`
 
 ## 8. Tests and documentation
 

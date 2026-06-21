@@ -73,6 +73,25 @@ RECOGNIZED_ENV_KEYS: frozenset[str] = frozenset({
 # never appear in any committed env file (flavors/default/env or flavors/<f>/env).
 BUCKET_3_KEYS: frozenset[str] = frozenset({"CONTAINER_IMAGE", "CONTAINER_IMAGE_DIGEST"})
 
+# Bucket-① security field names: ServerConfig fields whose code-default IS the hardened
+# value.  Any effective config that deviates from these defaults carries a relaxation
+# that must be surfaced non-silently (design D10 / container-security spec, task 7.2).
+# The recognized hardened values come from the ServerConfig dataclass defaults — a single
+# source of truth; this set only names which fields belong to bucket-①.
+BUCKET_1_FIELD_NAMES: frozenset[str] = frozenset({
+    "allow_no_tpm",
+    "container_allow_root",
+    "container_cap_add",
+    "container_network_mode",
+    "container_pids_limit",
+    "container_read_only_rootfs",
+    "container_tmpfs_exec",
+    "container_tmpfs_size",
+    "container_user",
+    "no_new_privileges",
+    "workspace_mount_mode",
+})
+
 CONTAINER_CAP_ALLOWLIST = frozenset({
     "CHOWN", "DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW",
     "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE",

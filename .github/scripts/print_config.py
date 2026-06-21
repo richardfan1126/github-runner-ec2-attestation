@@ -29,6 +29,7 @@ Exit codes:
 """
 import argparse
 import dataclasses
+import json
 import os
 import sys
 from pathlib import Path
@@ -40,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.config import ConfigurationError, ServerConfig, load_config  # noqa: E402
+from src.config import BUCKET_1_FIELD_NAMES, ConfigurationError, ServerConfig, load_config  # noqa: E402
 
 # Ordered map: category label -> ordered ServerConfig field names in that category.
 # Subsections render in this order; within a subsection, fields render in listed
@@ -92,6 +93,24 @@ CONFIG_CATEGORIES: dict[str, list[str]] = {
 _OTHER_LABEL = "Other"
 
 
+def compute_relaxations(config: ServerConfig) -> dict[str, object]:
+    """Return {field_name: effective_value} for bucket-① fields that deviate from their hardened defaults.
+
+    Hardened defaults are read from ServerConfig's dataclass field defaults — a single
+    source of truth.  An empty dict means the flavor carries the full hardened posture.
+    """
+    result: dict[str, object] = {}
+    for f in dataclasses.fields(ServerConfig):
+        if f.name not in BUCKET_1_FIELD_NAMES:
+            continue
+        if f.default is dataclasses.MISSING:
+            continue  # factory-default fields are not in bucket-①
+        current = getattr(config, f.name)
+        if current != f.default:
+            result[f.name] = current
+    return result
+
+
 def load_env_file(path: Path) -> None:
     """Populate ``os.environ`` from a systemd ``EnvironmentFile``-style file.
 
@@ -120,15 +139,26 @@ def _strip_surrounding_quotes(value: str) -> str:
     return value
 
 
-def _category_table(label: str, field_names: list[str], config: ServerConfig) -> str:
-    """Render one ``#### <label>`` subsection with its own `| Setting | Value |` table."""
+def _category_table(
+    label: str,
+    field_names: list[str],
+    config: ServerConfig,
+    relaxed: set[str] | None = None,
+) -> str:
+    """Render one ``#### <label>`` subsection with its own `| Setting | Value |` table.
+
+    Fields present in ``relaxed`` are annotated with ``(relaxed)`` so relaxations of
+    bucket-① hardened defaults are non-silent in the build summary (task 7.2).
+    """
     lines = [f"#### {label}", "", "| Setting | Value |", "|---|---|"]
     for name in field_names:
-        lines.append(f"| {name} | {getattr(config, name)} |")
+        value = getattr(config, name)
+        annotation = " (relaxed)" if relaxed and name in relaxed else ""
+        lines.append(f"| {name} | {value}{annotation} |")
     return "\n".join(lines)
 
 
-def render_table(config: ServerConfig) -> str:
+def render_table(config: ServerConfig, relaxations: dict[str, object] | None = None) -> str:
     """Render every ``ServerConfig`` field grouped by category as Markdown subsections.
 
     Each category in ``CONFIG_CATEGORIES`` (in map order) that has at least one
@@ -138,19 +168,23 @@ def render_table(config: ServerConfig) -> str:
     setting appears exactly once and a newly added field surfaces under ``Other``
     rather than being dropped. Values are printed verbatim — no redaction (the source
     env file is committed in the repo).
+
+    Fields in ``relaxations`` (bucket-① values that differ from hardened defaults) are
+    annotated with ``(relaxed)`` so they stand out non-silently in the summary.
     """
     all_names = [f.name for f in dataclasses.fields(config)]
     categorized = {name for names in CONFIG_CATEGORIES.values() for name in names}
+    relaxed_set: set[str] = set(relaxations or {})
 
     sections: list[str] = []
     for label, field_names in CONFIG_CATEGORIES.items():
         present = [name for name in field_names if name in all_names]
         if present:
-            sections.append(_category_table(label, present, config))
+            sections.append(_category_table(label, present, config, relaxed_set))
 
     other = [name for name in all_names if name not in categorized]
     if other:
-        sections.append(_category_table(_OTHER_LABEL, other, config))
+        sections.append(_category_table(_OTHER_LABEL, other, config, relaxed_set))
 
     return "\n\n".join(sections)
 
@@ -170,6 +204,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Flavor name to include as a labeled header in the output.",
     )
+    parser.add_argument(
+        "--relaxations-output",
+        default=None,
+        type=Path,
+        help=(
+            "If provided, write a JSON file at this path containing bucket-① fields "
+            "that deviate from their hardened defaults (task 7.2).  An empty object "
+            "means the flavor carries the full hardened posture."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.env_file.is_file():
@@ -185,9 +229,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration unresolvable{flavor_label}: {exc}", file=sys.stderr)
         return 1
 
+    relaxations = compute_relaxations(config)
+
+    if args.relaxations_output is not None:
+        args.relaxations_output.write_text(json.dumps(relaxations, indent=2) + "\n")
+
     if args.flavor:
         print(f"### Config: {args.flavor}\n")
-    print(render_table(config))
+    print(render_table(config, relaxations))
+
+    if relaxations:
+        relaxed_names = ", ".join(f"`{k}`" for k in sorted(relaxations))
+        print(f"\n> **Note:** this flavor relaxes the following hardened defaults: {relaxed_names}")
+
     return 0
 
 

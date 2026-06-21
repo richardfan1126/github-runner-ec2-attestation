@@ -157,6 +157,7 @@ jobs:
           uv run python .github/scripts/print_config.py \
             --env-file effective-${{ matrix.flavor }}.env \
             --flavor ${{ matrix.flavor }} \
+            --relaxations-output relaxations-${{ matrix.flavor }}.json \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: SSH debug warning
@@ -198,6 +199,30 @@ jobs:
           echo "### PCR Measurements (${{ matrix.flavor }})" >> $GITHUB_STEP_SUMMARY
           echo "- **PCR4**: \`$PCR4\`" >> $GITHUB_STEP_SUMMARY
           echo "- **PCR7**: \`$PCR7\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Confirm sandbox config is baked-in and PCR4-bound
+        run: |
+          # Task 7.1: verify the effective env path baked by build-kiwi-image.sh matches
+          # the systemd EnvironmentFile= directive so the config is attested-at-rest
+          # (bound by the verity root → PCR4) and NOT loaded from EC2 user_data.
+          BAKED_ENV_PATH="/etc/github-actions-remote-executor/env"
+          SERVICE_FILE="kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service"
+
+          if ! grep -qF "EnvironmentFile=${BAKED_ENV_PATH}" "${SERVICE_FILE}"; then
+            echo "::error::Systemd unit does not load EnvironmentFile from the baked path ${BAKED_ENV_PATH} — config is not attested-at-rest"
+            exit 1
+          fi
+
+          PCR4="${{ steps.pcr.outputs.pcr4 }}"
+          {
+            echo "### Config Attestation (${{ matrix.flavor }})"
+            echo ""
+            echo "| Property | Value |"
+            echo "|---|---|"
+            echo "| Baked env path | \`${BAKED_ENV_PATH}\` (inside dm-verity-sealed erofs root) |"
+            echo "| Systemd EnvironmentFile | \`${BAKED_ENV_PATH}\` (reads baked file; no EC2 user_data override) |"
+            echo "| PCR4 | \`${PCR4}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate artifact tag
         id: tag
@@ -292,10 +317,12 @@ jobs:
 
       - name: Save build context for AMI job
         run: |
+          RELAXATIONS=$(cat relaxations-${{ matrix.flavor }}.json 2>/dev/null || echo '{}')
           jq -n \
             --arg artifact_ref "${{ steps.push.outputs.artifact_ref_digest }}" \
             --arg container_image_digest "${{ steps.build_flavor_image.outputs.container_image_digest }}" \
-            '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest}' \
+            --argjson relaxations "$RELAXATIONS" \
+            '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest, "relaxations": $relaxations}' \
             > build-context.json
 
       - name: Upload build context for AMI job
@@ -402,6 +429,7 @@ jobs:
           uv run python .github/scripts/print_config.py \
             --env-file effective-${{ matrix.flavor }}.env \
             --flavor ${{ matrix.flavor }} \
+            --relaxations-output relaxations-${{ matrix.flavor }}.json \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: SSH debug warning
@@ -443,6 +471,30 @@ jobs:
           echo "### PCR Measurements (${{ matrix.flavor }})" >> $GITHUB_STEP_SUMMARY
           echo "- **PCR4**: \`$PCR4\`" >> $GITHUB_STEP_SUMMARY
           echo "- **PCR7**: \`$PCR7\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Confirm sandbox config is baked-in and PCR4-bound
+        run: |
+          # Task 7.1: verify the effective env path baked by build-kiwi-image.sh matches
+          # the systemd EnvironmentFile= directive so the config is attested-at-rest
+          # (bound by the verity root → PCR4) and NOT loaded from EC2 user_data.
+          BAKED_ENV_PATH="/etc/github-actions-remote-executor/env"
+          SERVICE_FILE="kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service"
+
+          if ! grep -qF "EnvironmentFile=${BAKED_ENV_PATH}" "${SERVICE_FILE}"; then
+            echo "::error::Systemd unit does not load EnvironmentFile from the baked path ${BAKED_ENV_PATH} — config is not attested-at-rest"
+            exit 1
+          fi
+
+          PCR4="${{ steps.pcr.outputs.pcr4 }}"
+          {
+            echo "### Config Attestation (${{ matrix.flavor }})"
+            echo ""
+            echo "| Property | Value |"
+            echo "|---|---|"
+            echo "| Baked env path | \`${BAKED_ENV_PATH}\` (inside dm-verity-sealed erofs root) |"
+            echo "| Systemd EnvironmentFile | \`${BAKED_ENV_PATH}\` (reads baked file; no EC2 user_data override) |"
+            echo "| PCR4 | \`${PCR4}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate artifact tag
         id: tag
@@ -530,10 +582,12 @@ jobs:
 
       - name: Save build context for AMI job
         run: |
+          RELAXATIONS=$(cat relaxations-${{ matrix.flavor }}.json 2>/dev/null || echo '{}')
           jq -n \
             --arg artifact_ref "${{ steps.push.outputs.artifact_ref_digest }}" \
             --arg container_image_digest "${{ steps.lock.outputs.container_image_digest }}" \
-            '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest}' \
+            --argjson relaxations "$RELAXATIONS" \
+            '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest, "relaxations": $relaxations}' \
             > build-context.json
 
       - name: Upload build context for AMI job
@@ -618,6 +672,8 @@ jobs:
           CONTAINER_IMAGE_DIGEST=$(jq -r '.container_image_digest' build-context.json)
           echo "artifact_ref=${ARTIFACT_REF}" >> $GITHUB_OUTPUT
           echo "container_image_digest=${CONTAINER_IMAGE_DIGEST}" >> $GITHUB_OUTPUT
+          # Save relaxations for the AMI build script (task 7.2): {} means fully hardened
+          jq '.relaxations // {}' build-context.json > relaxations.json
 
       - name: Build AMI (${{ matrix.flavor }})
         run: |
@@ -632,6 +688,7 @@ jobs:
             --expected-workflow .github/workflows/build-attestable-image.yml \
             --container-image-digest "${{ steps.ctx.outputs.container_image_digest }}" \
             --producing-commit "${{ github.sha }}" \
+            --relaxations-file relaxations.json \
             $ALLOW_DEBUG_FLAG
 
       - name: Upload AMI build result
@@ -744,7 +801,8 @@ jobs:
                 container_image_digest: .verifier_record.container_image_digest,
                 pcr4: .verifier_record.pcr4,
                 ami_id: .verifier_record.ami_id,
-                producing_commit: .verifier_record.producing_commit
+                producing_commit: .verifier_record.producing_commit,
+                relaxations: (.verifier_record.relaxations // {})
               }' "$RESULT_FILE")
               LOCK=$(echo "$LOCK" | jq --arg f "$FLAVOR" --argjson e "$ENTRY" '.[$f] = $e')
             else
