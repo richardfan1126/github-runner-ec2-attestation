@@ -53,7 +53,7 @@ RUN RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
 # Grant world-read + world-execute so user 65534 can invoke cargo, rustc, rustup, etc.
 # All binaries must be a+x; all directories a+rx (hence a+rX).
 RUN chmod -R a+rX /usr/local/cargo /usr/local/rustup && \
-    find /usr/local/cargo/bin /usr/local/rustup/bin -type f -exec chmod a+x {} +
+    find /usr/local/cargo/bin -type f -exec chmod a+x {} +
 
 ENV PATH="/usr/local/cargo/bin:${PATH}" \
     CARGO_HOME="/usr/local/cargo" \
