@@ -59,6 +59,9 @@ jobs:
           elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             # New branch or force push: no diff baseline
             ARGS="--no-diff-baseline"
+          elif ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            # BEFORE commit not in shallow clone (e.g. multi-commit push with fetch-depth: 2)
+            ARGS="--no-diff-baseline"
           else
             git diff --name-only "$BEFORE" "$AFTER" > changed_files.txt
             ARGS="--changed-files changed_files.txt"
