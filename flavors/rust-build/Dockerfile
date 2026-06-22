@@ -30,7 +30,7 @@ RUN apt-get update && \
 #     | sha256sum
 ARG RUST_VERSION=1.87.0
 ARG RUSTUP_VERSION=1.27.1
-ARG RUSTUP_INIT_SHA256=6aeece6993e902708983b209d04c0d088d10d9c9e6b8a6b61d8e5a24d4bfed40
+ARG RUSTUP_INIT_SHA256=1455d1df3825c5f24ba06d9dd1c7052908272a2cae9aa749ea49d67acbe22b47
 
 RUN curl -fsSL \
         "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-musl/rustup-init" \
