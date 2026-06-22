@@ -770,7 +770,7 @@ jobs:
     needs: [detect-changes, build-ami]
     # Skip debug builds (enable_ssh=true) — those AMIs must not enter flavors.lock (task 6.4).
     # Cascading skip from build-ami handles develop-skip and empty-matrix cases automatically.
-    if: "!(github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true)"
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.enable_ssh != true)
     runs-on: ubuntu-24.04
     # Serialize flavors.lock write-backs: only one update runs at a time per ref;
     # queued runs proceed in order rather than being cancelled (task 6.3).
