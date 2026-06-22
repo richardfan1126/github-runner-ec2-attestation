@@ -1,0 +1,30 @@
+# Shared configuration defaults (bucket ②) — inherited by every flavor.
+# This file MUST NOT contain:
+#   - ALLOWED_REPOSITORIES / EXPECTED_AUDIENCE (per-flavor authorization; lives in flavors/<f>/env)
+#   - CONTAINER_IMAGE / CONTAINER_IMAGE_DIGEST (bucket ③; injected by the pipeline after image push)
+# Bucket ① hardened defaults (CONTAINER_USER, NO_NEW_PRIVILEGES, etc.) are already
+# optional in src/config.py and do not need to appear here unless a shared override
+# is intentional for all flavors.
+
+# HTTP Server Configuration
+SERVER_PORT=8080
+
+# Execution Configuration
+MAX_CONCURRENT_EXECUTIONS=10
+EXECUTION_TIMEOUT_SECONDS=300
+MAX_SCRIPT_SIZE_BYTES=1048576
+
+# Rate Limiting Configuration
+RATE_LIMIT_PER_IP=100
+RATE_LIMIT_WINDOW_SECONDS=60
+
+# Storage Configuration
+TEMP_STORAGE_PATH=/var/lib/gha-executor
+OUTPUT_RETENTION_HOURS=24
+
+# NitroTPM Configuration
+TPM_ATTEST_PATH=/usr/bin/nitro-tpm-attest
+
+# Container Resource Limits
+CONTAINER_MEMORY_LIMIT=4g
+CONTAINER_CPU_LIMIT=1.0

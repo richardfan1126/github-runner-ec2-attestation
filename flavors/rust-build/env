@@ -1,0 +1,9 @@
+# Per-flavor configuration deltas for rust-build (bucket ②, per-flavor keys).
+# Only keys that must be set per-flavor or that override flavors/default/env belong here.
+# Bucket ③ keys (CONTAINER_IMAGE, CONTAINER_IMAGE_DIGEST) are injected by the pipeline
+# after the image is built and pushed to GHCR — they MUST NOT appear in this file.
+
+# Per-flavor repository authorization (required; no default in flavors/default/env).
+# A flavor without these keys fails the build-time config-resolution gate (deny-all).
+ALLOWED_REPOSITORIES=richardfan1126/github-runner-ec2-attestation-caller,richardfan1126/github-runner-ec2-attestation-rust-build-demo
+EXPECTED_AUDIENCE=test-workflow

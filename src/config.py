@@ -40,6 +40,58 @@ def parse_strict_bool(value: str, key_name: str) -> bool:
 
 # Closed allow-list of Linux capabilities an operator may grant via CONTAINER_CAP_ADD.
 # This is the Docker default-bounding 14-cap set: case-sensitive, upper-case, no "CAP_" prefix.
+# Complete set of env var names recognised by from_env().  The pre-bake validator
+# (validate_env.py) uses this to reject unknown keys in committed env files so that
+# a misspelled key fails the build loudly rather than silently being dropped (D16).
+# Keeping this list in sync with from_env() is the single source of truth; no
+# second schema elsewhere.
+RECOGNIZED_ENV_KEYS: frozenset[str] = frozenset({
+    # Required
+    "SERVER_PORT", "MAX_CONCURRENT_EXECUTIONS", "EXECUTION_TIMEOUT_SECONDS",
+    "MAX_SCRIPT_SIZE_BYTES", "RATE_LIMIT_PER_IP", "RATE_LIMIT_WINDOW_SECONDS",
+    "TEMP_STORAGE_PATH", "OUTPUT_RETENTION_HOURS", "TPM_ATTEST_PATH",
+    "ALLOWED_REPOSITORIES", "EXPECTED_AUDIENCE",
+    "CONTAINER_IMAGE", "CONTAINER_MEMORY_LIMIT", "CONTAINER_CPU_LIMIT",
+    # Optional — hardened defaults (bucket ①)
+    "CONTAINER_USER", "CONTAINER_ALLOW_ROOT", "CONTAINER_CAP_ADD", "NO_NEW_PRIVILEGES",
+    "CONTAINER_READ_ONLY_ROOTFS", "CONTAINER_TMPFS_SIZE", "CONTAINER_TMPFS_EXEC",
+    "WORKSPACE_MOUNT_MODE", "CONTAINER_NETWORK_MODE", "ALLOW_NO_TPM", "MAX_CONTAINER_PIDS",
+    # Optional — declared values (bucket ②)
+    "ALLOWED_BRANCHES", "REQUIRE_PROTECTED_REF",
+    "ENABLE_GPU", "GPU_DEVICES", "NVIDIA_DRIVER_CAPABILITIES",
+    "MAX_OUTPUT_ATTESTATIONS_PER_WINDOW", "OUTPUT_ATTESTATION_WINDOW_SECONDS",
+    "MAX_OUTPUT_SIZE_BYTES", "NONCE_CACHE_TTL_SECONDS",
+    "MAX_REQUEST_BODY_BYTES", "MAX_ENCRYPTED_PAYLOAD_BYTES", "MAX_DECRYPTED_PAYLOAD_BYTES",
+    "SCRIPT_ENV_DENY_LIST",
+    # Derived / injected (bucket ③) — recognized but forbidden in committed env files
+    "CONTAINER_IMAGE_DIGEST",
+    # Runtime-path overrides (overridable for tests; not expected in committed flavors env)
+    "BAKED_IMAGE_ARCHIVE", "BAKED_IMAGE_MANIFEST",
+})
+
+# Keys that are pipeline outputs (bucket ③): produced after image build + push; must
+# never appear in any committed env file (flavors/default/env or flavors/<f>/env).
+BUCKET_3_KEYS: frozenset[str] = frozenset({"CONTAINER_IMAGE", "CONTAINER_IMAGE_DIGEST"})
+
+# Bucket-① security field names: ServerConfig fields whose code-default IS the hardened
+# value.  Any effective config that deviates from these defaults carries a relaxation
+# that must be surfaced non-silently (design D10 / container-security spec, task 7.2).
+# The recognized hardened values come from the ServerConfig dataclass defaults — a single
+# source of truth; this set only names which fields belong to bucket-①.
+BUCKET_1_FIELD_NAMES: frozenset[str] = frozenset({
+    "allow_no_tpm",
+    "container_allow_root",
+    "container_cap_add",
+    "container_network_mode",
+    "container_pids_limit",
+    "container_read_only_rootfs",
+    "container_tmpfs_exec",
+    "container_tmpfs_size",
+    "container_user",
+    "no_new_privileges",
+    "workspace_mount_mode",
+})
+
 CONTAINER_CAP_ALLOWLIST = frozenset({
     "CHOWN", "DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW",
     "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE",

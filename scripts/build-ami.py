@@ -1383,6 +1383,7 @@ def generate_build_result(
     output_file: str,
     container_image_digest: Optional[str] = None,
     producing_commit: Optional[str] = None,
+    relaxations: Optional[dict] = None,
 ) -> dict:
     """
     Generate build result dictionary and write it to the output file.
@@ -1405,6 +1406,8 @@ def generate_build_result(
         output_file: Path to the output JSON file
         container_image_digest: Baked execution image manifest digest (sha256:...)
         producing_commit: The commit that produced this AMI
+        relaxations: Bucket-① fields that deviate from hardened defaults (task 7.2).
+                     {} means fully hardened.
 
     Returns:
         The build result dictionary
@@ -1429,6 +1432,8 @@ def generate_build_result(
             "pcr4": pcr4,
             "ami_id": ami_id,
             "producing_commit": producing_commit,
+            # bucket-① fields relaxed from hardened defaults; {} = fully hardened (task 7.2)
+            "relaxations": relaxations if relaxations is not None else {},
         },
     }
 
@@ -1579,6 +1584,25 @@ def parse_arguments() -> argparse.Namespace:
              'verifier record so external verifiers can map AMI -> image digest.'
     )
 
+    parser.add_argument(
+        '--producing-commit',
+        type=str,
+        default=None,
+        help='The source commit (C_src) that triggered this build — the git SHA '
+             'of the commit being built, NOT any write-back commit the pipeline '
+             'creates afterward. Defaults to the GITHUB_SHA environment variable.'
+    )
+
+    parser.add_argument(
+        '--relaxations-file',
+        type=str,
+        default=None,
+        help='Path to a JSON file containing bucket-① relaxations for this flavor '
+             '(produced by print_config.py --relaxations-output). Included in '
+             'verifier_record.relaxations in the output (task 7.2). '
+             'If absent or unreadable, relaxations default to {}.'
+    )
+
     return parser.parse_args()
 
 def main() -> int:
@@ -1712,8 +1736,9 @@ def main() -> int:
         snapshot_id = upload_snapshot(ssh_client, args.region)
         wait_for_snapshot(ec2_client, snapshot_id)
         ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
-        # Producing commit for the verifier record (GitHub Actions sets GITHUB_SHA).
-        producing_commit = os.environ.get("GITHUB_SHA")
+        # C_src: the source commit that triggered this build.  Prefer the explicit
+        # CLI arg (so the workflow can document intent); fall back to GITHUB_SHA.
+        producing_commit = args.producing_commit or os.environ.get("GITHUB_SHA")
         ami_id = register_ami(
             ec2_client, snapshot_id, architecture, ami_name,
             container_image_digest=args.container_image_digest,
@@ -1726,6 +1751,15 @@ def main() -> int:
         logger.info("Save Results")
         logger.info("=" * 80)
 
+        # Load bucket-① relaxations from file if provided (task 7.2).
+        relaxations: dict = {}
+        if args.relaxations_file:
+            try:
+                with open(args.relaxations_file) as _rf:
+                    relaxations = json.load(_rf)
+            except (FileNotFoundError, json.JSONDecodeError) as _e:
+                logger.warning(f"Could not read relaxations file {args.relaxations_file}: {_e}")
+
         generate_build_result(
             ami_id=ami_id,
             snapshot_id=snapshot_id,
@@ -1734,6 +1768,7 @@ def main() -> int:
             output_file=args.output_file,
             container_image_digest=args.container_image_digest,
             producing_commit=producing_commit,
+            relaxations=relaxations,
         )
 
         return 0

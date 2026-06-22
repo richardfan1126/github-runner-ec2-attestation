@@ -172,6 +172,30 @@ On successful registration the AMI_Converter SHALL write a result JSON (`ami_id`
 - **WHEN** the conversion finishes or fails
 - **THEN** a `finally` block closes SSH, runs `terraform destroy -auto-approve` in `terraform/build-ami` with the same variables used at apply, overwrites the temp SSH key with random bytes before unlinking, and logs (without failing) any cleanup error; Terraform state is documented as containing sensitive key material
 
+### Requirement: Single-entry verifier record emission
+
+After the AMI is registered, the `build-ami` job SHALL emit a **single-entry verifier record** mapping the baked image's manifest digest → PCR4 → AMI id → producing commit through the surfaces available **after** the AMI exists: the GitHub job log, the step summary, and a tag on the registered AMI. The container image manifest digest is **additionally** carried as an ORAS annotation on the published KIWI artifact, but that annotation is fixed at publish time (alongside the existing `pcr4`/`pcr7` annotations) and SHALL NOT be amended with the AMI id afterward — the published artifact is immutable and digest-bound by its Sigstore attestation, and the AMI id does not exist until publishing has completed. The record SHALL be a clean single-entry seed whose field set is a subset of the multi-flavor `flavors.lock` introduced by the `execution-build-images` change, and SHALL NOT change the runtime NitroTPM attestation or its `user_data`.
+
+#### Scenario: Record emitted across post-AMI surfaces
+
+- **WHEN** AMI registration succeeds
+- **THEN** the job emits a record containing the container image manifest digest, PCR4, the registered AMI id, and the producing commit to the job log and the step summary, and tags the registered AMI with the container image manifest digest
+
+#### Scenario: Published-artifact annotation carries only the image digest
+
+- **WHEN** the KIWI artifact was published earlier by the build-and-publish job
+- **THEN** the container image manifest digest is the only verifier-record field carried as an ORAS annotation on that artifact (alongside `pcr4`/`pcr7`), and the AMI id is never added to the published artifact's annotations — because amending them would change the artifact digest and break its Sigstore attestation, and because the AMI id does not yet exist at publish time
+
+#### Scenario: Verifier join is PCR4
+
+- **WHEN** a remote verifier reads the published record
+- **THEN** it can obtain a live NitroTPM attestation showing that PCR4 and conclude the instance runs the recorded image digest, with no change to the runtime attestation or `user_data` required
+
+#### Scenario: Single-entry seed for flavors.lock
+
+- **WHEN** the record is serialized
+- **THEN** it is a single entry (one image manifest digest → PCR4 → AMI id → producing commit) whose field set is a subset of the per-flavor `flavors.lock` that the `execution-build-images` change introduces, so that change need not retrofit a record format onto an already-shipped AMI
+
 ### Requirement: AMI build IAM permission scoping
 
 The Terraform IAM policy for the Build_Instance SHALL scope EC2/EBS permissions to the specific region and account using resource ARN patterns and the `aws:RequestedRegion` condition, never `Resource = "*"` for snapshot and image operations.
@@ -180,6 +204,39 @@ The Terraform IAM policy for the Build_Instance SHALL scope EC2/EBS permissions 
 
 - **WHEN** the Build_Instance IAM policy is defined
 - **THEN** it scopes snapshots (`arn:aws:ec2:{region}::snapshot/*`), images (`arn:aws:ec2:{region}::image/*`), and volumes (`arn:aws:ec2:{region}:{account}:volume/*`) with the `aws:RequestedRegion` condition, and does not use a wildcard resource for EC2 snapshot/image operations
+
+### Requirement: Per-flavor AMI build matrix
+
+The `build-ami` stage SHALL run once per flavor selected by the dynamic matrix, producing one attestable AMI per flavor that carries that flavor's baked OCI layout and effective sandbox config. A single AMI SHALL NOT be shared across flavors. The matrix SHALL bound `max-parallel` (each AMI build is an EC2 instance) and SHALL apply the existing `develop`-skip rule (build/publish images on `develop`, register AMIs only on `main`).
+
+#### Scenario: One AMI per selected flavor
+
+- **WHEN** the matrix selects two flavors for full rebuild
+- **THEN** the stage registers two distinct AMIs, each carrying its own flavor's baked image and effective config, with distinct PCR4 values
+
+#### Scenario: develop skips AMI registration
+
+- **WHEN** the pipeline runs on `develop`
+- **THEN** changed-flavor images are built and published but no AMIs are registered
+
+### Requirement: Multi-flavor flavors.lock aggregation written back by the pipeline
+
+After each per-flavor AMI is registered, the pipeline SHALL aggregate the per-flavor verifier records into the git-committed `flavors.lock`, generalizing the single-entry verifier record (one image manifest digest → PCR4 → AMI id → producing commit) from one image to N flavors using the same field set. The pipeline SHALL write back and commit `flavors.lock`, carrying forward unchanged entries for flavors not rebuilt, serializing updates via a concurrency group, and recording each flavor's `producing commit` as the source commit that supplied its inputs.
+
+#### Scenario: Each registered AMI lands an entry
+
+- **WHEN** a flavor's AMI is registered
+- **THEN** its `{image manifest digest, PCR4, AMI id, producing commit}` entry is written into `flavors.lock` and committed back, while the per-AMI post-registration surfaces (job log, step summary, AMI tag) continue to be emitted as in the single-entry record
+
+#### Scenario: Subset rebuild preserves other entries
+
+- **WHEN** a run rebuilds only some flavors
+- **THEN** `flavors.lock` retains the existing entries for the flavors not rebuilt
+
+#### Scenario: Debug build does not overwrite production entry
+
+- **WHEN** a `workflow_dispatch` debug/SSH build targets a single flavor
+- **THEN** it does not overwrite that flavor's production `flavors.lock` entry
 
 ### Requirement: GitHub Actions IAM role Terraform stack
 

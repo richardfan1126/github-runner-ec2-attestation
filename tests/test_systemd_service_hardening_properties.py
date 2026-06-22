@@ -39,9 +39,7 @@ SERVICE_PATH = Path(
     "kiwi-descriptions/root/etc/systemd/system/"
     "github-actions-remote-executor.service"
 )
-ENV_PATH = Path(
-    "kiwi-descriptions/root/etc/github-actions-remote-executor/env"
-)
+ENV_PATH = Path("flavors/default/env")
 
 
 def test_systemd_service_hardening():

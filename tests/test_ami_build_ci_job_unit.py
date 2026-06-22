@@ -220,12 +220,28 @@ class TestTerraformSetupStep:
 class TestJobCondition:
     """Requirement 1.1, 1.5: build-ami job if condition allows main and workflow_dispatch."""
 
-    def test_if_condition_matches_expected_expression(self, build_ami_job):
-        """The build-ami job if: condition must match the expected expression."""
-        condition = build_ami_job.get("if", "")
-        expected = "github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'"
-        assert str(condition).strip() == expected, (
-            f"build-ami if: condition must be {expected!r}, got {condition!r}"
+    def test_if_condition_enforces_develop_skip(self, build_ami_job):
+        """The build-ami job if: condition must enforce the develop-skip rule (main or workflow_dispatch)."""
+        condition = str(build_ami_job.get("if", ""))
+        assert "github.ref == 'refs/heads/main'" in condition, (
+            f"build-ami if: condition must check for main branch, got {condition!r}"
+        )
+        assert "github.event_name == 'workflow_dispatch'" in condition, (
+            f"build-ami if: condition must allow workflow_dispatch, got {condition!r}"
+        )
+
+    def test_if_condition_uses_always_to_allow_skipped_upstreams(self, build_ami_job):
+        """The if: condition must use always() so skipped upstream jobs don't cascade."""
+        condition = str(build_ami_job.get("if", ""))
+        assert "always()" in condition, (
+            f"build-ami if: condition must include always() to handle skipped upstream jobs, got {condition!r}"
+        )
+
+    def test_if_condition_checks_has_ami_builds(self, build_ami_job):
+        """The if: condition must gate on has_ami_builds to skip when no flavors need AMI registration."""
+        condition = str(build_ami_job.get("if", ""))
+        assert "has_ami_builds" in condition, (
+            f"build-ami if: condition must check has_ami_builds, got {condition!r}"
         )
 
 
@@ -299,11 +315,11 @@ class TestArtifactUploadStep:
         )
 
     def test_upload_artifact_name_is_ami_build_result(self, build_ami_steps):
-        """The artifact name must be 'ami-build-result'."""
+        """The artifact name must start with 'ami-build-result' (per-flavor suffix is expected)."""
         step = self._upload_step(build_ami_steps)
         name = step.get("with", {}).get("name", "")
-        assert name == "ami-build-result", (
-            f"Artifact name must be 'ami-build-result', got {name!r}"
+        assert name.startswith("ami-build-result"), (
+            f"Artifact name must start with 'ami-build-result', got {name!r}"
         )
 
     def test_upload_retention_days_is_90(self, build_ami_steps):
