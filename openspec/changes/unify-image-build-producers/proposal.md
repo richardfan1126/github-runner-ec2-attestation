@@ -30,10 +30,11 @@ is registered.
   it runs whenever an AMI was actually built.
 - Remove the now-unused `build-kiwi-ami-only` job. Verify it is not a required status
   check in branch protection before removal (and update branch protection if it is).
-- **Fallback / stopgap (documented, not the primary path):** if the structural refactor
-  must wait, the minimal fix is to make `update-flavors-lock` explicit —
-  `if: always() && needs.build-ami.result == 'success' && (<existing event gate>)` — which
-  stops the wrong-skip without removing the dual-producer topology.
+
+The end state contains **no `always()`** anywhere in the workflow. A condition-only stopgap
+was explicitly rejected: making `update-flavors-lock` explicit would require a *second*
+`always()` to compensate for the first, spreading the very construct this change exists to
+remove.
 
 No change to the two-level invalidation *semantics* (global / image / ami-only), to PCR
 measurement, to attestation, or to what `flavors.lock` records.

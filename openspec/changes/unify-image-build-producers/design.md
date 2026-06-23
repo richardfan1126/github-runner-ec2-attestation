@@ -63,9 +63,12 @@ if: always() && <normalize results>`) so `build-ami` needs only the join. Reject
 relocates the `always()` ugliness instead of removing it, and leaves the ~370 lines of
 duplicated YAML (and the attestation-parity risk that comes with two copies) in place.
 
-*Alternative considered — leave topology, only patch conditions* (the stopgap). Rejected as
-the primary path because it preserves the contagion: every future downstream job must keep
-re-implementing skip logic. Retained only as a documented fallback in the proposal.
+*Alternative considered — leave topology, only patch conditions* (the stopgap). Rejected
+outright, not retained as a fallback: the minimal patch (`update-flavors-lock: if: always()
+&& needs.build-ami.result == 'success' && …`) adds a *second* `always()` whose only job is to
+compensate for the first. The goal is zero `always()` in the workflow, because `always()` is
+the source of the confusing transitive skips; a fix that spreads more of it fails the goal
+even though it makes the red X disappear.
 
 ### Decision 2: Keep the producer job name `build-and-publish`
 
@@ -107,10 +110,6 @@ matrix shape; the classification logic itself is untouched.
   unified steps are byte-identical to today's `build-and-publish` (the authoritative copy).
   Validate by running both an image-level and an AMI-only flavor through a real dispatch and
   diffing the produced annotations/PCRs against a pre-change baseline.
-- **Shared `max-parallel` budget** → Two jobs gave up to 2+2 concurrent AMI/image builds;
-  one job with `max-parallel: 2` caps total producer concurrency at 2. Accepted (AMI builds
-  are already the bound resource via their own matrix); raise `max-parallel` on the unified
-  job if throughput regresses.
 - **Matrix `mode` plumbing bug** → an entry mislabeled `image` vs `ami-only` would build the
   wrong digest source. Mitigation: the existing guard in the ami-only path (fail if no
   `flavors.lock` entry) stays, and a fresh image build always overwrites the digest, so a
