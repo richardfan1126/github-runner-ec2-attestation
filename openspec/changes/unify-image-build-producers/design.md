@@ -19,13 +19,14 @@ registration.
 
 The `ami-build` spec already specifies `needs: build-and-publish` (a *single* producer);
 the dual-producer split is implementation drift, so this refactor re-aligns the workflow
-with the existing spec intent rather than inventing new behavior.
+with the existing spec intent — renaming the unified producer to `build-flavor-image`
+(Decision 2) — rather than inventing new behavior.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- One producer job parametrized by a `mode` (`image` | `ami-only`) matrix dimension; shared
-  steps written once.
+- One producer job parametrized by a per-entry `mode` (`image` | `ami-only`) field on the
+  build matrix's `include` list (not a Cartesian matrix axis); shared steps written once.
 - Remove `always()` and the hand-written result boolean from `build-ami`.
 - `update-flavors-lock` runs reliably after any successful AMI build and skips when none was
   built.
@@ -40,10 +41,12 @@ with the existing spec intent rather than inventing new behavior.
 
 ## Decisions
 
-### Decision 1: One producer job with a `mode` matrix dimension (over a no-op join job)
+### Decision 1: One producer job with a per-entry `mode` field (over a no-op join job)
 
-Collapse both producers into a single job. `detect-changes` emits one matrix whose entries
-are `{flavor, mode}`; a single step does:
+Collapse both producers into a single job. `detect-changes` emits one matrix in the same
+`include`-list shape it already uses — `{"include": [{"flavor": …, "mode": …}, …]}`,
+consumed as `matrix: ${{ fromJSON(...) }}` — so `mode` is just an extra key per entry, never
+a Cartesian axis. A single step does:
 
 ```yaml
 - name: Resolve container image digest
@@ -70,18 +73,19 @@ compensate for the first. The goal is zero `always()` in the workflow, because `
 the source of the confusing transitive skips; a fix that spreads more of it fails the goal
 even though it makes the red X disappear.
 
-### Decision 2: Keep the producer job name `build-and-publish`
+### Decision 2: Rename the producer job to `build-flavor-image`
 
-The unified job keeps the name `build-and-publish` even though it now also handles AMI-only
-entries. Rationale: (a) the `ami-build` spec already says `needs: build-and-publish`, so the
-name choice minimizes spec churn; (b) branch-protection required status checks reference job
-names — keeping this name avoids breaking the existing required check, and only the *removed*
-`build-kiwi-ami-only` check must be reconciled. The minor imprecision (the name implies
-"build" even for ami-only entries) is accepted; a rename can be a separate cosmetic change.
+The unified job is renamed `build-flavor-image`. Neither old name (`build-and-publish` nor
+`build-kiwi-ami-only`) is a required status check (see Open Questions), so nothing external
+pins the name and the rename is free. `build-flavor-image` is accurate for *both* modes: the
+job builds, attests, and publishes the per-flavor image either way — `ami-only` skips only
+the *container* rebuild (reusing the digest recorded in `flavors.lock`), not the KIWI build
+or the attestation/publish. The `ami-build` spec's `needs:` declaration is updated to the new
+name as part of this change.
 
 ### Decision 3: `build-ami` and `update-flavors-lock` use ordinary `needs`, no `always()`
 
-With a single producer, `build-ami: needs: [detect-changes, build-and-publish]` and its
+With a single producer, `build-ami: needs: [detect-changes, build-flavor-image]` and its
 `if` reduces to the genuine gates only:
 
 ```yaml
@@ -101,6 +105,14 @@ Replace the separate `image_matrix` / `ami_only_matrix` outputs with a single
 `has_builds` for the producer's `if`. Update the script's unit tests to assert the new
 matrix shape; the classification logic itself is untouched.
 
+Crucially, `build_matrix` is built from the existing `image_flavors` and `ami_only_flavors`
+lists, which `compute_matrix` already guarantees disjoint (the
+`ami_only_final = [f for f in ami_only if f not in image]` promotion at
+`detect_changes.py:141`). Concatenating those two already-disjoint lists into one tagged
+matrix therefore cannot produce a duplicate-flavor entry or build a flavor twice — the
+single-matrix collapse is safe *because* that promotion exists, so it must be preserved
+(build the matrix from the two lists, do not re-derive `mode` from raw paths).
+
 ## Risks / Trade-offs
 
 - **Branch protection references `build-kiwi-ami-only`** → Confirmed not a required status
@@ -119,8 +131,8 @@ matrix shape; the classification logic itself is untouched.
 
 1. Update `detect_changes.py` to emit the `mode`-tagged `build_matrix` + `has_builds`;
    update its tests.
-2. Merge `build-kiwi-ami-only` into `build-and-publish` behind the `mode` branch; delete
-   `build-kiwi-ami-only`.
+2. Merge `build-kiwi-ami-only` and `build-and-publish` into the unified, renamed
+   `build-flavor-image` job behind the `mode` branch; delete both old job names.
 3. Simplify `build-ami` and `update-flavors-lock` conditions (drop `always()`).
 4. Reconcile branch-protection required checks (remove `build-kiwi-ami-only`).
 5. Validate with a `workflow_dispatch` covering one image-level and one AMI-only flavor;
@@ -134,5 +146,5 @@ matrix shape; the classification logic itself is untouched.
 - ~~Is `build-kiwi-ami-only` (or `build-and-publish`) currently a *required* status check on
   `main`?~~ **Resolved: no.** Neither job is a required status check, so removing
   `build-kiwi-ami-only` does not wedge merges (migration step 4 / task 5.1 drops to a no-op
-  verification), and the `build-and-publish` name is kept for spec-alignment convenience
-  only, not to satisfy branch protection.
+  verification), and — since nothing external pins either name — the unified job is freely
+  renamed to `build-flavor-image` (Decision 2).

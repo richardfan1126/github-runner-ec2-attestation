@@ -2,8 +2,8 @@
 
 ### Requirement: build-ami job dependency and trigger
 
-The `build-ami` job SHALL declare `needs: [detect-changes, build-and-publish]`, where
-`build-and-publish` is the **single** per-flavor producer job (parametrized by rebuild
+The `build-ami` job SHALL declare `needs: [detect-changes, build-flavor-image]`, where
+`build-flavor-image` is the **single** per-flavor producer job (parametrized by rebuild
 level), so it runs only after that producer completes. Because there is no second,
 conditionally-skipped sibling producer, the job SHALL express its trigger and skip behavior
 **without** `always()` and without a hand-written upstream-result boolean: ordinary `needs`
@@ -16,7 +16,7 @@ to `develop` and SHALL be skipped when the producer produced nothing to build.
 
 - **WHEN** the workflow is triggered by a push to `main`, or by `workflow_dispatch` with
   either value of `enable_ssh`, and the producer job built at least one flavor
-- **THEN** the `build-ami` job executes after the single `build-and-publish` producer
+- **THEN** the `build-ami` job executes after the single `build-flavor-image` producer
   completes successfully, via ordinary `needs` resolution (no `always()`)
 
 #### Scenario: Skipped on develop

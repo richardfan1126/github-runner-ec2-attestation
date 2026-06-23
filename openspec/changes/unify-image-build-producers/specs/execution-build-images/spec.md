@@ -3,8 +3,10 @@
 ### Requirement: Per-flavor builds run in a single producer job parametrized by rebuild level
 
 The two per-flavor rebuild levels (image-level and AMI-only) SHALL be driven by a **single
-producer job** whose build matrix carries a per-entry rebuild-level dimension (e.g.
-`mode: image | ami-only`), NOT by two separate conditionally-run sibling jobs. The shared
+producer job** whose build matrix carries a per-entry rebuild-level field (e.g.
+`mode: image | ami-only`) on each entry of a dynamically generated `include` list — NOT a
+Cartesian matrix axis (which would fan every flavor out across both modes), and NOT two
+separate conditionally-run sibling jobs. The shared
 build steps (KIWI image build, PCR extraction, config attestation, artifact push,
 provenance attestation, build-context upload) SHALL exist in exactly one place; only the
 container-image-digest source SHALL branch on the rebuild level — building the container
@@ -20,8 +22,8 @@ booleans to avoid transitive skips; ordinary `needs` resolution SHALL suffice.
 
 - **WHEN** a run rebuilds one flavor at image level and another at AMI-only level
 - **THEN** both are produced by the same producer job as distinct matrix entries
-  distinguished by their rebuild-level dimension, with the container-digest source the only
-  step that differs between them
+  distinguished by their per-entry rebuild-level field, with the container-digest source the
+  only step that differs between them
 
 #### Scenario: AMI-only entry reuses the recorded image digest
 

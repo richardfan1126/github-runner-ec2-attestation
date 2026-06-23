@@ -14,7 +14,9 @@ is registered.
 ## What Changes
 
 - Collapse `build-and-publish` and `build-kiwi-ami-only` into a **single producer job**
-  (keeping the name `build-and-publish`) whose matrix carries a per-entry `mode`
+  (renamed `build-flavor-image`, since in `ami-only` mode it skips only the container
+  rebuild and still builds/attests/publishes per flavor) whose matrix carries a per-entry
+  `mode`
   (`image` | `ami-only`) dimension. One conditional step branches on `matrix.mode` to
   either build the container and derive a fresh digest (`image`) or read the existing
   digest from `flavors.lock` (`ami-only`). All shared steps — KIWI build, PCR extraction,
@@ -22,7 +24,7 @@ is registered.
   exactly one place.
 - `detect-changes` emits **one** producer matrix (entries tagged with `mode`) instead of
   separate `image_matrix` / `ami_only_matrix`, plus the `ami_matrix` it already emits.
-- `build-ami` declares `needs: [detect-changes, build-and-publish]` (one producer). With
+- `build-ami` declares `needs: [detect-changes, build-flavor-image]` (one producer). With
   no conditionally-skipped sibling, it **drops `always()`** and its hand-written result
   boolean, keeping only its genuine gates (ref/event and "is there anything to build").
 - `update-flavors-lock` no longer trips over a skipped grandparent: with the `always()`
