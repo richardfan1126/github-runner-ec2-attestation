@@ -197,9 +197,58 @@ class TestMainIntegration:
         assert rc == 0
         captured = capsys.readouterr()
         data = json.loads(captured.out)
-        assert "image_matrix" in data
-        assert "ami_only_matrix" in data
+        assert "build_matrix" in data
+        assert "ami_matrix" in data
         assert "reason" in data
+        # Old split-matrix outputs are gone.
+        assert "image_matrix" not in data
+        assert "ami_only_matrix" not in data
+
+    def test_main_build_matrix_tags_mode_per_entry(self, tmp_path, capsys):
+        """build_matrix is a single include list whose entries carry a `mode` field."""
+        flavors_dir = tmp_path / "flavors"
+        for name in ("alpha", "beta", "default"):
+            (flavors_dir / name).mkdir(parents=True)
+        changed = tmp_path / "changed.txt"
+        # alpha → image-level (Dockerfile); beta → ami-only (env).
+        changed.write_text("flavors/alpha/Dockerfile\nflavors/beta/env\n")
+
+        detect_changes.main([
+            "--changed-files", str(changed),
+            "--flavors-dir", str(flavors_dir),
+        ])
+        data = json.loads(capsys.readouterr().out)
+        entries = {e["flavor"]: e["mode"] for e in data["build_matrix"]["include"]}
+        assert entries == {"alpha": "image", "beta": "ami-only"}
+        # Every entry carries exactly flavor + mode (per-entry field, not a Cartesian axis).
+        for e in data["build_matrix"]["include"]:
+            assert set(e) == {"flavor", "mode"}
+        # No flavor appears twice (image_flavors / ami_only_flavors are disjoint).
+        flavors_emitted = [e["flavor"] for e in data["build_matrix"]["include"]]
+        assert len(flavors_emitted) == len(set(flavors_emitted))
+        assert data["has_builds"] is True
+        assert data["has_ami_builds"] is True
+
+    def test_main_has_builds_flags(self, tmp_path, capsys):
+        """has_builds collapses the old has_image_builds / has_ami_only_builds flags."""
+        flavors_dir = tmp_path / "flavors"
+        (flavors_dir / "alpha").mkdir(parents=True)
+        (flavors_dir / "default").mkdir()
+        changed = tmp_path / "changed.txt"
+        # No real change → empty matrix, all flags false.
+        changed.write_text("README.md\n")
+
+        detect_changes.main([
+            "--changed-files", str(changed),
+            "--flavors-dir", str(flavors_dir),
+        ])
+        data = json.loads(capsys.readouterr().out)
+        assert data["build_matrix"]["include"] == []
+        assert data["has_builds"] is False
+        assert data["has_ami_builds"] is False
+        # Old per-level flags are gone.
+        assert "has_image_builds" not in data
+        assert "has_ami_only_builds" not in data
 
     def test_main_no_diff_baseline_flag(self, tmp_path, capsys):
         flavors_dir = tmp_path / "flavors"
@@ -213,7 +262,10 @@ class TestMainIntegration:
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
         assert data["reason"] == "no-diff-baseline"
-        assert any(e["flavor"] == "alpha" for e in data["image_matrix"]["include"])
+        assert any(
+            e["flavor"] == "alpha" and e["mode"] == "image"
+            for e in data["build_matrix"]["include"]
+        )
 
     def test_main_default_excluded_from_enumeration(self, tmp_path, capsys):
         """main() must never include 'default' in the emitted matrix."""
@@ -230,7 +282,7 @@ class TestMainIntegration:
         data = json.loads(capsys.readouterr().out)
         all_emitted = [
             e["flavor"]
-            for matrix_key in ("image_matrix", "ami_only_matrix", "ami_matrix")
+            for matrix_key in ("build_matrix", "ami_matrix")
             for e in data[matrix_key]["include"]
         ]
         assert "default" not in all_emitted

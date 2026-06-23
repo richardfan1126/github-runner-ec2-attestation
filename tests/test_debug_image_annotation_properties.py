@@ -100,7 +100,7 @@ def test_property_161_debug_image_annotation(event_name, enable_ssh):
 
     # Find the "Push artifact to GHCR" step
     push_step = None
-    for step in workflow["jobs"]["build-and-publish"]["steps"]:
+    for step in workflow["jobs"]["build-flavor-image"]["steps"]:
         if step.get("name") == "Push artifact to GHCR":
             push_step = step
             break

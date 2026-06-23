@@ -26,11 +26,9 @@ jobs:
   detect-changes:
     runs-on: ubuntu-24.04
     outputs:
-      image_matrix: ${{ steps.matrix.outputs.image_matrix }}
-      ami_only_matrix: ${{ steps.matrix.outputs.ami_only_matrix }}
+      build_matrix: ${{ steps.matrix.outputs.build_matrix }}
       ami_matrix: ${{ steps.matrix.outputs.ami_matrix }}
-      has_image_builds: ${{ steps.matrix.outputs.has_image_builds }}
-      has_ami_only_builds: ${{ steps.matrix.outputs.has_ami_only_builds }}
+      has_builds: ${{ steps.matrix.outputs.has_builds }}
       has_ami_builds: ${{ steps.matrix.outputs.has_ami_builds }}
       reason: ${{ steps.matrix.outputs.reason }}
     steps:
@@ -71,23 +69,21 @@ jobs:
             $ARGS \
             --summary-file detect_summary.md)
 
-          echo "image_matrix=$(echo "$RESULT" | jq -c '.image_matrix')" >> $GITHUB_OUTPUT
-          echo "ami_only_matrix=$(echo "$RESULT" | jq -c '.ami_only_matrix')" >> $GITHUB_OUTPUT
+          echo "build_matrix=$(echo "$RESULT" | jq -c '.build_matrix')" >> $GITHUB_OUTPUT
           echo "ami_matrix=$(echo "$RESULT" | jq -c '.ami_matrix')" >> $GITHUB_OUTPUT
-          echo "has_image_builds=$(echo "$RESULT" | jq -r '.has_image_builds')" >> $GITHUB_OUTPUT
-          echo "has_ami_only_builds=$(echo "$RESULT" | jq -r '.has_ami_only_builds')" >> $GITHUB_OUTPUT
+          echo "has_builds=$(echo "$RESULT" | jq -r '.has_builds')" >> $GITHUB_OUTPUT
           echo "has_ami_builds=$(echo "$RESULT" | jq -r '.has_ami_builds')" >> $GITHUB_OUTPUT
           echo "reason=$(echo "$RESULT" | jq -r '.reason')" >> $GITHUB_OUTPUT
 
       - name: Write rebuild decision to summary
         run: cat detect_summary.md >> "$GITHUB_STEP_SUMMARY"
 
-  build-and-publish:
+  build-flavor-image:
     needs: [detect-changes]
-    if: needs.detect-changes.outputs.has_image_builds == 'true'
+    if: needs.detect-changes.outputs.has_builds == 'true'
     runs-on: ubuntu-24.04
     strategy:
-      matrix: ${{ fromJSON(needs.detect-changes.outputs.image_matrix) }}
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.build_matrix) }}
       max-parallel: 2
     steps:
       - name: Checkout repository
@@ -115,41 +111,58 @@ jobs:
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Build and push flavor container image
-        id: build_flavor_image
+      - name: Resolve container image digest
+        id: digest
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           IMAGE_REF="ghcr.io/${REPO_LOWER}/${{ matrix.flavor }}"
 
-          docker buildx build \
-            --platform linux/amd64 \
-            --push \
-            --metadata-file flavor-image-metadata.json \
-            -t "${IMAGE_REF}:${{ github.sha }}" \
-            flavors/${{ matrix.flavor }}
+          if [ "${{ matrix.mode }}" = "image" ]; then
+            # Image-level rebuild: build + push the flavor container and derive a fresh
+            # per-platform linux/amd64 manifest digest (D11 / D2 constraint 1).
+            docker buildx build \
+              --platform linux/amd64 \
+              --push \
+              --metadata-file flavor-image-metadata.json \
+              -t "${IMAGE_REF}:${{ github.sha }}" \
+              flavors/${{ matrix.flavor }}
 
-          # Extract the per-platform linux/amd64 manifest digest (D11 / D2 constraint 1).
-          # docker buildx with provenance enabled (the default in GitHub Actions) wraps the
-          # push in an OCI image index even for single-platform builds, so
-          # containerimage.digest from buildx metadata is the index digest, not the
-          # per-platform manifest digest. Fetch the raw manifest from the registry and
-          # select the linux/amd64 entry when the result is an index.
-          RAW_MANIFEST=$(docker buildx imagetools inspect --raw "${IMAGE_REF}:${{ github.sha }}")
-          if echo "${RAW_MANIFEST}" | jq -e 'has("manifests")' > /dev/null 2>&1; then
-            DIGEST=$(echo "${RAW_MANIFEST}" | jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | .[0].digest')
+            # docker buildx with provenance enabled (the default in GitHub Actions) wraps the
+            # push in an OCI image index even for single-platform builds, so
+            # containerimage.digest from buildx metadata is the index digest, not the
+            # per-platform manifest digest. Fetch the raw manifest from the registry and
+            # select the linux/amd64 entry when the result is an index.
+            RAW_MANIFEST=$(docker buildx imagetools inspect --raw "${IMAGE_REF}:${{ github.sha }}")
+            if echo "${RAW_MANIFEST}" | jq -e 'has("manifests")' > /dev/null 2>&1; then
+              DIGEST=$(echo "${RAW_MANIFEST}" | jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | .[0].digest')
+            else
+              DIGEST=$(jq -r '."containerimage.digest"' flavor-image-metadata.json)
+            fi
+            echo "✓ Built and pushed ${IMAGE_REF}@${DIGEST}"
           else
-            DIGEST=$(jq -r '."containerimage.digest"' flavor-image-metadata.json)
+            # AMI-only rebuild: reuse the container digest already recorded in flavors.lock;
+            # no container rebuild. Fails loudly if the flavor has no recorded digest.
+            if [ ! -f flavors.lock ]; then
+              echo "::error::flavors.lock not found. Run a full image-level build for '${{ matrix.flavor }}' first."
+              exit 1
+            fi
+            DIGEST=$(jq -r --arg f "${{ matrix.flavor }}" '.[$f].container_image_digest // empty' flavors.lock)
+            if [ -z "$DIGEST" ]; then
+              echo "::error::No entry for flavor '${{ matrix.flavor }}' in flavors.lock. Run a full image-level build first."
+              exit 1
+            fi
+            echo "✓ Reusing existing digest for '${{ matrix.flavor }}': ${DIGEST}"
           fi
+
           echo "container_image=${IMAGE_REF}" >> $GITHUB_OUTPUT
           echo "container_image_digest=${DIGEST}" >> $GITHUB_OUTPUT
-          echo "✓ Built and pushed ${IMAGE_REF}@${DIGEST}"
 
       - name: Merge flavor env files (inject bucket-③ digest)
         run: |
           uv run python .github/scripts/merge_env.py \
             --flavor ${{ matrix.flavor }} \
-            --container-image ${{ steps.build_flavor_image.outputs.container_image }} \
-            --container-image-digest ${{ steps.build_flavor_image.outputs.container_image_digest }} \
+            --container-image ${{ steps.digest.outputs.container_image }} \
+            --container-image-digest ${{ steps.digest.outputs.container_image_digest }} \
             --output effective-${{ matrix.flavor }}.env
 
       - name: Build KIWI image
@@ -292,7 +305,7 @@ jobs:
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
             --annotation "com.github.attestable-image.pcr4=${{ steps.pcr.outputs.pcr4 }}" \
             --annotation "com.github.attestable-image.pcr7=${{ steps.pcr.outputs.pcr7 }}" \
-            --annotation "com.github.attestable-image.container-image-digest=${{ steps.build_flavor_image.outputs.container_image_digest }}" \
+            --annotation "com.github.attestable-image.container-image-digest=${{ steps.digest.outputs.container_image_digest }}" \
             --annotation "com.github.attestable-image.flavor=${{ matrix.flavor }}" \
             --annotation "debug=${DEBUG_VALUE}" \
             "$RAW_IMAGE:application/octet-stream" \
@@ -331,7 +344,7 @@ jobs:
           RELAXATIONS=$(cat relaxations-${{ matrix.flavor }}.json 2>/dev/null || echo '{}')
           jq -n \
             --arg artifact_ref "${{ steps.push.outputs.artifact_ref_digest }}" \
-            --arg container_image_digest "${{ steps.build_flavor_image.outputs.container_image_digest }}" \
+            --arg container_image_digest "${{ steps.digest.outputs.container_image_digest }}" \
             --argjson relaxations "$RELAXATIONS" \
             '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest, "relaxations": $relaxations}' \
             > build-context.json
@@ -374,267 +387,13 @@ jobs:
           echo "oras pull ${{ steps.push.outputs.artifact_ref_digest }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
-  build-kiwi-ami-only:
-    needs: [detect-changes]
-    if: needs.detect-changes.outputs.has_ami_only_builds == 'true'
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix: ${{ fromJSON(needs.detect-changes.outputs.ami_only_matrix) }}
-      max-parallel: 2
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          submodules: recursive
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
-
-      - name: Build KIWI builder Docker image
-        run: |
-          docker build -t kiwi-builder:latest -f .github/docker/Dockerfile.kiwi-builder .
-
-      - name: Read flavor image digest from flavors.lock
-        id: lock
-        run: |
-          if [ ! -f flavors.lock ]; then
-            echo "::error::flavors.lock not found. Run a full image-level build for '${{ matrix.flavor }}' first (task 6.2 populates it)."
-            exit 1
-          fi
-          DIGEST=$(jq -r --arg f "${{ matrix.flavor }}" '.[$f].container_image_digest // empty' flavors.lock)
-          if [ -z "$DIGEST" ]; then
-            echo "::error::No entry for flavor '${{ matrix.flavor }}' in flavors.lock. Run a full image-level build first."
-            exit 1
-          fi
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_REF="ghcr.io/${REPO_LOWER}/${{ matrix.flavor }}"
-          echo "container_image=${IMAGE_REF}" >> $GITHUB_OUTPUT
-          echo "container_image_digest=${DIGEST}" >> $GITHUB_OUTPUT
-          echo "✓ Reusing existing digest for '${{ matrix.flavor }}': ${DIGEST}"
-
-      - name: Merge flavor env files (inject existing bucket-③ digest)
-        run: |
-          uv run python .github/scripts/merge_env.py \
-            --flavor ${{ matrix.flavor }} \
-            --container-image ${{ steps.lock.outputs.container_image }} \
-            --container-image-digest ${{ steps.lock.outputs.container_image_digest }} \
-            --output effective-${{ matrix.flavor }}.env
-
-      - name: Build KIWI image
-        run: |
-          chmod +x .github/scripts/build-kiwi-image.sh
-          SSH_FLAG=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
-            SSH_FLAG="--enable-ssh"
-          fi
-          .github/scripts/build-kiwi-image.sh $SSH_FLAG --env-file effective-${{ matrix.flavor }}.env
-
-      - name: Print effective configuration to summary
-        run: |
-          echo "### Effective Server Configuration (${{ matrix.flavor }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          uv run python .github/scripts/print_config.py \
-            --env-file effective-${{ matrix.flavor }}.env \
-            --flavor ${{ matrix.flavor }} \
-            --relaxations-output relaxations-${{ matrix.flavor }}.json \
-            >> "$GITHUB_STEP_SUMMARY"
-
-      - name: SSH debug warning
-        if: github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true
-        run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> ⚠️ **WARNING: This image was built with SSH debug access enabled.**" >> $GITHUB_STEP_SUMMARY
-          echo "> This image is NOT intended for production use." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: kiwi-build-output-${{ matrix.flavor }}
-          path: |
-            build-output/*.raw
-            build-output/pcr_measurements.json
-          retention-days: 30
-
-      - name: Extract PCR measurements
-        id: pcr
-        run: |
-          PCR4=$(jq -r '.Measurements.PCR4' build-output/pcr_measurements.json)
-          PCR7=$(jq -r '.Measurements.PCR7' build-output/pcr_measurements.json)
-
-          if [ -z "$PCR4" ] || [ "$PCR4" = "null" ]; then
-            echo "::error::PCR4 measurement is missing or invalid"
-            exit 1
-          fi
-
-          if [ -z "$PCR7" ] || [ "$PCR7" = "null" ]; then
-            echo "::error::PCR7 measurement is missing or invalid"
-            exit 1
-          fi
-
-          echo "pcr4=$PCR4" >> $GITHUB_OUTPUT
-          echo "pcr7=$PCR7" >> $GITHUB_OUTPUT
-
-          echo "### PCR Measurements (${{ matrix.flavor }})" >> $GITHUB_STEP_SUMMARY
-          echo "- **PCR4**: \`$PCR4\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **PCR7**: \`$PCR7\`" >> $GITHUB_STEP_SUMMARY
-
-      - name: Confirm sandbox config is baked-in and PCR4-bound
-        run: |
-          # Task 7.1: verify the effective env path baked by build-kiwi-image.sh matches
-          # the systemd EnvironmentFile= directive so the config is attested-at-rest
-          # (bound by the verity root → PCR4) and NOT loaded from EC2 user_data.
-          BAKED_ENV_PATH="/etc/github-actions-remote-executor/env"
-          SERVICE_FILE="kiwi-descriptions/root/etc/systemd/system/github-actions-remote-executor.service"
-
-          if ! grep -qF "EnvironmentFile=${BAKED_ENV_PATH}" "${SERVICE_FILE}"; then
-            echo "::error::Systemd unit does not load EnvironmentFile from the baked path ${BAKED_ENV_PATH} — config is not attested-at-rest"
-            exit 1
-          fi
-
-          PCR4="${{ steps.pcr.outputs.pcr4 }}"
-          {
-            echo "### Config Attestation (${{ matrix.flavor }})"
-            echo ""
-            echo "| Property | Value |"
-            echo "|---|---|"
-            echo "| Baked env path | \`${BAKED_ENV_PATH}\` (inside dm-verity-sealed erofs root) |"
-            echo "| Systemd EnvironmentFile | \`${BAKED_ENV_PATH}\` (reads baked file; no EC2 user_data override) |"
-            echo "| PCR4 | \`${PCR4}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Generate artifact tag
-        id: tag
-        run: |
-          BRANCH_NAME=$(echo "${GITHUB_REF#refs/heads/}" | sed 's/[^a-zA-Z0-9._-]/-/g')
-          TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
-          TAG="${BRANCH_NAME}-${TIMESTAMP}-${GITHUB_SHA::8}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Artifact tag: $TAG"
-
-      - name: Install ORAS
-        run: |
-          VERSION="1.3.0"
-          EXPECTED_SHA256="6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64"
-          curl -LO "https://github.com/oras-project/oras/releases/download/v${VERSION}/oras_${VERSION}_linux_amd64.tar.gz"
-          echo "${EXPECTED_SHA256}  oras_${VERSION}_linux_amd64.tar.gz" | sha256sum -c || {
-            echo "::error::ORAS archive checksum verification failed. Expected ${EXPECTED_SHA256}."
-            exit 1
-          }
-          mkdir -p oras-install/
-          tar -zxf oras_*.tar.gz -C oras-install/
-          sudo mv oras-install/oras /usr/local/bin/
-          rm -rf oras_*.tar.gz oras-install/
-          oras version
-
-      - name: Authenticate to GHCR
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Push artifact to GHCR
-        id: push
-        run: |
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          ARTIFACT_REF="ghcr.io/${REPO_LOWER}/attestable-image/${{ matrix.flavor }}:${{ steps.tag.outputs.tag }}"
-
-          RAW_IMAGE=$(find build-output -name "*.raw" -type f | head -n 1)
-          if [ -z "$RAW_IMAGE" ]; then
-            echo "::error::Raw disk image not found in build-output directory"
-            exit 1
-          fi
-
-          DEBUG_VALUE="false"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
-            DEBUG_VALUE="true"
-          fi
-
-          echo "Pushing artifact to: $ARTIFACT_REF"
-
-          if ! oras push "$ARTIFACT_REF" \
-            --annotation "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --annotation "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
-            --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
-            --annotation "com.github.attestable-image.pcr4=${{ steps.pcr.outputs.pcr4 }}" \
-            --annotation "com.github.attestable-image.pcr7=${{ steps.pcr.outputs.pcr7 }}" \
-            --annotation "com.github.attestable-image.container-image-digest=${{ steps.lock.outputs.container_image_digest }}" \
-            --annotation "com.github.attestable-image.flavor=${{ matrix.flavor }}" \
-            --annotation "debug=${DEBUG_VALUE}" \
-            "$RAW_IMAGE:application/octet-stream" \
-            build-output/pcr_measurements.json:application/json; then
-            echo "::error::Failed to push artifact to GHCR"
-            exit 1
-          fi
-
-          DIGEST=$(oras manifest fetch "$ARTIFACT_REF" --descriptor | jq -r '.digest')
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-          echo "artifact_ref=$ARTIFACT_REF" >> $GITHUB_OUTPUT
-
-          SUBJECT_NAME="ghcr.io/${REPO_LOWER}/attestable-image/${{ matrix.flavor }}"
-          ARTIFACT_REF_DIGEST="${SUBJECT_NAME}@${DIGEST}"
-          echo "artifact_ref_digest=$ARTIFACT_REF_DIGEST" >> $GITHUB_OUTPUT
-          echo "subject_name=$SUBJECT_NAME" >> $GITHUB_OUTPUT
-
-          echo "### Artifact Published (${{ matrix.flavor }} — AMI-only rebuild)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Reference (tag)**: \`$ARTIFACT_REF\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Reference (digest-pinned)**: \`$ARTIFACT_REF_DIGEST\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Digest**: \`$DIGEST\`" >> $GITHUB_STEP_SUMMARY
-
-      - name: Generate build provenance attestation
-        id: attest
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
-        with:
-          subject-name: ${{ steps.push.outputs.subject_name }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-
-      - name: Save build context for AMI job
-        run: |
-          RELAXATIONS=$(cat relaxations-${{ matrix.flavor }}.json 2>/dev/null || echo '{}')
-          jq -n \
-            --arg artifact_ref "${{ steps.push.outputs.artifact_ref_digest }}" \
-            --arg container_image_digest "${{ steps.lock.outputs.container_image_digest }}" \
-            --argjson relaxations "$RELAXATIONS" \
-            '{"artifact_ref": $artifact_ref, "container_image_digest": $container_image_digest, "relaxations": $relaxations}' \
-            > build-context.json
-
-      - name: Upload build context for AMI job
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: build-context-${{ matrix.flavor }}
-          path: build-context.json
-          retention-days: 1
-
-      - name: Generate workflow summary
-        run: |
-          echo "## Build Complete (${{ matrix.flavor }} — AMI-only rebuild) ✅" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Artifact Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **Reference (digest-pinned)**: \`${{ steps.push.outputs.artifact_ref_digest }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Reference (tag)**: \`${{ steps.push.outputs.artifact_ref }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Digest**: \`${{ steps.push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag**: \`${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### PCR Measurements" >> $GITHUB_STEP_SUMMARY
-          echo "- **PCR4**: \`${{ steps.pcr.outputs.pcr4 }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **PCR7**: \`${{ steps.pcr.outputs.pcr7 }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Attestation" >> $GITHUB_STEP_SUMMARY
-          echo "- **Attestation ID**: \`${{ steps.attest.outputs.attestation-id }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Attestation URL**: ${{ steps.attest.outputs.attestation-url }}" >> $GITHUB_STEP_SUMMARY
-
   build-ami:
-    needs: [detect-changes, build-and-publish, build-kiwi-ami-only]
-    # Run when detect-changes succeeded and both upstream matrix jobs ended cleanly (success or skipped).
+    needs: [detect-changes, build-flavor-image]
+    # Runs after the single producer job via ordinary `needs` resolution — no `always()`
+    # and no upstream-result juggling. Only the genuine gates remain: is there an AMI to
+    # build, and are we on a ref/event where AMIs are registered (main or workflow_dispatch).
     # develop-skip: AMIs are only registered on main or workflow_dispatch (task 5.2).
     if: |
-      always() &&
-      needs.detect-changes.result == 'success' &&
-      (needs.build-and-publish.result == 'success' || needs.build-and-publish.result == 'skipped') &&
-      (needs.build-kiwi-ami-only.result == 'success' || needs.build-kiwi-ami-only.result == 'skipped') &&
       needs.detect-changes.outputs.has_ami_builds == 'true' &&
       (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04

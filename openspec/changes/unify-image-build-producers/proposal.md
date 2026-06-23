@@ -33,10 +33,13 @@ is registered.
 - Remove the now-unused `build-kiwi-ami-only` job. Verify it is not a required status
   check in branch protection before removal (and update branch protection if it is).
 
-The end state contains **no `always()`** anywhere in the workflow. A condition-only stopgap
-was explicitly rejected: making `update-flavors-lock` explicit would require a *second*
-`always()` to compensate for the first, spreading the very construct this change exists to
-remove.
+The end state contains **no job-level `always()`** in the workflow's dependency graph. A
+condition-only stopgap was explicitly rejected: making `update-flavors-lock` explicit would
+require a *second* `always()` to compensate for the first, spreading the very construct this
+change exists to remove. (The sole surviving `always()` is the *within-job* step guard on
+`build-ami`'s Terraform teardown, which must run on failure to avoid leaking the EC2 builder
+instance; a step-level teardown guard has none of the cross-job transitive-skip contagion
+this change targets.)
 
 No change to the two-level invalidation *semantics* (global / image / ami-only), to PCR
 measurement, to attestation, or to what `flavors.lock` records.

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build-time tool: map changed paths to a per-flavor build matrix (D12).
 
-Reads a list of changed files and emits two JSON matrices for GitHub Actions:
-one for image-level rebuilds, one for AMI-only rebuilds.
+Reads a list of changed files and emits a single rebuild-level-tagged producer
+matrix for GitHub Actions (entries carry a per-entry `mode` field, `image` or
+`ami-only`), plus the AMI matrix.
 
 Invalidation rules (D12):
   Global invalidators → ALL known flavors, image level:
@@ -26,7 +27,7 @@ Usage:
         [--no-diff-baseline] \\
         [--summary-file detect_summary.md]
 
-Output (stdout): JSON object with image_matrix, ami_only_matrix, reason, etc.
+Output (stdout): JSON object with build_matrix, ami_matrix, reason, etc.
 Exit codes:
     0  matrix computed successfully
     1  unknown flavor specified via --force-flavor
@@ -150,6 +151,23 @@ def _gha_matrix(flavors: list[str]) -> dict:
     return {"include": [{"flavor": f} for f in flavors]}
 
 
+def _build_matrix(image_flavors: list[str], ami_only_flavors: list[str]) -> dict:
+    """Build the single rebuild-level-tagged producer matrix.
+
+    `image_flavors` and `ami_only_flavors` are already disjoint (compute_matrix
+    promotes any ami-only flavor that also got an image-level trigger up to
+    image; see the `ami_only_final` promotion), so concatenating them as tagged
+    `include` entries cannot produce a duplicate-flavor entry. `mode` is a
+    per-entry key on the include list, NOT a Cartesian matrix axis.
+    """
+    return {
+        "include": (
+            [{"flavor": f, "mode": "image"} for f in image_flavors]
+            + [{"flavor": f, "mode": "ami-only"} for f in ami_only_flavors]
+        )
+    }
+
+
 def _write_summary(
     flavors: list[str],
     image_flavors: list[str],
@@ -223,13 +241,11 @@ def main(argv: list[str] | None = None) -> int:
 
     all_ami_flavors = sorted(set(image_flavors) | set(ami_only_flavors))
     output = {
-        "image_matrix": _gha_matrix(image_flavors),
-        "ami_only_matrix": _gha_matrix(ami_only_flavors),
+        "build_matrix": _build_matrix(image_flavors, ami_only_flavors),
         "ami_matrix": _gha_matrix(all_ami_flavors),
         "all_flavors": flavors,
         "reason": reason,
-        "has_image_builds": bool(image_flavors),
-        "has_ami_only_builds": bool(ami_only_flavors),
+        "has_builds": bool(image_flavors) or bool(ami_only_flavors),
         "has_ami_builds": bool(all_ami_flavors),
     }
     print(json.dumps(output))

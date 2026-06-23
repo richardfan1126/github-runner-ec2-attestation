@@ -97,6 +97,13 @@ if: needs.detect-changes.outputs.has_ami_builds == 'true' &&
 longer sitting downstream of an `always()` job, resolves through the normal implicit
 `success()` — it runs when `build-ami` succeeded and cascade-skips otherwise.
 
+The "no `always()`" goal is scoped to the *job dependency graph*, where `always()` causes the
+transitive wrong-skips. The one `always()` that remains is the step-level guard on
+`build-ami`'s "Cleanup Terraform resources" step, which must run even when the AMI build step
+fails so the temporary EC2 builder instance and EBS volumes are always destroyed (a leak/cost
+guard). A within-job teardown guard does not propagate a skipped status to any downstream job,
+so it is intentionally kept.
+
 ### Decision 4: `detect_changes.py` emits one `mode`-tagged producer matrix
 
 Replace the separate `image_matrix` / `ami_only_matrix` outputs with a single
