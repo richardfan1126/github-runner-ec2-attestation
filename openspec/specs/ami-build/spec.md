@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Convert the published, attested KIWI image artifact into an AWS AMI, and orchestrate that conversion as a CI job. This capability covers the AMI_Build_Script (`scripts/build-ami.py`) that provisions a temporary EC2 build instance via Terraform, verifies the artifact's GitHub attestation (including optional producing-workflow identity), downloads and validates the artifact, uploads the raw disk image to an EBS snapshot, registers an AMI with the correct boot/TPM attributes, outputs the result, and tears down all infrastructure; the `build-ami` GitHub Actions job that drives it after `build-and-publish`; and the Terraform IAM role that the job assumes via OIDC.
+Convert the published, attested KIWI image artifact into an AWS AMI, and orchestrate that conversion as a CI job. This capability covers the AMI_Build_Script (`scripts/build-ami.py`) that provisions a temporary EC2 build instance via Terraform, verifies the artifact's GitHub attestation (including optional producing-workflow identity), downloads and validates the artifact, uploads the raw disk image to an EBS snapshot, registers an AMI with the correct boot/TPM attributes, outputs the result, and tears down all infrastructure; the `build-ami` GitHub Actions job that drives it after `build-flavor-image`; and the Terraform IAM role that the job assumes via OIDC.
 
 Artifact production and the debug-image annotation are specified in `image-build`; deployment of the resulting AMI in `deployment`.
 
@@ -10,17 +10,33 @@ Artifact production and the debug-image annotation are specified in `image-build
 
 ### Requirement: build-ami job dependency and trigger
 
-The `build-ami` job SHALL declare `needs: build-and-publish` so it runs only after that job succeeds, and SHALL run on pushes to `main`, on `workflow_dispatch` with `enable_ssh: false`, and on `workflow_dispatch` with `enable_ssh: true` (Debug_Build), but SHALL be skipped on pushes to `develop`.
+The `build-ami` job SHALL declare `needs: [detect-changes, build-flavor-image]`, where
+`build-flavor-image` is the **single** per-flavor producer job (parametrized by rebuild
+level), so it runs only after that producer completes. Because there is no second,
+conditionally-skipped sibling producer, the job SHALL express its trigger and skip behavior
+**without** `always()` and without a hand-written upstream-result boolean: ordinary `needs`
+resolution combined with the job's own ref/event gate SHALL suffice. The job SHALL run on
+pushes to `main`, on `workflow_dispatch` with `enable_ssh: false`, and on
+`workflow_dispatch` with `enable_ssh: true` (Debug_Build), but SHALL be skipped on pushes
+to `develop` and SHALL be skipped when the producer produced nothing to build.
 
-#### Scenario: Runs after build-and-publish on applicable triggers
+#### Scenario: Runs after the producer on applicable triggers
 
-- **WHEN** the workflow is triggered by a push to `main`, or by `workflow_dispatch` with either value of `enable_ssh`
-- **THEN** the `build-ami` job executes after `build-and-publish` completes successfully
+- **WHEN** the workflow is triggered by a push to `main`, or by `workflow_dispatch` with
+  either value of `enable_ssh`, and the producer job built at least one flavor
+- **THEN** the `build-ami` job executes after the single `build-flavor-image` producer
+  completes successfully, via ordinary `needs` resolution (no `always()`)
 
 #### Scenario: Skipped on develop
 
 - **WHEN** the workflow is triggered by a push to `develop`
 - **THEN** the `build-ami` job is skipped
+
+#### Scenario: Cascade-skips cleanly when nothing was built
+
+- **WHEN** a run produces an empty rebuild matrix (no flavors to build)
+- **THEN** the producer job and `build-ami` skip cleanly through ordinary `needs`
+  propagation, with no `always()` gate needed to suppress a spurious run
 
 ### Requirement: build-ami runner, checkout, and environment
 
@@ -52,7 +68,7 @@ The `build-ami` job SHALL invoke AMI_Build_Script with the digest-pinned artifac
 #### Scenario: Script arguments
 
 - **WHEN** the `build-ami` job invokes AMI_Build_Script
-- **THEN** it passes `--artifact-ref ${{ needs.build-and-publish.outputs.artifact_ref }}`, `--region <configured region>`, `--output-file ami_build_result.json`, and `--expected-workflow .github/workflows/build-attestable-image.yml`
+- **THEN** it passes `--artifact-ref ${{ needs.build-flavor-image.outputs.artifact_ref }}`, `--region <configured region>`, `--output-file ami_build_result.json`, and `--expected-workflow .github/workflows/build-attestable-image.yml`
 - **AND** it passes `--allow-debug` only when triggered via `workflow_dispatch` with `enable_ssh: true`, and not otherwise
 
 #### Scenario: Result artifact and summary on success
@@ -183,7 +199,7 @@ After the AMI is registered, the `build-ami` job SHALL emit a **single-entry ver
 
 #### Scenario: Published-artifact annotation carries only the image digest
 
-- **WHEN** the KIWI artifact was published earlier by the build-and-publish job
+- **WHEN** the KIWI artifact was published earlier by the build-flavor-image job
 - **THEN** the container image manifest digest is the only verifier-record field carried as an ORAS annotation on that artifact (alongside `pcr4`/`pcr7`), and the AMI id is never added to the published artifact's annotations — because amending them would change the artifact digest and break its Sigstore attestation, and because the AMI id does not yet exist at publish time
 
 #### Scenario: Verifier join is PCR4

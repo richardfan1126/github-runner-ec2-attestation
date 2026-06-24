@@ -99,7 +99,7 @@ def test_property_95_build_flag_propagation(event_name, enable_ssh_input):
 
     # Find the Build KIWI image step
     build_step = None
-    for step in workflow['jobs']['build-and-publish']['steps']:
+    for step in workflow['jobs']['build-flavor-image']['steps']:
         if step.get('name') == 'Build KIWI image':
             build_step = step
             break
@@ -249,7 +249,7 @@ def test_property_98_gha_summary_ssh_warning(event_name, enable_ssh):
 
     # Find the SSH debug warning step
     warning_step = None
-    for step in workflow['jobs']['build-and-publish']['steps']:
+    for step in workflow['jobs']['build-flavor-image']['steps']:
         if step.get('name') == 'SSH debug warning':
             warning_step = step
             break

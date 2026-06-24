@@ -81,19 +81,19 @@ def _all_step_text(steps: list) -> str:
 
 
 class TestJobDependency:
-    """Requirement 1.1: build-ami must declare needs: build-and-publish."""
+    """Requirement 1.1: build-ami must declare needs: build-flavor-image."""
 
-    def test_needs_build_and_publish(self, build_ami_job):
-        """build-ami job must declare needs: build-and-publish."""
+    def test_needs_build_flavor_image(self, build_ami_job):
+        """build-ami job must declare needs on the single producer build-flavor-image."""
         needs = build_ami_job.get("needs")
         # `needs` may be a string or a list
         if isinstance(needs, list):
-            assert "build-and-publish" in needs, (
-                f"build-ami.needs must include 'build-and-publish', got {needs!r}"
+            assert "build-flavor-image" in needs, (
+                f"build-ami.needs must include 'build-flavor-image', got {needs!r}"
             )
         else:
-            assert needs == "build-and-publish", (
-                f"build-ami.needs must be 'build-and-publish', got {needs!r}"
+            assert needs == "build-flavor-image", (
+                f"build-ami.needs must be 'build-flavor-image', got {needs!r}"
             )
 
 
@@ -230,11 +230,19 @@ class TestJobCondition:
             f"build-ami if: condition must allow workflow_dispatch, got {condition!r}"
         )
 
-    def test_if_condition_uses_always_to_allow_skipped_upstreams(self, build_ami_job):
-        """The if: condition must use always() so skipped upstream jobs don't cascade."""
+    def test_if_condition_does_not_use_always(self, build_ami_job):
+        """With a single producer job, build-ami resolves through ordinary `needs`.
+
+        It must NOT use always() (nor hand-written upstream-result booleans): there is
+        no conditionally-skipped sibling producer to tolerate, so always() would only
+        reintroduce the transitive-skip contagion this change removes.
+        """
         condition = str(build_ami_job.get("if", ""))
-        assert "always()" in condition, (
-            f"build-ami if: condition must include always() to handle skipped upstream jobs, got {condition!r}"
+        assert "always()" not in condition, (
+            f"build-ami if: condition must NOT include always() (single producer → ordinary needs), got {condition!r}"
+        )
+        assert ".result" not in condition, (
+            f"build-ami if: condition must NOT hand-check upstream .result, got {condition!r}"
         )
 
     def test_if_condition_checks_has_ami_builds(self, build_ami_job):
