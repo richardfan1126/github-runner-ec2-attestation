@@ -590,7 +590,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git diff --quiet flavors.lock; then
+          if [ -z "$(git status --porcelain flavors.lock)" ]; then
             echo "No changes to flavors.lock — skipping commit"
             exit 0
           fi
