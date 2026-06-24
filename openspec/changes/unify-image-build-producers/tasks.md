@@ -1,9 +1,9 @@
 ## 1. Pre-flight
 
-- [ ] 1.1 Capture a pre-change baseline: trigger a `workflow_dispatch` (or note the latest
+- [x] 1.1 Capture a pre-change baseline: trigger a `workflow_dispatch` (or note the latest
   `main` run) and save the artifact annotations, PCR4/PCR7, and `flavors.lock` for one
   image-level and one AMI-only flavor, to diff against after the refactor.
-- [ ] 1.2 (Resolved) Branch protection on `main` requires neither `build-kiwi-ami-only` nor
+- [x] 1.2 (Resolved) Branch protection on `main` requires neither `build-kiwi-ami-only` nor
   `build-and-publish` — confirmed, so removing the ami-only job needs no protection change.
 
 ## 2. detect_changes.py — single producer matrix
@@ -49,13 +49,13 @@
 
 ## 6. Validation
 
-- [ ] 6.1 Dispatch a run covering one image-level and one AMI-only flavor; confirm both are
+- [x] 6.1 Dispatch a run covering one image-level and one AMI-only flavor; confirm both are
   produced by the single `build-flavor-image` job.
-- [ ] 6.2 Diff the new run's annotations, PCR4/PCR7, and `flavors.lock` entries against the
+- [x] 6.2 Diff the new run's annotations, PCR4/PCR7, and `flavors.lock` entries against the
   task 1.1 baseline — they must match.
-- [ ] 6.3 Confirm `update-flavors-lock` runs and commits after a successful AMI build that
+- [x] 6.3 Confirm `update-flavors-lock` runs and commits after a successful AMI build that
   rebuilt only AMI-only flavors (the case that was previously wrongly skipped).
-- [ ] 6.4 Confirm a no-op/empty-matrix run cascade-skips the producer, `build-ami`, and
+- [x] 6.4 Confirm a no-op/empty-matrix run cascade-skips the producer, `build-ami`, and
   `update-flavors-lock` cleanly, leaving `flavors.lock` untouched.
 - [x] 6.5 Run `openspec validate unify-image-build-producers --strict` and resolve any
   issues.
