@@ -4,7 +4,7 @@
 
 ## Overview
 
-Phase 2 of the build pipeline converts the published, attested KIWI artifact into an AWS AMI. `scripts/build-ami.py` (AMI_Converter) provisions a temporary EC2 build instance via Terraform, verifies the artifact's GitHub attestation, uploads the raw disk image to an EBS snapshot via coldsnap, and registers an AMI with TPM 2.0 / UEFI support. The `build-ami` CI job drives the script after `build-and-publish`. The design is intentionally narrow: the CI job is a YAML job block, not a new application — the script already exists.
+Phase 2 of the build pipeline converts the published, attested KIWI artifact into an AWS AMI. `scripts/build-ami.py` (AMI_Converter) provisions a temporary EC2 build instance via Terraform, verifies the artifact's GitHub attestation, uploads the raw disk image to an EBS snapshot via coldsnap, and registers an AMI with TPM 2.0 / UEFI support. The `build-ami` CI job drives the script after `build-flavor-image`. The design is intentionally narrow: the CI job is a YAML job block, not a new application — the script already exists.
 
 ## Key decisions & trade-offs
 
@@ -18,7 +18,7 @@ Phase 2 of the build pipeline converts the published, attested KIWI artifact int
 
 ## CI job design
 
-- **Trigger.** `needs: build-and-publish`; the `if:` is a pure boolean — runs on push to `main` or any `workflow_dispatch` (either `enable_ssh` value), skipped on `develop`. `enable_ssh` no longer gates whether the job runs — only whether `--allow-debug` is passed and a debug warning is appended.
+- **Trigger.** `needs: build-flavor-image`; the `if:` is a pure boolean — runs on push to `main` or any `workflow_dispatch` (either `enable_ssh` value), skipped on `develop`. `enable_ssh` no longer gates whether the job runs — only whether `--allow-debug` is passed and a debug warning is appended.
 - **Step ordering** is dependency-driven: checkout → OIDC creds → setup-terraform → `uv sync` → run script → (on success) upload artifact + summary, (debug) warning, (failure) failure notice. No separate cleanup step — destroy lives in the script's `finally`.
 - **Region consistency.** `${{ vars.AWS_REGION || 'us-east-1' }}` must be identical in `configure-aws-credentials` and `--region`; the script validates region format, so the default is safe.
 
