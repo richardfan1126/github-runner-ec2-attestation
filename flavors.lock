@@ -1,0 +1,13 @@
+{
+  "rust-build": {
+    "ami_id": "ami-06ac6f554fb4d2f8b",
+    "container_image_digest": "sha256:f9a7eff385543d4c3a70352a126a0fea0ef768b7d793ae851f59dd095777752f",
+    "pcr4": "ce1908c3c40f8d9d3510899bbb513a1bc682436410959078afe0cb48ce907a662c198de29388056ad22fe63c0ff9c20d",
+    "producing_commit": "9908bb797aeef63c876c192c906b504285f8ad9d",
+    "relaxations": {
+      "container_network_mode": "bridge",
+      "container_tmpfs_exec": true,
+      "container_tmpfs_size": "2g"
+    }
+  }
+}
