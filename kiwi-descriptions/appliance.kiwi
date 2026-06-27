@@ -21,7 +21,7 @@
             overlayroot="true"
             overlayroot_write_partition="false"
             overlayroot_readonly_filesystem="erofs"
-            overlayroot_readonly_partsize="2048"
+            overlayroot_readonly_partsize="3072"
             erofscompression="lz4hc,level=12"
             eficsm="false"
             verity_blocks="all"
@@ -35,7 +35,7 @@
         <initrd action="setup">
             <dracut uefi="true"/>
         </initrd>
-        <size unit="G">4</size>
+        <size unit="G">5</size>
         </type>
     </preferences>
 

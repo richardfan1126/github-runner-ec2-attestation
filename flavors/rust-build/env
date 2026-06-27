@@ -7,3 +7,7 @@
 # A flavor without these keys fails the build-time config-resolution gate (deny-all).
 ALLOWED_REPOSITORIES=richardfan1126/github-runner-ec2-attestation-caller,richardfan1126/github-runner-ec2-attestation-rust-build-demo
 EXPECTED_AUDIENCE=test-workflow
+
+CONTAINER_NETWORK_MODE=bridge
+CONTAINER_TMPFS_EXEC=true
+CONTAINER_TMPFS_SIZE=2g
