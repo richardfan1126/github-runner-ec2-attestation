@@ -75,12 +75,16 @@ After each successful AMI build the pipeline commits `flavors.lock`, a JSON file
     "pcr4": "<hex>",
     "ami_id": "ami-...",
     "producing_commit": "<sha>",
-    "relaxations": {}
+    "relaxations": {
+      "container_network_mode": "bridge",
+      "container_tmpfs_exec": true,
+      "container_tmpfs_size": "2g"
+    }
   }
 }
 ```
 
-`relaxations: {}` means the flavor carries the full hardened posture. Non-empty relaxations list the bucket-① fields that were overridden, so a verifier can see exactly which security defaults were relaxed without reading the env files.
+For the `rust-build` flavor above, `relaxations` lists the bucket-① fields it overrides (a `bridge` network for the GHCR push, plus a `2g` exec-enabled tmpfs scratch for the Rust build). An empty `relaxations: {}` means the flavor carries the full hardened posture. A verifier reads these to see exactly which security defaults were relaxed without opening the env files.
 
 ## Configuration
 
