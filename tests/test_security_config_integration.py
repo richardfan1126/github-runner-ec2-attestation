@@ -14,6 +14,7 @@ and the ``generate_attestation`` / ``generate_output_attestation`` call sites).
 
 See openspec/specs/container-security/spec.md.
 """
+import base64
 import json
 import os
 import tempfile
@@ -133,14 +134,10 @@ def _run_one_script(executor, manager, temp_dir):
 
 
 def _capture_attestation_user_data(config, executor):
-    """Call generate_attestation mirroring server.py and capture the user_data."""
-    captured = {}
-
+    """Call generate_attestation mirroring server.py and return the decoded
+    claims document (the container-security posture now lives there, not
+    inline in user_data — see the attestation-claims-digest change)."""
     def capture_and_run(cmd, **kwargs):
-        if "--user-data" in cmd:
-            idx = cmd.index("--user-data")
-            with open(cmd[idx + 1], "r") as f:
-                captured["user_data"] = json.load(f)
         result = Mock()
         result.returncode = 0
         result.stdout = b"mock_cbor_attestation"
@@ -166,7 +163,7 @@ def _capture_attestation_user_data(config, executor):
         )
     assert error is None
     assert doc is not None
-    return captured["user_data"]
+    return json.loads(base64.b64decode(doc.claims_raw))
 
 
 class TestDefaultsAreHardenedEndToEnd:

@@ -5,6 +5,7 @@ Tests Properties 44, 45, 46 from the design document
 """
 import base64
 import hashlib
+import json
 from unittest.mock import Mock, patch
 
 from hypothesis import given, strategies as st, settings
@@ -13,7 +14,7 @@ from fastapi.testclient import TestClient
 from src.attestation import AttestationGenerator
 from src.server import create_app
 from src.config import ServerConfig
-from src.models import ExecutionStatus, ExecutionRecord, OutputData, OIDCValidationResult
+from src.models import ExecutionStatus, ExecutionRecord, OutputData, OIDCValidationResult, OutputAttestationResult
 from datetime import datetime, timezone
 
 
@@ -176,8 +177,9 @@ def test_property_44_output_attestation_digest_integrity(
     stdout, stderr, exit_code, attestation_bytes, exec_status
 ):
     """
-    Property 44: For any Script_Output, the user_data passed to nitro-tpm-attest
-    matches the SHA-256 hex digest of that Script_Output, regardless of execution status.
+    Property 44: For any Script_Output, the output_digest carried in the output
+    claims document matches the sha256:-prefixed digest of the canonical JSON
+    { stdout, stderr, exit_code } (D11), regardless of execution status.
 
     **Validates: Requirements 6.7, 6.9**
     """
@@ -193,18 +195,13 @@ def test_property_44_output_attestation_digest_integrity(
     else:  # COMPLETED
         effective_exit_code = exit_code
 
-    script_output = f"stdout:{stdout}\nstderr:{stderr}\nexit_code:{effective_exit_code}"
-    expected_digest = hashlib.sha256(script_output.encode("utf-8")).hexdigest()
-
-    captured_user_data = {}
+    canonical = json.dumps(
+        {"stdout": stdout, "stderr": stderr, "exit_code": effective_exit_code},
+        sort_keys=True, separators=(',', ':'),
+    )
+    expected_digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def capture_and_run(cmd, **kwargs):
-        # Read the user_data file that was passed to the command
-        user_data_idx = cmd.index("--user-data")
-        user_data_path = cmd[user_data_idx + 1]
-        with open(user_data_path, "r") as f:
-            captured_user_data["content"] = f.read()
-
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = attestation_bytes
@@ -212,16 +209,16 @@ def test_property_44_output_attestation_digest_integrity(
         return mock_result
 
     with patch("subprocess.run", side_effect=capture_and_run):
-        result_bytes, error = generator.generate_output_attestation(script_output)
+        result, error = generator.generate_output_attestation(
+            stdout, stderr, effective_exit_code
+        )
 
-    assert result_bytes is not None, f"Expected success but got error: {error}"
+    assert result is not None, f"Expected success but got error: {error}"
     assert error is None
-    # user_data is now JSON containing the output_digest
-    import json as _json
-    user_data_parsed = _json.loads(captured_user_data["content"])
-    assert user_data_parsed["output_digest"] == expected_digest, (
-        f"user_data digest mismatch for status {exec_status.value}: "
-        f"got {user_data_parsed['output_digest']}, expected {expected_digest}"
+    claims = json.loads(base64.b64decode(result.claims_raw))
+    assert claims["output_digest"] == expected_digest, (
+        f"output_digest mismatch for status {exec_status.value}: "
+        f"got {claims['output_digest']}, expected {expected_digest}"
     )
 
 
@@ -264,7 +261,10 @@ def test_property_45_output_attestation_base64_encoding(
             with patch.object(
                 app.state.attestation_generator,
                 "generate_output_attestation",
-                return_value=(attestation_bytes, None),
+                return_value=(
+                    OutputAttestationResult(signature=attestation_bytes, claims_raw="e30="),
+                    None,
+                ),
             ):
                 req_body = make_encrypted_output_request(
                     {"offset": 0}, ctx.shared_key

@@ -17,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.config import ServerConfig
-from src.models import ExecutionRecord, ExecutionStatus, OutputData
+from src.models import ExecutionRecord, ExecutionStatus, OutputData, OutputAttestationResult
 from src.server import create_app
 from tests.encryption_test_helpers import (
     EncryptionTestContext,
@@ -95,7 +95,7 @@ class TestOutputValidSharedKey:
              patch.object(
                  app.state.attestation_generator,
                  "generate_output_attestation",
-                 return_value=(b"attestation-bytes", None),
+                 return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
              ):
             req_body = make_encrypted_output_request({"offset": 0}, ctx.shared_key)
             response = client.post(f"/execution/{eid}/output", json=req_body)
@@ -127,7 +127,7 @@ class TestOutputValidSharedKey:
              patch.object(
                  app.state.attestation_generator,
                  "generate_output_attestation",
-                 return_value=(b"attestation-bytes", None),
+                 return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
              ):
             # Payload has no oidc_token field at all
             req_body = make_encrypted_output_request({"offset": 0}, ctx.shared_key)
@@ -158,7 +158,7 @@ class TestOutputValidSharedKey:
              patch.object(
                  app.state.attestation_generator,
                  "generate_output_attestation",
-                 return_value=(b"attestation-bytes", None),
+                 return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
              ):
             # Include a completely invalid oidc_token — should be ignored
             req_body = make_encrypted_output_request(
@@ -193,7 +193,7 @@ class TestOutputValidSharedKey:
              patch.object(
                  app.state.attestation_generator,
                  "generate_output_attestation",
-                 return_value=(b"attestation-bytes", None),
+                 return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
              ):
             req_body = make_encrypted_output_request({"offset": 34}, ctx.shared_key)
             response = client.post(f"/execution/{eid}/output", json=req_body)

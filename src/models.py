@@ -54,6 +54,18 @@ class AttestationDocument:
     script_path: str
     timestamp: datetime
     signature: bytes  # CBOR-encoded NitroTPM attestation
+    # Base64-encoded claims document bytes (claims_raw) that claims_digest,
+    # bound inside `signature`'s user_data envelope, hashes to. None when no
+    # claims document was generated (e.g. the /attest endpoint's bare document).
+    claims_raw: Optional[str] = None
+
+
+@dataclass
+class OutputAttestationResult:
+    """Result of generating an output (post-execution) attestation document"""
+    signature: bytes  # CBOR-encoded NitroTPM attestation
+    # Base64-encoded output-claims document bytes that claims_digest hashes to.
+    claims_raw: str
 
 
 @dataclass

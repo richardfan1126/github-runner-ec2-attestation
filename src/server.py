@@ -851,6 +851,7 @@ def add_routes(app: FastAPI) -> None:
                     script_env=script_env,
                     execution_id=execution_record.execution_id,
                     gpu_enabled=sec_config.enable_gpu,
+                    gpu_devices=sec_config.gpu_devices,
                     container_user=sec_config.container_user,
                     container_allow_root=sec_config.container_allow_root,
                     container_cap_add=request.app.state.script_executor.cap_add,
@@ -891,6 +892,11 @@ def add_routes(app: FastAPI) -> None:
                     "attestation_document": base64.b64encode(attestation_doc.signature).decode('utf-8'),
                     "status": execution_record.status.value
                 }
+                # claims_raw is the base64 preimage claims_digest (bound inside the
+                # signed user_data envelope above) hashes to (D9). None only when a
+                # caller-constructed AttestationDocument omits it (e.g. some tests).
+                if attestation_doc.claims_raw is not None:
+                    response_data["claims_raw"] = attestation_doc.claims_raw
                 
                 # Initiate async execution
                 executor = request.app.state.script_executor
@@ -1163,20 +1169,15 @@ def add_routes(app: FastAPI) -> None:
 
             # Generate Output_Attestation_Document on every poll response
             # (subject to rate limiting to prevent TPM resource exhaustion)
-            script_output = (
-                f"stdout:{stdout}\n"
-                f"stderr:{stderr}\n"
-                f"exit_code:{exit_code}"
-            )
-
             output_attestation_limiter = request.app.state.output_attestation_rate_limiter
             if output_attestation_limiter.check_and_record(execution_id):
                 attestation_gen = request.app.state.attestation_generator
                 sec_config = request.app.state.config
-                attestation_bytes, attestation_error_msg = (
+                output_attestation, attestation_error_msg = (
                     attestation_gen.generate_output_attestation(
-                        script_output, nonce=nonce, execution_id=execution_id,
+                        stdout, stderr, exit_code, nonce=nonce, execution_id=execution_id,
                         gpu_enabled=sec_config.enable_gpu,
+                        gpu_devices=sec_config.gpu_devices,
                         container_user=sec_config.container_user,
                         container_allow_root=sec_config.container_allow_root,
                         container_cap_add=request.app.state.script_executor.cap_add,
@@ -1189,10 +1190,11 @@ def add_routes(app: FastAPI) -> None:
                     )
                 )
 
-                if attestation_bytes is not None:
+                if output_attestation is not None:
                     response_data["output_attestation_document"] = (
-                        base64.b64encode(attestation_bytes).decode("utf-8")
+                        base64.b64encode(output_attestation.signature).decode("utf-8")
                     )
+                    response_data["claims_raw"] = output_attestation.claims_raw
                 else:
                     response_data["output_attestation_document"] = None
                     response_data["attestation_error"] = attestation_error_msg

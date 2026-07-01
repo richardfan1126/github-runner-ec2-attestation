@@ -245,29 +245,32 @@ def test_property_16_attestation_document_completeness(
         assert time_before <= attestation_doc.timestamp <= time_after, \
             "Timestamp should be within generation time window"
         
-        # Requirement 4.9, 4.10, 4.14, 4.15: Verify script_env_hash in user_data
+        # Requirement 4.9, 4.10, 4.14, 4.15: Verify script_env_hash in the claims document
         assert captured_user_data is not None, "Should have written user_data"
         user_data = json.loads(captured_user_data.decode('utf-8'))
-        
-        assert 'script_env_hash' in user_data, \
-            "user_data must include script_env_hash (Requirement 4.14)"
-        
+        assert 'timestamp' in user_data
+
+        import base64
+        claims = json.loads(base64.b64decode(attestation_doc.claims_raw))
+
+        assert 'script_env_hash' in claims, \
+            "claims document must include script_env_hash (Requirement 4.14)"
+
         # Verify the hash is correct
         expected_hash = generator._compute_script_env_hash(script_env)
-        assert user_data['script_env_hash'] == expected_hash, \
+        assert claims['script_env_hash'] == expected_hash, \
             "script_env_hash must match expected SHA-256 digest"
-        
+
         # Verify hash is a valid 64-char hex SHA-256
-        assert len(user_data['script_env_hash']) == 64, \
+        assert len(claims['script_env_hash']) == 64, \
             "script_env_hash should be 64 hex characters"
-        assert all(c in '0123456789abcdef' for c in user_data['script_env_hash']), \
+        assert all(c in '0123456789abcdef' for c in claims['script_env_hash']), \
             "script_env_hash should be lowercase hex"
-        
+
         # Verify all other required fields are still present
-        assert 'repository_url' in user_data
-        assert 'commit_hash' in user_data
-        assert 'script_path' in user_data
-        assert 'timestamp' in user_data
+        assert 'repository_url' in claims
+        assert 'commit_hash' in claims
+        assert 'script_path' in claims
 
 
 # Property 17: Attestation Document Signing
@@ -624,15 +627,17 @@ def test_tpm_device_availability_check():
 @settings(max_examples=20)
 def test_user_data_json_structure(repo_url, commit, path, attestation_bytes):
     """
-    Test that user_data passed to nitro-tpm-attest contains the correct
-    execution metadata in JSON format.
+    Test that the envelope passed to nitro-tpm-attest as user_data, and the
+    bound claims document, together contain the correct execution metadata
+    in JSON format.
     """
+    import base64
     import json
-    
+
     generator = AttestationGenerator()
-    
+
     captured_user_data = None
-    
+
     def capture_write(fd, data):
         """Capture data written to file descriptors"""
         nonlocal captured_user_data
@@ -640,45 +645,46 @@ def test_user_data_json_structure(repo_url, commit, path, attestation_bytes):
         if captured_user_data is None:
             captured_user_data = data
         return len(data)
-    
+
     with patch('subprocess.run') as mock_run, \
          patch('os.write', side_effect=capture_write), \
          patch('os.close'), \
          patch('os.unlink'):
-        
+
         # Mock successful attestation
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = attestation_bytes
         mock_result.stderr = b''
         mock_run.return_value = mock_result
-        
+
         # Generate attestation
         attestation_doc, error = generator.generate_attestation(
             repository_url=repo_url,
             commit_hash=commit,
             script_path=path
         )
-        
+
         # Should have captured user_data
         assert captured_user_data is not None
-        
-        # Parse JSON
+
+        # Parse the envelope JSON
         user_data = json.loads(captured_user_data.decode('utf-8'))
-        
-        # Verify structure
-        assert 'repository_url' in user_data
-        assert user_data['repository_url'] == repo_url
-        
-        assert 'commit_hash' in user_data
-        assert user_data['commit_hash'] == commit
-        
-        assert 'script_path' in user_data
-        assert user_data['script_path'] == path
-        
         assert 'timestamp' in user_data
         # Timestamp should be ISO format
         datetime.fromisoformat(user_data['timestamp'])
+
+        # Verify the claims document structure
+        claims = json.loads(base64.b64decode(attestation_doc.claims_raw))
+
+        assert 'repository_url' in claims
+        assert claims['repository_url'] == repo_url
+
+        assert 'commit_hash' in claims
+        assert claims['commit_hash'] == commit
+
+        assert 'script_path' in claims
+        assert claims['script_path'] == path
 
 
 # Property test: Empty script_env produces SHA-256 of "{}"
@@ -732,12 +738,13 @@ def test_script_env_hash_empty_produces_sha256_of_empty_object(
             assert attestation_doc is not None
             assert error is None
             assert captured_user_data is not None
-            
-            user_data = json.loads(captured_user_data.decode('utf-8'))
-            assert 'script_env_hash' in user_data, \
+
+            import base64
+            claims = json.loads(base64.b64decode(attestation_doc.claims_raw))
+            assert 'script_env_hash' in claims, \
                 f"script_env_hash must be present when script_env={script_env_value}"
-            assert user_data['script_env_hash'] == expected_empty_hash, \
-                f"Empty/None script_env must produce SHA-256 of '{{}}', got {user_data['script_env_hash']}"
+            assert claims['script_env_hash'] == expected_empty_hash, \
+                f"Empty/None script_env must produce SHA-256 of '{{}}', got {claims['script_env_hash']}"
 
 
 # Property test: Non-empty script_env produces deterministic hash regardless of insertion order
@@ -807,10 +814,11 @@ def test_script_env_hash_deterministic_regardless_of_insertion_order(
         
         assert attestation_doc is not None
         assert captured_user_data is not None
-        
-        user_data = json.loads(captured_user_data.decode('utf-8'))
-        assert user_data['script_env_hash'] == expected_hash, \
-            "Attestation user_data script_env_hash must match canonical computation"
+
+        import base64
+        claims = json.loads(base64.b64decode(attestation_doc.claims_raw))
+        assert claims['script_env_hash'] == expected_hash, \
+            "Claims document script_env_hash must match canonical computation"
 
 
 # ---------------------------------------------------------------------------
@@ -844,19 +852,21 @@ def security_config(draw):
     )
 
 
-def _capture_user_data_side_effect(captured):
-    """subprocess.run side effect that records the user_data JSON written to disk."""
+def _capture_claims_side_effect(captured):
+    """subprocess.run side effect that ignores user_data on disk (envelope-only now);
+    callers instead read claims from the returned doc/result's claims_raw."""
     def side_effect(cmd, **kwargs):
-        if "--user-data" in cmd:
-            path = cmd[cmd.index("--user-data") + 1]
-            with open(path, "r") as f:
-                captured.append(json.load(f))
         result = Mock()
         result.returncode = 0
         result.stdout = b"mock_cbor"
         result.stderr = b""
         return result
     return side_effect
+
+
+def _decode_claims(claims_raw: str) -> dict:
+    import base64
+    return json.loads(base64.b64decode(claims_raw))
 
 
 SECURITY_KEYS = {
@@ -869,11 +879,11 @@ SECURITY_KEYS = {
 @settings(max_examples=50, deadline=None)
 @given(cfg=security_config())
 def test_execute_attestation_security_values_round_trip(cfg):
-    """For any valid config, the eight user_data values equal the resolved config values."""
+    """For any valid config, the eight claims-document values equal the resolved config values."""
     generator = AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
     captured = []
 
-    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(captured)):
+    with patch("subprocess.run", side_effect=_capture_claims_side_effect(captured)):
         doc, error = generator.generate_attestation(
             repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
@@ -882,10 +892,9 @@ def test_execute_attestation_security_values_round_trip(cfg):
         )
 
     assert error is None
-    assert captured, "user_data should have been written"
-    user_data = captured[0]
+    claims = _decode_claims(doc.claims_raw)
     for key, value in cfg.items():
-        assert user_data[key] == value, f"{key} must round-trip to the resolved value"
+        assert claims[key] == value, f"{key} must round-trip to the resolved value"
 
 
 @settings(max_examples=50, deadline=None)
@@ -895,18 +904,17 @@ def test_output_attestation_security_values_round_trip(cfg):
     generator = AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
     captured = []
 
-    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(captured)):
-        attestation_bytes, error_msg = generator.generate_output_attestation(
-            script_output="stdout:x\nstderr:\nexit_code:0",
+    with patch("subprocess.run", side_effect=_capture_claims_side_effect(captured)):
+        result, error_msg = generator.generate_output_attestation(
+            "x", "", 0,
             execution_id="exec-1",
             **cfg,
         )
 
     assert error_msg is None
-    assert captured, "user_data should have been written"
-    user_data = captured[0]
+    claims = _decode_claims(result.claims_raw)
     for key, value in cfg.items():
-        assert user_data[key] == value
+        assert claims[key] == value
 
 
 @settings(max_examples=50, deadline=None)
@@ -916,8 +924,8 @@ def test_execute_and_output_attestations_carry_identical_security_values(cfg):
     generator = AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
 
     execute_captured = []
-    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(execute_captured)):
-        generator.generate_attestation(
+    with patch("subprocess.run", side_effect=_capture_claims_side_effect(execute_captured)):
+        exec_doc, _ = generator.generate_attestation(
             repository_url="https://github.com/owner/repo",
             commit_hash="a" * 40,
             script_path="build.sh",
@@ -926,13 +934,15 @@ def test_execute_and_output_attestations_carry_identical_security_values(cfg):
         )
 
     output_captured = []
-    with patch("subprocess.run", side_effect=_capture_user_data_side_effect(output_captured)):
-        generator.generate_output_attestation(
-            script_output="stdout:x\nstderr:\nexit_code:0",
+    with patch("subprocess.run", side_effect=_capture_claims_side_effect(output_captured)):
+        output_result, _ = generator.generate_output_attestation(
+            "x", "", 0,
             execution_id="exec-1",
             **cfg,
         )
 
-    execute_security = {k: execute_captured[0][k] for k in SECURITY_KEYS}
-    output_security = {k: output_captured[0][k] for k in SECURITY_KEYS}
+    exec_claims = _decode_claims(exec_doc.claims_raw)
+    output_claims = _decode_claims(output_result.claims_raw)
+    execute_security = {k: exec_claims[k] for k in SECURITY_KEYS}
+    output_security = {k: output_claims[k] for k in SECURITY_KEYS}
     assert execute_security == output_security

@@ -17,7 +17,7 @@ from hypothesis import given, strategies as st, settings
 from fastapi.testclient import TestClient
 
 from src.config import ServerConfig
-from src.models import ExecutionRecord, ExecutionStatus, OutputData
+from src.models import ExecutionRecord, ExecutionStatus, OutputData, OutputAttestationResult
 from src.server import create_app
 from tests.encryption_test_helpers import (
     EncryptionTestContext,
@@ -172,7 +172,7 @@ def test_property_147_output_shared_key_auth_no_oidc_required(
     ), patch.object(
         app.state.attestation_generator,
         "generate_output_attestation",
-        return_value=(b"attestation-bytes", None),
+        return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
     ):
         # Send request WITHOUT oidc_token — only offset in the payload
         req_body = make_encrypted_output_request(
@@ -225,7 +225,7 @@ def test_property_147_output_ignores_oidc_token_in_payload(
     ), patch.object(
         app.state.attestation_generator,
         "generate_output_attestation",
-        return_value=(b"attestation-bytes", None),
+        return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
     ):
         # Include an arbitrary oidc_token — it should be ignored
         req_body = make_encrypted_output_request(
