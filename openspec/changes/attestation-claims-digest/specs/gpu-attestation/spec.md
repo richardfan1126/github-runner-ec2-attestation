@@ -2,12 +2,12 @@
 
 ### Requirement: GPU claims block
 
-The attestation claims document SHALL carry a `gpu` block that replaces the bare `gpu_enabled` boolean. When GPU is enabled, the block SHALL be `{ enabled: true, devices: [ … ] }`, where each device entry carries `uuid`, `name`, `driver_version`, `cuda_version`, `vbios_version`, `compute_capability`, and `memory_total_mib`. The `enabled` field subsumes the former `gpu_enabled` boolean for continuity.
+The attestation claims document SHALL carry a `gpu` block that replaces the bare `gpu_enabled` boolean. When GPU is enabled, the block SHALL be `{ enabled: true, visible_devices, devices: [ … ] }`, where `visible_devices` records the configured `GPU_DEVICES` selection (e.g. `"all"`) and each `devices` entry carries `uuid`, `name`, `driver_version`, `cuda_version`, `vbios_version`, `compute_capability`, and `memory_total_mib`. The `enabled` field subsumes the former `gpu_enabled` boolean for continuity.
 
 #### Scenario: Enabled GPU block populated
 
 - **WHEN** `ENABLE_GPU` is true and an attestation is generated
-- **THEN** `claims_raw` contains `gpu.enabled: true` and a `gpu.devices` array whose entries each carry `uuid`, `name`, `driver_version`, `cuda_version`, `vbios_version`, `compute_capability`, and `memory_total_mib`
+- **THEN** `claims_raw` contains `gpu.enabled: true`, `gpu.visible_devices` recording the `GPU_DEVICES` selection, and a `gpu.devices` array whose entries each carry `uuid`, `name`, `driver_version`, `cuda_version`, `vbios_version`, `compute_capability`, and `memory_total_mib`
 
 ### Requirement: Measured-driver trust semantics
 
@@ -22,6 +22,30 @@ The GPU device fields SHALL be collected at attestation time from the NVIDIA dri
 
 - **WHEN** a verifier reads the `gpu` block
 - **THEN** it treats the block as a measured-software-stack self-report and does not infer hardware/firmware genuineness of the GPU from it
+
+#### Scenario: Availability, not proof of execution
+
+- **WHEN** a verifier reads the `gpu.devices` array
+- **THEN** it treats the entries as the identity of the devices *exposed to* the workload at attestation time, and does NOT infer that the computation actually executed on them (the block is read in the server process at generation time, decoupled from the container's runtime device grant, and a runtime failure could leave the job on CPU)
+
+### Requirement: GPU device set is the workload-visible set
+
+The `gpu.devices` array SHALL describe the set of GPUs exposed to the execution container (the `GPU_DEVICES` → `NVIDIA_VISIBLE_DEVICES` selection), NOT the unfiltered host enumeration, so the attestation cannot over-claim devices the workload never saw. Under the default `GPU_DEVICES=all`, the workload-visible set equals the full NVML host enumeration and the array reflects every enumerated device. If `GPU_DEVICES` is a subset the collector cannot resolve to the emitted device set, the Attestation_Generator SHALL fail closed (attestation error) rather than emit the host enumeration.
+
+#### Scenario: Default all reflects full enumeration
+
+- **WHEN** `GPU_DEVICES` is `all` (the default) and an attestation is generated
+- **THEN** `gpu.visible_devices` is `all` and `gpu.devices` contains one entry per NVML-enumerated device on the host, since the workload-visible set equals the host set
+
+#### Scenario: Unresolvable subset fails closed
+
+- **WHEN** `GPU_DEVICES` names a subset the collector cannot resolve to the emitted `gpu.devices` set
+- **THEN** attestation generation records an error rather than emitting the unfiltered host enumeration, so a restricted GPU set can never be reported as more devices than the workload could see
+
+#### Scenario: Selection is observable
+
+- **WHEN** the GPU set is restricted below the host set
+- **THEN** the restriction is visible in `gpu.visible_devices`, consistent with recording every relaxation in the attestation rather than silently
 
 ### Requirement: Per-device array for multi-GPU instances
 

@@ -27,7 +27,7 @@ The GHA_Server SHALL provide an HTTP POST `/execution/{id}/output` endpoint (POS
 #### Scenario: Output and attestations returned
 
 - **WHEN** the output endpoint is polled for an existing execution
-- **THEN** the response includes stdout, stderr, exit code, the base64 Attestation_Document, and a base64 Output_Attestation_Document whose signed `user_data` envelope carries the `execution_id` and whose accompanying `claims_raw` carries an `output_digest` over the current Script_Output (`stdout‖stderr‖exit_code`)
+- **THEN** the response includes stdout, stderr, exit code, the base64 Attestation_Document, and a base64 Output_Attestation_Document whose signed `user_data` envelope carries the `execution_id` and whose accompanying `claims_raw` carries an `output_digest` over the canonical JSON `{ stdout, stderr, exit_code }` (keys sorted, no whitespace, `exit_code` a JSON number) — not a delimiter-glued string, so distinct outputs cannot collide
 
 #### Scenario: Unknown execution
 

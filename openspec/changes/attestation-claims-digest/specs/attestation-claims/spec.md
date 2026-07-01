@@ -115,12 +115,17 @@ The claims document (`claims_raw`) SHALL be delivered alongside the attestation 
 
 ### Requirement: Inner sub-digest canonicalization retained for external preimages
 
-For sub-digests whose preimage is NOT transmitted in `claims_raw` — specifically `script_env_hash` and the reserved `gpu.attestation.report_digest` — canonicalization rules SHALL be retained so the preimage is independently reconstructable. `script_env_hash` SHALL be the SHA-256 hex digest of the canonicalized `script_env` (keys sorted, JSON with no whitespace), or of `{}` when `script_env` is empty. This canonicalization applies only to inner sub-digests, not to the outer `claims_digest` binding.
+For sub-digests whose preimage is NOT transmitted in `claims_raw` — specifically `script_env_hash`, `output_digest`, and the reserved `gpu.attestation.report_digest` — canonicalization rules SHALL be retained so the preimage is independently reconstructable. `script_env_hash` SHALL be the SHA-256 hex digest of the canonicalized `script_env` (keys sorted, JSON with no whitespace), or of `{}` when `script_env` is empty. `output_digest` SHALL be the `sha256:`-prefixed digest of the canonical JSON object `{ stdout, stderr, exit_code }` (keys sorted, JSON with no whitespace), with `exit_code` carried as a JSON number, so that the map from `(stdout, stderr, exit_code)` to preimage bytes is injective and cannot be forged by in-band delimiters embedded in `stdout`/`stderr`. Both reuse the same canonicalization rule. This canonicalization applies only to inner sub-digests, not to the outer `claims_digest` binding.
 
 #### Scenario: script_env_hash canonicalization unchanged
 
 - **WHEN** `script_env_hash` is computed for a claims document
 - **THEN** it is the SHA-256 hex digest of the canonicalized `script_env` (keys sorted, JSON no whitespace), or of `{}` when `script_env` is empty, independently of how `claims_raw` itself is serialized
+
+#### Scenario: output_digest binds a canonical structured form
+
+- **WHEN** `output_digest` is computed for an output claims document
+- **THEN** it is the `sha256:`-prefixed digest of the canonical JSON object `{ stdout, stderr, exit_code }` (keys sorted, JSON no whitespace, `exit_code` as a JSON number), NOT of a delimiter-glued string, so that two distinct `(stdout, stderr, exit_code)` triples can never collide on the same preimage
 
 ### Requirement: Reserved nested digest-and-preimage slot
 
@@ -138,4 +143,4 @@ Both the execute-time and output-time attestation builders SHALL emit the same e
 #### Scenario: Output attestation uses the same envelope
 
 - **WHEN** an output attestation is generated for a polled execution
-- **THEN** its `user_data` uses the same `{ v, claims_digest, timestamp, execution_id }` envelope, and its `claims_raw` carries output claims including an `output_digest` over the current `stdout‖stderr‖exit_code`
+- **THEN** its `user_data` uses the same `{ v, claims_digest, timestamp, execution_id }` envelope, and its `claims_raw` carries output claims including an `output_digest` over the canonical JSON `{ stdout, stderr, exit_code }` (keys sorted, no whitespace, `exit_code` a JSON number)

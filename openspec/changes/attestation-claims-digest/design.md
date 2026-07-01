@@ -274,6 +274,84 @@ it and accept an attestation it should reject.
 Three independent gates fall out, guarding three independent properties:
 `binding check → integrity`, `schema_version MAJOR → semantics`, `envelope v → mechanism`.
 
+### D11 — `output_digest` binds a canonical structured form, not delimiter-glued text
+
+The output claim's inner `output_digest` SHALL be computed over a **canonical
+JSON object** `{ stdout, stderr, exit_code }` (`json.dumps(..., sort_keys=True,
+separators=(',',':'))`, `sha256:`-prefixed), **not** over the current
+delimiter-glued string `f"stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}"`.
+`exit_code` stays a JSON number (not stringified) so reconstruction is unambiguous.
+
+**Why:** the glued form uses **in-band delimiters** (`stdout:`, `\nstderr:`,
+`\nexit_code:`) that can appear verbatim inside `stdout`/`stderr`, so the map
+`(stdout, stderr, exit_code) → bytes` is **not injective** — two distinct triples
+collide on the same preimage and therefore the same digest:
+
+```
+  stdout="hello\nstderr:oops\nexit_code:1", stderr="",                 exit=0
+  stdout="hello",                            stderr="oops\nexit_code:1\nstderr:", exit=0
+        └── both serialize to ──▶ "stdout:hello\nstderr:oops\nexit_code:1\nstderr:\nexit_code:0"
+```
+
+That is precisely the serialization-ambiguity hazard **D4** exists to kill, one
+layer down. `output_digest` is a digest-and-preimage sub-digest of the same kind
+as `script_env_hash` — its preimage is reconstructed by the verifier from the
+transmitted `stdout`/`stderr`/`exit_code` response fields — so per D4 it keeps a
+**canonicalization rule**, and it reuses the *exact* `script_env_hash` rule
+(`sort_keys=True, separators=(',',':')`) so verifiers reimplement **one** house
+canonicalization, not two. JSON string-escaping makes the mapping injective; the
+collision disappears.
+
+**Why not the full D9 opaque-blob treatment:** that would eliminate inner
+canonicalization entirely but forces the output onto the wire twice (an opaque
+blob *and* the display `stdout`/`stderr`/`exit_code` fields) or moves parsing onto
+the caller. D4 already accepts canonicalization for inner sub-digests whose
+preimage lives elsewhere; matching `script_env_hash` is the smaller, consistent
+change. Chosen.
+
+### D12 — `gpu.devices` is the workload-visible set, not the raw host enumeration
+
+NVML enumerates every GPU on the **host**; the execution container only sees the
+subset named by `GPU_DEVICES` (→ `NVIDIA_VISIBLE_DEVICES`, `script_executor.py`).
+So there are two different questions:
+
+```
+  Q1  "what GPUs were on the attesting HOST?"      → NVML host enumeration
+  Q2  "what GPU did MY workload compute on?"       → the container-visible set
+```
+
+The proposal's framing — *"the device that computed the result"* — is **Q2**. A
+naïve collector that emits the raw NVML host list answers **Q1**, and the two
+diverge the moment `GPU_DEVICES ≠ all`: the attestation would list devices the
+workload never saw (over-claim).
+
+**Decision:** `gpu.devices` SHALL describe the **workload-visible** set.
+- **Default `GPU_DEVICES=all` (the only configuration in use):** the visible set
+  *equals* the host enumeration, so the collector emits the full NVML list and
+  there is no divergence. Today's behavior is unchanged.
+- **Observable selection:** the block records the selection as
+  `gpu.visible_devices` (e.g. `"all"`), so *restricting* the GPU set is explicit
+  in the attestation — consistent with the house rule that every relaxation is
+  observable in `user_data`.
+- **Fail closed on divergence:** if `GPU_DEVICES` is a subset the collector cannot
+  resolve to the emitted device set, attestation SHALL error rather than emit the
+  host list (which would over-claim). This *enforces* the "always all" assumption
+  instead of silently trusting it — a future subset config fails loudly, never
+  lies. It reuses the existing NVML-fails-closed posture.
+
+**Scope ceiling (words, not code):** `gpu.devices` asserts the **availability and
+identity** of the devices *exposed to* the workload — it is **not** proof the
+computation executed on them (the nvidia runtime could fail and the job fall back
+to CPU while the block still lists GPUs). This is the same class of limit as the
+measured-driver-not-hardware ceiling (D6): the attestation is read at generation
+time in the server process, decoupled from the container's actual device grant.
+Verifiers requiring proof-of-execution-on-device must not over-read the block.
+
+**Why not build the `GPU_DEVICES`-subset filter now:** it is dead code under
+`all`. Recording the selection + failing closed on any non-resolvable subset gives
+the same safety (no false claim can ship) at a fraction of the cost, and leaves a
+clean seam for a real filter if subset configs ever become a use case.
+
 ## Risks / Trade-offs
 
 - **[Attestation is no longer self-describing]** → The verifier contract makes the
