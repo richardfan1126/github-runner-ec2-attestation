@@ -67,3 +67,24 @@ When `ENABLE_GPU` is true, the Script_Executor SHALL create each Execution_Conta
 
 - **WHEN** GPU is enabled or disabled
 - **THEN** the attestation records the GPU posture in the `gpu` claims block of `claims_raw` (per the `gpu-attestation` capability): `{ enabled: true, devices: [ … ] }` when enabled or `{ enabled: false }` when disabled, in place of the former inline `gpu_enabled` boolean
+
+## ADDED Requirements
+
+### Requirement: Freshness/anti-replay preserved across the envelope refactor
+
+The move from inline `user_data` fields to the claims-digest envelope SHALL NOT weaken the existing freshness guarantee. The mandatory per-request client nonce SHALL remain the anti-replay mechanism: the server SHALL continue to require and strictly validate a `nonce` on `/execute` and `/execution/{id}/output`, reject duplicate nonces via the anti-replay nonce cache, and bind the nonce into the attestation's native COSE `nonce` field (outside `user_data`) for both the execution attestation and every output attestation. The envelope's `timestamp` and `execution_id` are secondary staleness/correlation signals and SHALL NOT be treated as the anti-replay mechanism. Because the nonce lives outside `user_data`, unifying the two attestation builders SHALL preserve nonce threading unchanged.
+
+#### Scenario: Nonce still bound in both attestations
+
+- **WHEN** an execution attestation and an output attestation are generated under the new envelope format
+- **THEN** each carries the request's client nonce in the attestation's native COSE `nonce` field, unaffected by the `user_data` envelope change
+
+#### Scenario: Duplicate nonce still rejected
+
+- **WHEN** a request replays a previously seen nonce on `/execute` or `/execution/{id}/output`
+- **THEN** the server rejects it via the anti-replay nonce cache, exactly as before the envelope refactor
+
+#### Scenario: Envelope fields are not the anti-replay mechanism
+
+- **WHEN** a verifier assesses freshness
+- **THEN** it relies on the signed native nonce (requester-chosen, cache-checked) for anti-replay, and treats the envelope `timestamp`/`execution_id` only as staleness bound and correlation, since the server chooses both and a replayer re-presents them unchanged
