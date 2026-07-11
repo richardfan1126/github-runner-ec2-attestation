@@ -1,4 +1,5 @@
 """Unit tests for attestation generator"""
+import base64
 import json
 import os
 import subprocess
@@ -151,35 +152,39 @@ class TestMockedTPMDevice:
         assert call_args[1]["capture_output"] is True
     
     @patch("subprocess.run")
-    def test_user_data_file_contains_execution_metadata(self, mock_run, generator):
-        """Test user_data file contains repository URL, commit, script path, and timestamp"""
+    def test_user_data_file_contains_envelope(self, mock_run, generator):
+        """Test user_data file contains exactly the signed envelope fields"""
         captured_user_data = {}
-        
+
         def capture_and_run(cmd, **kwargs):
             # Capture user_data before subprocess completes
             user_data_idx = cmd.index("--user-data")
             user_data_path = cmd[user_data_idx + 1]
             with open(user_data_path, "r") as f:
                 captured_user_data.update(json.load(f))
-            
+
             mock_result = Mock()
             mock_result.returncode = 0
             mock_result.stdout = b"attestation"
             return mock_result
-        
+
         mock_run.side_effect = capture_and_run
-        
+
         repo_url = "https://github.com/owner/repo"
         commit = "abc123" * 7  # 42 chars, truncate to 40
         script = "scripts/test.sh"
-        
-        generator.generate_attestation(repo_url, commit, script)
-        
-        # Verify captured user_data content
-        assert captured_user_data["repository_url"] == repo_url
-        assert captured_user_data["commit_hash"] == commit
-        assert captured_user_data["script_path"] == script
+
+        doc, error = generator.generate_attestation(repo_url, commit, script)
+
+        # The envelope carries only v, claims_digest, timestamp (no execution_id here)
+        assert set(captured_user_data.keys()) == {"v", "claims_digest", "timestamp"}
         assert "timestamp" in captured_user_data
+
+        # Repository URL, commit hash, and script path live in the claims document
+        claims = json.loads(base64.b64decode(doc.claims_raw))
+        assert claims["repository_url"] == repo_url
+        assert claims["commit_hash"] == commit
+        assert claims["script_path"] == script
     
     @patch("subprocess.run")
     def test_nonce_file_created_when_provided(self, mock_run, generator):

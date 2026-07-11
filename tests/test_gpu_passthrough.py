@@ -9,6 +9,7 @@ Covers:
 
 Requirements: 56.5-56.13, 56.20-56.24
 """
+import base64
 import json
 import os
 import tempfile
@@ -416,33 +417,51 @@ class TestGPUDenyList:
 # ===========================================================================
 
 
-class TestGPUAttestation:
-    """Test gpu_enabled field in attestation user_data."""
+FAKE_GPU_DEVICE = {
+    "uuid": "GPU-00000000-0000-0000-0000-000000000000",
+    "name": "NVIDIA A10G",
+    "driver_version": "550.90.07",
+    "cuda_version": "12.4",
+    "vbios_version": "94.02.00.00.02",
+    "compute_capability": "8.6",
+    "memory_total_mib": 23028,
+}
 
-    def test_gpu_enabled_true_in_attestation_user_data(self, tmp_path):
-        """gpu_enabled=True is included in attestation user_data."""
-        # Create a fake tpm_attest_path that outputs dummy CBOR
+
+def _decode_claims(claims_raw: str) -> dict:
+    return json.loads(base64.b64decode(claims_raw))
+
+
+class TestGPUAttestation:
+    """Test the `gpu` claims block in the attestation's claims document."""
+
+    def test_gpu_enabled_true_in_claims(self, tmp_path):
+        """gpu_enabled=True populates the gpu block in the claims document
+        (NVML collection is mocked since no real GPU is present)."""
         fake_attest = tmp_path / "fake-attest"
         fake_attest.write_text("#!/bin/bash\necho -n 'FAKE_ATTESTATION'\n")
         fake_attest.chmod(0o755)
 
         generator = AttestationGenerator(tpm_attest_path=str(fake_attest))
-        doc, err = generator.generate_attestation(
-            repository_url="https://github.com/owner/repo",
-            commit_hash="a" * 40,
-            script_path="scripts/build.sh",
-            gpu_enabled=True,
-        )
+        with patch("src.attestation._collect_nvml_devices", return_value=[FAKE_GPU_DEVICE]):
+            doc, err = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                gpu_enabled=True,
+            )
 
         assert err is None
         assert doc is not None
-        # The user_data JSON is written to a temp file and passed to the tool.
-        # We verify the generator accepted gpu_enabled without error.
-        # The actual user_data content is verified by inspecting the temp file
-        # in the next test using a mock approach.
+        claims = _decode_claims(doc.claims_raw)
+        assert claims["gpu"] == {
+            "enabled": True,
+            "visible_devices": "all",
+            "devices": [FAKE_GPU_DEVICE],
+        }
 
-    def test_gpu_enabled_false_in_attestation_user_data(self, tmp_path):
-        """gpu_enabled=False is included in attestation user_data."""
+    def test_gpu_enabled_false_in_claims(self, tmp_path):
+        """gpu_enabled=False yields exactly { enabled: false } in the claims document."""
         fake_attest = tmp_path / "fake-attest"
         fake_attest.write_text("#!/bin/bash\necho -n 'FAKE_ATTESTATION'\n")
         fake_attest.chmod(0o755)
@@ -457,44 +476,41 @@ class TestGPUAttestation:
 
         assert err is None
         assert doc is not None
+        claims = _decode_claims(doc.claims_raw)
+        assert claims["gpu"] == {"enabled": False}
 
-    def test_gpu_enabled_included_in_user_data_json(self, tmp_path):
-        """Verify gpu_enabled field appears in the user_data JSON passed to attest tool."""
+    def test_gpu_enabled_included_in_claims_document(self, tmp_path):
+        """Verify the gpu block and other claims appear in the claims document
+        passed alongside the attestation."""
         fake_attest = tmp_path / "capture-attest"
-        # Script that captures the user_data file content to a known location
-        capture_file = tmp_path / "captured_user_data.json"
         fake_attest.write_text(
             f'#!/bin/bash\n'
-            f'# Copy user_data file to capture location\n'
-            f'cp "$2" "{capture_file}"\n'
             f'echo -n "ATTESTATION_BYTES"\n'
         )
         fake_attest.chmod(0o755)
 
         generator = AttestationGenerator(tpm_attest_path=str(fake_attest))
-        doc, err = generator.generate_attestation(
-            repository_url="https://github.com/owner/repo",
-            commit_hash="b" * 40,
-            script_path="scripts/test.sh",
-            gpu_enabled=True,
-            execution_id="exec-gpu-test-001",
-        )
+        with patch("src.attestation._collect_nvml_devices", return_value=[FAKE_GPU_DEVICE]):
+            doc, err = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="b" * 40,
+                script_path="scripts/test.sh",
+                gpu_enabled=True,
+                execution_id="exec-gpu-test-001",
+            )
 
         assert err is None
-        assert capture_file.exists()
+        claims = _decode_claims(doc.claims_raw)
+        assert claims["gpu"]["enabled"] is True
+        assert claims["repository_url"] == "https://github.com/owner/repo"
+        # execution_id is envelope-only, not duplicated into the claims document
+        assert "execution_id" not in claims
 
-        user_data = json.loads(capture_file.read_text())
-        assert user_data["gpu_enabled"] is True
-        assert user_data["execution_id"] == "exec-gpu-test-001"
-        assert user_data["repository_url"] == "https://github.com/owner/repo"
-
-    def test_gpu_enabled_none_omitted_from_user_data(self, tmp_path):
-        """When gpu_enabled is None, it is not included in user_data."""
-        capture_file = tmp_path / "captured_user_data.json"
+    def test_gpu_enabled_none_omitted_from_claims(self, tmp_path):
+        """When gpu_enabled is None, no gpu key is included in the claims document."""
         fake_attest = tmp_path / "capture-attest"
         fake_attest.write_text(
             f'#!/bin/bash\n'
-            f'cp "$2" "{capture_file}"\n'
             f'echo -n "ATTESTATION_BYTES"\n'
         )
         fake_attest.chmod(0o755)
@@ -508,37 +524,90 @@ class TestGPUAttestation:
         )
 
         assert err is None
-        assert capture_file.exists()
+        claims = _decode_claims(doc.claims_raw)
+        assert "gpu" not in claims
 
-        user_data = json.loads(capture_file.read_text())
-        assert "gpu_enabled" not in user_data
-
-    def test_output_attestation_includes_gpu_enabled(self, tmp_path):
-        """generate_output_attestation includes gpu_enabled in user_data."""
-        capture_file = tmp_path / "captured_output_user_data.json"
+    def test_output_attestation_includes_gpu_block(self, tmp_path):
+        """generate_output_attestation includes the gpu block in the output claims document."""
         fake_attest = tmp_path / "capture-attest"
         fake_attest.write_text(
             f'#!/bin/bash\n'
-            f'cp "$2" "{capture_file}"\n'
             f'echo -n "OUTPUT_ATTESTATION_BYTES"\n'
         )
         fake_attest.chmod(0o755)
 
         generator = AttestationGenerator(tpm_attest_path=str(fake_attest))
-        result, err = generator.generate_output_attestation(
-            script_output="hello world\n",
-            execution_id="exec-output-gpu-001",
-            gpu_enabled=True,
-        )
+        with patch("src.attestation._collect_nvml_devices", return_value=[FAKE_GPU_DEVICE]):
+            result, err = generator.generate_output_attestation(
+                "hello world\n", "", 0,
+                execution_id="exec-output-gpu-001",
+                gpu_enabled=True,
+            )
 
         assert err is None
         assert result is not None
-        assert capture_file.exists()
+        claims = _decode_claims(result.claims_raw)
+        assert claims["gpu"]["enabled"] is True
+        assert "execution_id" not in claims
+        assert "output_digest" in claims
 
-        user_data = json.loads(capture_file.read_text())
-        assert user_data["gpu_enabled"] is True
-        assert user_data["execution_id"] == "exec-output-gpu-001"
-        assert "output_digest" in user_data
+    def test_gpu_enabled_nvml_failure_fails_closed(self, tmp_path):
+        """When ENABLE_GPU is true but NVML cannot enumerate devices, the whole
+        attestation fails closed rather than emitting enabled: true with no devices."""
+        fake_attest = tmp_path / "fake-attest"
+        fake_attest.write_text("#!/bin/bash\necho -n 'FAKE_ATTESTATION'\n")
+        fake_attest.chmod(0o755)
+
+        generator = AttestationGenerator(tpm_attest_path=str(fake_attest))
+        with patch("src.attestation._collect_nvml_devices", side_effect=RuntimeError("no NVML")):
+            doc, err = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                gpu_enabled=True,
+            )
+
+        assert doc is None
+        assert err is not None
+        assert "GPU claim collection failed" in err.context
+
+    def test_gpu_enabled_zero_devices_fails_closed(self, tmp_path):
+        """When NVML enumerates zero devices, the attestation fails closed."""
+        fake_attest = tmp_path / "fake-attest"
+        fake_attest.write_text("#!/bin/bash\necho -n 'FAKE_ATTESTATION'\n")
+        fake_attest.chmod(0o755)
+
+        generator = AttestationGenerator(tpm_attest_path=str(fake_attest))
+        with patch("src.attestation._collect_nvml_devices", return_value=[]):
+            doc, err = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                gpu_enabled=True,
+            )
+
+        assert doc is None
+        assert err is not None
+
+    def test_gpu_devices_subset_fails_closed(self, tmp_path):
+        """A GPU_DEVICES value other than 'all' cannot be resolved to the
+        workload-visible set with the current collector and fails closed (D12)."""
+        fake_attest = tmp_path / "fake-attest"
+        fake_attest.write_text("#!/bin/bash\necho -n 'FAKE_ATTESTATION'\n")
+        fake_attest.chmod(0o755)
+
+        generator = AttestationGenerator(tpm_attest_path=str(fake_attest))
+        with patch("src.attestation._collect_nvml_devices", return_value=[FAKE_GPU_DEVICE]):
+            doc, err = generator.generate_attestation(
+                repository_url="https://github.com/owner/repo",
+                commit_hash="a" * 40,
+                script_path="scripts/build.sh",
+                gpu_enabled=True,
+                gpu_devices="0,1",
+            )
+
+        assert doc is None
+        assert err is not None
 
 
 # ===========================================================================

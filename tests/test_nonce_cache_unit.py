@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.config import ServerConfig
-from src.models import OIDCValidationResult, AttestationDocument, CloneResult
+from src.models import OIDCValidationResult, AttestationDocument, CloneResult, OutputAttestationResult
 from src.nonce_cache import NonceCache
 from src.server import create_app
 from src.validation import GITHUB_OIDC_ISSUER
@@ -316,7 +316,7 @@ class TestOutputEndpointNonceValidation:
         ), patch.object(
             app.state.attestation_generator,
             "generate_output_attestation",
-            return_value=(b"attestation-bytes", None),
+            return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
         ):
             body1 = make_encrypted_output_request(output_payload, ctx.shared_key)
             resp1 = client.post(f"/execution/{execution_id}/output", json=body1)
@@ -338,7 +338,7 @@ class TestOutputEndpointNonceValidation:
         ), patch.object(
             app.state.attestation_generator,
             "generate_output_attestation",
-            return_value=(b"attestation-bytes", None),
+            return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
         ):
             payload1 = {"oidc_token": "valid.oidc.token", "nonce": "out-nonce-a-123456", "offset": 0}
             body1 = make_encrypted_output_request(payload1, ctx.shared_key)
@@ -373,7 +373,7 @@ class TestOutputEndpointNonceValidation:
         ), patch.object(
             app.state.attestation_generator,
             "generate_output_attestation",
-            return_value=(b"attestation-bytes", None),
+            return_value=(OutputAttestationResult(signature=b"attestation-bytes", claims_raw="e30="), None),
         ):
             body = make_encrypted_output_request(output_payload, ctx.shared_key)
             resp2 = client.post(f"/execution/{execution_id}/output", json=body)

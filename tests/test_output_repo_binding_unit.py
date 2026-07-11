@@ -17,6 +17,7 @@ from src.models import (
     ExecutionRecord,
     ExecutionStatus,
     OutputData,
+    OutputAttestationResult,
 )
 from src.server import create_app
 from tests.encryption_test_helpers import (
@@ -94,7 +95,7 @@ class TestOutputSharedKeyAuth:
         ), patch.object(
             app.state.attestation_generator,
             "generate_output_attestation",
-            return_value=(b"attest", None),
+            return_value=(OutputAttestationResult(signature=b"attest", claims_raw="e30="), None),
         ):
             # No oidc_token in the payload — Shared_Key is the auth
             body = make_encrypted_output_request(

@@ -5,6 +5,7 @@ Requirements: 6.7, 6.8, 6.9, 6.11
 """
 import base64
 import hashlib
+import json
 import subprocess
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from src.attestation import AttestationGenerator
 from src.config import ServerConfig
-from src.models import ExecutionRecord, ExecutionStatus, OutputData, OIDCValidationResult
+from src.models import ExecutionRecord, ExecutionStatus, OutputData, OIDCValidationResult, OutputAttestationResult
 from src.server import create_app
 
 
@@ -57,6 +58,10 @@ def generator():
     return AttestationGenerator(tpm_attest_path="/usr/bin/nitro-tpm-attest")
 
 
+def _decode_claims(claims_raw: str) -> dict:
+    return json.loads(base64.b64decode(claims_raw))
+
+
 class TestGenerateOutputAttestation:
     """Tests for AttestationGenerator.generate_output_attestation"""
 
@@ -70,21 +75,22 @@ class TestGenerateOutputAttestation:
         mock_result.stderr = b""
         mock_run.return_value = mock_result
 
-        script_output = "stdout:hello\nstderr:\nexit_code:0"
-        result_bytes, error = generator.generate_output_attestation(script_output)
+        result, error = generator.generate_output_attestation("hello", "", 0)
 
-        assert result_bytes == expected_bytes
+        assert result.signature == expected_bytes
         assert error is None
 
     @patch("subprocess.run")
-    def test_user_data_is_sha256_hex_digest(self, mock_run, generator):
-        """Test that user_data file contains the SHA-256 hex digest of script_output"""
+    def test_output_digest_is_canonical_json_sha256(self, mock_run, generator):
+        """Test that the output claims document contains output_digest computed
+        over the canonical JSON { stdout, stderr, exit_code }, not a delimiter-glued
+        string (D11)."""
         captured = {}
 
         def capture_and_run(cmd, **kwargs):
             idx = cmd.index("--user-data")
             with open(cmd[idx + 1], "r") as f:
-                captured["user_data"] = f.read()
+                captured["user_data"] = json.load(f)
             mock_result = Mock()
             mock_result.returncode = 0
             mock_result.stdout = b"attestation"
@@ -93,14 +99,18 @@ class TestGenerateOutputAttestation:
 
         mock_run.side_effect = capture_and_run
 
-        script_output = "stdout:test output\nstderr:warn\nexit_code:1"
-        generator.generate_output_attestation(script_output)
+        result, error = generator.generate_output_attestation("test output", "warn", 1)
 
-        expected_digest = hashlib.sha256(script_output.encode("utf-8")).hexdigest()
-        # user_data is now JSON with output_digest field
-        import json
-        user_data = json.loads(captured["user_data"])
-        assert user_data["output_digest"] == expected_digest
+        assert error is None
+        claims = _decode_claims(result.claims_raw)
+        canonical = json.dumps(
+            {"stdout": "test output", "stderr": "warn", "exit_code": 1},
+            sort_keys=True, separators=(',', ':'),
+        )
+        expected_digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        assert claims["output_digest"] == expected_digest
+        # The envelope itself carries no output-related fields
+        assert "output_digest" not in captured["user_data"]
 
     @patch("subprocess.run")
     def test_failure_returns_none_and_error(self, mock_run, generator):
@@ -111,9 +121,9 @@ class TestGenerateOutputAttestation:
         mock_result.stderr = b"device not found"
         mock_run.return_value = mock_result
 
-        result_bytes, error = generator.generate_output_attestation("some output")
+        result, error = generator.generate_output_attestation("some", "output", 0)
 
-        assert result_bytes is None
+        assert result is None
         assert error is not None
         assert "exit code 1" in error
 
@@ -124,9 +134,9 @@ class TestGenerateOutputAttestation:
             cmd=["nitro-tpm-attest"], timeout=30
         )
 
-        result_bytes, error = generator.generate_output_attestation("output")
+        result, error = generator.generate_output_attestation("output", "", 0)
 
-        assert result_bytes is None
+        assert result is None
         assert "timed out" in error.lower()
 
     @patch("subprocess.run")
@@ -134,9 +144,9 @@ class TestGenerateOutputAttestation:
         """Test OS error returns None and error message"""
         mock_run.side_effect = OSError("Permission denied")
 
-        result_bytes, error = generator.generate_output_attestation("output")
+        result, error = generator.generate_output_attestation("output", "", 0)
 
-        assert result_bytes is None
+        assert result is None
         assert "OS error" in error
 
 
@@ -182,7 +192,10 @@ class TestOutputEndpointWithAttestation:
                 with patch.object(
                     app.state.attestation_generator,
                     "generate_output_attestation",
-                    return_value=(attestation_bytes, None),
+                    return_value=(
+                        OutputAttestationResult(signature=attestation_bytes, claims_raw="e30="),
+                        None,
+                    ),
                 ):
                     req_body = make_encrypted_output_request(
                         {"offset": 0}, ctx.shared_key
@@ -194,6 +207,7 @@ class TestOutputEndpointWithAttestation:
         assert "output_attestation_document" in data
         decoded = base64.b64decode(data["output_attestation_document"])
         assert decoded == attestation_bytes
+        assert data["claims_raw"] == "e30="
 
     def test_complete_execution_attestation_failure_returns_error(self):
         """Test completed execution with attestation failure returns null + error"""
@@ -245,7 +259,10 @@ class TestOutputEndpointWithAttestation:
                 with patch.object(
                     app.state.attestation_generator,
                     "generate_output_attestation",
-                    return_value=(attestation_bytes, None),
+                    return_value=(
+                        OutputAttestationResult(signature=attestation_bytes, claims_raw="e30="),
+                        None,
+                    ),
                 ) as mock_gen:
                     req_body = make_encrypted_output_request(
                         {"offset": 0}, ctx.shared_key
@@ -257,11 +274,12 @@ class TestOutputEndpointWithAttestation:
         assert "output_attestation_document" in data
         decoded = base64.b64decode(data["output_attestation_document"])
         assert decoded == attestation_bytes
-        # Verify the canonical script output was passed
-        expected_script_output = "stdout:partial\nstderr:\nexit_code:None"
+        # Verify stdout/stderr/exit_code were passed as separate positional args
         mock_gen.assert_called_once()
         call_args = mock_gen.call_args
-        assert call_args[0][0] == expected_script_output
+        assert call_args[0][0] == "partial"
+        assert call_args[0][1] == ""
+        assert call_args[0][2] is None
         assert call_args[1].get("execution_id") == "test-running"
 
     def test_queued_execution_includes_output_attestation(self):
@@ -281,7 +299,10 @@ class TestOutputEndpointWithAttestation:
                 with patch.object(
                     app.state.attestation_generator,
                     "generate_output_attestation",
-                    return_value=(attestation_bytes, None),
+                    return_value=(
+                        OutputAttestationResult(signature=attestation_bytes, claims_raw="e30="),
+                        None,
+                    ),
                 ) as mock_gen:
                     req_body = make_encrypted_output_request(
                         {"offset": 0}, ctx.shared_key
@@ -293,9 +314,10 @@ class TestOutputEndpointWithAttestation:
         assert "output_attestation_document" in data
         decoded = base64.b64decode(data["output_attestation_document"])
         assert decoded == attestation_bytes
-        # Verify empty output was used for canonical script output
-        expected_script_output = "stdout:\nstderr:\nexit_code:None"
+        # Verify empty output was passed as separate positional args
         mock_gen.assert_called_once()
         call_args = mock_gen.call_args
-        assert call_args[0][0] == expected_script_output
+        assert call_args[0][0] == ""
+        assert call_args[0][1] == ""
+        assert call_args[0][2] is None
         assert call_args[1].get("execution_id") == "test-queued"

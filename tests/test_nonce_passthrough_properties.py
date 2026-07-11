@@ -20,6 +20,7 @@ from src.models import (
     ExecutionRecord,
     ExecutionStatus,
     OIDCValidationResult,
+    OutputAttestationResult,
     OutputData,
 )
 from src.attestation import AttestationGenerator
@@ -248,7 +249,10 @@ def test_nonce_passthrough_output_endpoint(nonce):
     ), patch.object(
         app.state.attestation_generator, "generate_output_attestation"
     ) as mock_output_attest:
-        mock_output_attest.return_value = (b"output_attestation_bytes", None)
+        mock_output_attest.return_value = (
+            OutputAttestationResult(signature=b"output_attestation_bytes", claims_raw="e30="),
+            None,
+        )
 
         payload = {"oidc_token": "valid.oidc.token", "offset": 0, "nonce": nonce}
 

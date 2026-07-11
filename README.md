@@ -314,6 +314,84 @@ The client flow is:
 5. The server decapsulates, derives the same shared key, decrypts the payload, and returns `{ "encrypted_response": "<base64>" }` encrypted with the shared key.
 6. For subsequent `POST /execution/{id}/output` calls, the server looks up the shared key by execution ID. Send `{ "encrypted_payload": "<base64>" }` encrypted with the same shared key.
 
+## Attestation Claims
+
+The NitroTPM `user_data` field is hard-capped at 1024 bytes, so `/execute` and `/execution/{id}/output` attestations carry a compact, fixed-shape **envelope** in `user_data` rather than the execution/output details themselves:
+
+```json
+{
+  "v": 1,
+  "claims_digest": "sha256:<hex>",
+  "timestamp": "2025-01-01T00:00:00+00:00",
+  "execution_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+`v` is the envelope-format version; `execution_id` and `timestamp` are signed but secondary (correlation and staleness only — see [Freshness](#freshness) below). The full, variable-length details live in a separate **claims document**, transmitted alongside the attestation as a base64-encoded opaque field, `claims_raw`, and bound to the envelope by `claims_digest`. This generalizes the same digest-and-preimage idiom already used for `server_public_key` (fingerprint in the attestation, full key delivered alongside) and `script_env_hash` (digest of an external preimage).
+
+An execution claims document looks like:
+
+```json
+{
+  "schema_version": "1.0",
+  "repository_url": "https://github.com/owner/repo",
+  "commit_hash": "abc123...",
+  "script_path": "scripts/build.sh",
+  "script_env_hash": "sha256-hex-of-canonicalized-script_env",
+  "container_user": "65534:65534",
+  "container_allow_root": false,
+  "container_cap_add": ["CHOWN", "DAC_OVERRIDE", "..."],
+  "no_new_privileges": true,
+  "container_read_only_rootfs": true,
+  "container_tmpfs_size": "256m",
+  "container_tmpfs_exec": false,
+  "workspace_mount_mode": "ro",
+  "container_network_mode": "none",
+  "gpu": { "enabled": false }
+}
+```
+
+An output claims document replaces the execution-specific fields with `output_digest`, a `sha256:`-prefixed digest of the canonical JSON object `{ "stdout": ..., "stderr": ..., "exit_code": ... }` (keys sorted, no whitespace, `exit_code` a JSON number) — not a delimiter-glued string, so a `stdout`/`stderr` value that happens to contain `stdout:`/`stderr:`/`exit_code:`-like text can never be forged into colliding with a different genuine output.
+
+### Verifying the binding
+
+A verifier MUST perform these steps, in order, before trusting any claim field — this mirrors the existing `server_public_key` fingerprint check (hash raw bytes, transmit base64, decode-then-hash to verify):
+
+1. Base64-decode `claims_raw` to recover `claims_bytes`.
+2. Compute `sha256(claims_bytes)` and compare against `claims_digest` from the signed `user_data` envelope (after stripping the `sha256:` prefix). Reject if they don't match, or if the digest carries an algorithm prefix other than `sha256:`.
+3. Parse `claims_bytes` as JSON and check `schema_version`. Reject if the MAJOR component is not one this verifier understands. A higher, known-MAJOR MINOR is fine — read the fields you recognize and **ignore unknown fields**; do not reject on their presence.
+4. Only after steps 2–3 pass, read claim fields.
+
+If `claims_raw` is missing, or the recomputed digest does not match `claims_digest`, the verifier MUST read **no** claim fields and reject the attestation — stripping or altering the preimage must never yield a trusted-but-empty read. `claims_raw` always travels in the same (sealed) response body as its attestation, so this check never requires an extra round trip.
+
+### GPU claims
+
+The `gpu` block reports GPU identity collected via NVML from the PCR4-measured NVIDIA driver at attestation time:
+
+```json
+{
+  "enabled": true,
+  "visible_devices": "all",
+  "devices": [
+    {
+      "uuid": "GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "name": "NVIDIA A10G",
+      "driver_version": "550.90.07",
+      "cuda_version": "12.4",
+      "vbios_version": "94.02.00.00.02",
+      "compute_capability": "8.6",
+      "memory_total_mib": 23028
+    }
+  ]
+}
+```
+
+When `ENABLE_GPU` is false or unset, the block is exactly `{ "enabled": false }`. This is a **measured-driver self-report, not hardware attestation** — the driver is measured (PCR4-bound via the dm-verity roothash in the UKI cmdline), but genuine silicon/firmware attestation would require NVIDIA's separate root of trust (NRAS / confidential-compute mode), which this does not provide; a reserved, currently-unpopulated `gpu.attestation.report_digest` slot is left for that in the future. The block also only asserts device *availability to* the workload, not proof the computation executed on it. NitroTPM attestation itself only exists on specific virtualized accelerated instance types (G4dn, G5, G6, G6e/G6f, Gr6, G7/G7e, P5/P5e/P5en, P6-B200/B300, P6e-GB200) — it is **not** available on P4d/P4de (A100), P3 (V100), or any bare-metal instance, so a `gpu` block (or its absence) must never be read as implying support for an unattestable accelerator.
+
+### Freshness
+
+`timestamp` and `execution_id` in the envelope are secondary signals (staleness bound and correlation) — the server chooses both, so a replayer can re-present them unchanged. The actual anti-replay mechanism is the mandatory per-request client `nonce`, which the server validates and rejects on duplicate, and which is bound into the attestation's native COSE `nonce` field (outside `user_data`, unaffected by the envelope described above).
+
 ## API Endpoints
 
 All endpoints are rate-limited per source IP (configurable via `RATE_LIMIT_PER_IP` and `RATE_LIMIT_WINDOW_SECONDS`). Rate limit headers are included on every response:
@@ -411,11 +489,12 @@ Decrypted response:
 {
   "execution_id": "550e8400-e29b-41d4-a716-446655440000",
   "attestation_document": "base64-encoded-cbor",
+  "claims_raw": "base64-encoded-claims-document",
   "status": "queued"
 }
 ```
 
-The `attestation_document` is a base64-encoded CBOR document produced by NitroTPM. Its `user_data` contains the repository URL, commit hash, script path, `script_env_hash` (SHA-256 of canonicalized `script_env`), `execution_id`, `gpu_enabled` (boolean reflecting the server's `ENABLE_GPU` configuration), and a timestamp.
+The `attestation_document` is a base64-encoded CBOR document produced by NitroTPM. Its `user_data` carries the compact signed envelope `{ v, claims_digest, timestamp, execution_id }`; `claims_raw` is the base64-encoded claims document that `claims_digest` binds — containing the repository URL, commit hash, script path, `script_env_hash`, the container-security posture, and the `gpu` block. See [Attestation Claims](#attestation-claims) for the full shape and the verifier binding-check contract.
 
 **Error responses:**
 
@@ -449,7 +528,7 @@ Retrieves execution status and output. Supports incremental polling via the `off
 
 All request and response payloads are encrypted using the shared key established during the `/execute` call (see [Encryption](#encryption)). Authentication is implicit: only the original caller who performed the PQ Hybrid KEM exchange during `/execute` possesses the shared key, so successful decryption proves caller identity.
 
-When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` contains the SHA-256 hex digest of the canonical script output (`stdout:{stdout}\nstderr:{stderr}\nexit_code:{exit_code}`), `execution_id`, and `gpu_enabled` (boolean reflecting the server's `ENABLE_GPU` configuration). If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure. Output attestation is subject to rate limiting (`MAX_OUTPUT_ATTESTATIONS_PER_WINDOW` / `OUTPUT_ATTESTATION_WINDOW_SECONDS`) to prevent TPM resource exhaustion.
+When the execution is complete, the response includes an `output_attestation_document` — a NitroTPM attestation whose `user_data` carries the same compact signed envelope `{ v, claims_digest, timestamp, execution_id }` described in [Attestation Claims](#attestation-claims). The accompanying `claims_raw` binds the output claims document, including `output_digest` — a `sha256:`-prefixed digest of the canonical JSON object `{ stdout, stderr, exit_code }` (keys sorted, no whitespace, `exit_code` a JSON number), not a delimiter-glued string. If output attestation generation fails, `output_attestation_document` is `null` and an `attestation_error` field describes the failure. Output attestation is subject to rate limiting (`MAX_OUTPUT_ATTESTATIONS_PER_WINDOW` / `OUTPUT_ATTESTATION_WINDOW_SECONDS`) to prevent TPM resource exhaustion.
 
 Note: `output_attestation_document` is included on **every** poll response, not only when execution is complete. This allows callers to attest incremental output.
 
@@ -489,6 +568,7 @@ Note: `output_attestation_document` is included on **every** poll response, not 
 | `complete` | bool | `true` when execution has finished |
 | `exit_code` | int \| null | Process exit code (present only when complete) |
 | `output_attestation_document` | string \| null | Base64-encoded CBOR attestation of the current output snapshot (present on every response; `null` if attestation failed or rate-limited) |
+| `claims_raw` | string | Base64-encoded output claims document that `output_attestation_document`'s `claims_digest` binds (present whenever `output_attestation_document` is non-null) |
 | `attestation_error` | string | Error message if output attestation failed (present only on failure) |
 | `attestation_rate_limited` | bool | `true` when output attestation was skipped due to rate limiting (present only when rate-limited) |
 

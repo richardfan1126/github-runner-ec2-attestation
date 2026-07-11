@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from src.server import create_app
 from src.config import ServerConfig
 from src.repository import GitHubAPIError
-from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult, CloneResult
+from src.models import ExecutionStatus, ExecutionRecord, OutputData, AttestationDocument, OIDCValidationResult, CloneResult, OutputAttestationResult
 from src.attestation import AttestationError
 from tests.encryption_test_helpers import (
     EncryptionTestContext,
@@ -559,7 +559,7 @@ class TestOutputEndpoint:
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
                 with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"running_attest", None)):
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(OutputAttestationResult(signature=b"running_attest", claims_raw="e30="), None)):
                         req_body = make_encrypted_output_request(
                             {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
                         )
@@ -614,7 +614,7 @@ class TestOutputEndpoint:
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
                 with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"attest", None)):
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(OutputAttestationResult(signature=b"attest", claims_raw="e30="), None)):
                         req_body = make_encrypted_output_request(
                             {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
                         )
@@ -659,7 +659,7 @@ class TestOutputEndpoint:
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
                 with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"attest", None)):
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(OutputAttestationResult(signature=b"attest", claims_raw="e30="), None)):
                         req_body = make_encrypted_output_request(
                             {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
                         )
@@ -709,7 +709,7 @@ class TestOutputEndpoint:
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
                 with patch.object(app.state.output_collector, 'get_output', return_value=output_data):
-                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"timeout_attest", None)):
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(OutputAttestationResult(signature=b"timeout_attest", claims_raw="e30="), None)):
                         req_body = make_encrypted_output_request(
                             {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
                         )
@@ -829,7 +829,7 @@ class TestOutputEndpoint:
         with patch.object(app.state.request_validator, 'validate_oidc_token_from_body', return_value=VALID_OIDC_RESULT):
             with patch.object(app.state.execution_manager, 'get_execution', return_value=record):
                 with patch.object(app.state.output_collector, 'get_output', side_effect=ValueError("No output buffer")):
-                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(b"early_attest", None)):
+                    with patch.object(app.state.attestation_generator, 'generate_output_attestation', return_value=(OutputAttestationResult(signature=b"early_attest", claims_raw="e30="), None)):
                         req_body = make_encrypted_output_request(
                             {"oidc_token": "valid.oidc.token", "offset": 0}, ctx.shared_key
                         )

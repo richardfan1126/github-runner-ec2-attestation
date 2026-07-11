@@ -80,18 +80,18 @@ When an Execution_Request is validated, the Repository_Client SHALL shallow-clon
 
 ### Requirement: Attestation document generation and execution initiation
 
-When a script is successfully retrieved, the Attestation_Generator SHALL generate a NitroTPM-signed Attestation_Document including PCR measurements, a timestamp, and documented `user_data`, store it against the Execution_ID, and the Script_Executor SHALL then initiate execution.
+When a script is successfully retrieved, the Attestation_Generator SHALL generate a NitroTPM-signed Attestation_Document including PCR measurements and a `user_data` carrying the compact signed claims-digest envelope `{ v, claims_digest, timestamp, execution_id }` (per the `attestation-claims` capability), store it against the Execution_ID, and include the corresponding `claims_raw` claims document in the response body; the Script_Executor SHALL then initiate execution. `user_data` SHALL NOT carry the documented claim fields inline — they move into `claims_raw`, bound by `claims_digest`.
 
-#### Scenario: Documented user_data fields present
+#### Scenario: Envelope and claims document present
 
 - **WHEN** an execution attestation document is generated
-- **THEN** its `user_data` includes `repository_url`, `commit_hash`, `script_path`, `timestamp`, `script_env_hash`, and `execution_id`
+- **THEN** its `user_data` carries the `{ v, claims_digest, timestamp, execution_id }` envelope, and the response body carries a `claims_raw` claims document that hashes to `claims_digest` and contains `repository_url`, `commit_hash`, `script_path`, `script_env_hash`, and the `security` posture block
 - **AND** `script_env_hash` is the SHA-256 hex digest of the canonicalized `script_env` (keys sorted, JSON with no whitespace), or of `{}` when `script_env` is empty
 
 #### Scenario: execution_id binds the attestation
 
 - **WHEN** the `/execute` response and any `/execution/{id}/output` response include an attestation document
-- **THEN** the `execution_id` in its `user_data` matches the execution record (the response-body id for `/execute`, the URL path id for output polling)
+- **THEN** the `execution_id` in its signed `user_data` envelope matches the execution record (the response-body id for `/execute`, the URL path id for output polling), readable from the signed envelope without hashing `claims_raw`
 
 #### Scenario: Attestation failure recorded
 
@@ -133,12 +133,12 @@ The Script_Executor SHALL start a daemon background log-streaming thread for eac
 
 ### Requirement: Output polling endpoint
 
-The GHA_Server SHALL provide an HTTP POST `/execution/{id}/output` endpoint (POST because the body carries an encrypted payload) that, regardless of execution status (running, completed, failed, timed_out), returns HTTP 200 with the current status, Script_Output, the stored Attestation_Document, and a freshly generated Output_Attestation_Document.
+The GHA_Server SHALL provide an HTTP POST `/execution/{id}/output` endpoint (POST because the body carries an encrypted payload) that, regardless of execution status (running, completed, failed, timed_out), returns HTTP 200 with the current status, Script_Output, the stored Attestation_Document, and a freshly generated Output_Attestation_Document. Both attestation documents SHALL be accompanied by their `claims_raw` preimages so the caller can perform the binding check.
 
 #### Scenario: Output and attestations returned
 
 - **WHEN** the output endpoint is polled for an existing execution
-- **THEN** the response includes stdout, stderr, exit code, the base64 Attestation_Document, and a base64 Output_Attestation_Document whose `user_data` carries a SHA-256 digest of the current Script_Output and the `execution_id`
+- **THEN** the response includes stdout, stderr, exit code, the base64 Attestation_Document, and a base64 Output_Attestation_Document whose signed `user_data` envelope carries the `execution_id` and whose accompanying `claims_raw` carries an `output_digest` over the canonical JSON `{ stdout, stderr, exit_code }` (keys sorted, no whitespace, `exit_code` a JSON number) — not a delimiter-glued string, so distinct outputs cannot collide
 
 #### Scenario: Unknown execution
 
@@ -267,4 +267,23 @@ When `ENABLE_GPU` is true, the Script_Executor SHALL create each Execution_Conta
 #### Scenario: GPU posture attested
 
 - **WHEN** GPU is enabled or disabled
-- **THEN** the attestation `user_data` includes `gpu_enabled: true` or `gpu_enabled: false` per the documented schema
+- **THEN** the attestation records the GPU posture in the `gpu` claims block of `claims_raw` (per the `gpu-attestation` capability): `{ enabled: true, devices: [ … ] }` when enabled or `{ enabled: false }` when disabled, in place of the former inline `gpu_enabled` boolean
+
+### Requirement: Freshness/anti-replay preserved across the envelope refactor
+
+The move from inline `user_data` fields to the claims-digest envelope SHALL NOT weaken the existing freshness guarantee. The mandatory per-request client nonce SHALL remain the anti-replay mechanism: the server SHALL continue to require and strictly validate a `nonce` on `/execute` and `/execution/{id}/output`, reject duplicate nonces via the anti-replay nonce cache, and bind the nonce into the attestation's native COSE `nonce` field (outside `user_data`) for both the execution attestation and every output attestation. The envelope's `timestamp` and `execution_id` are secondary staleness/correlation signals and SHALL NOT be treated as the anti-replay mechanism. Because the nonce lives outside `user_data`, unifying the two attestation builders SHALL preserve nonce threading unchanged.
+
+#### Scenario: Nonce still bound in both attestations
+
+- **WHEN** an execution attestation and an output attestation are generated under the new envelope format
+- **THEN** each carries the request's client nonce in the attestation's native COSE `nonce` field, unaffected by the `user_data` envelope change
+
+#### Scenario: Duplicate nonce still rejected
+
+- **WHEN** a request replays a previously seen nonce on `/execute` or `/execution/{id}/output`
+- **THEN** the server rejects it via the anti-replay nonce cache, exactly as before the envelope refactor
+
+#### Scenario: Envelope fields are not the anti-replay mechanism
+
+- **WHEN** a verifier assesses freshness
+- **THEN** it relies on the signed native nonce (requester-chosen, cache-checked) for anti-replay, and treats the envelope `timestamp`/`execution_id` only as staleness bound and correlation, since the server chooses both and a replayer re-presents them unchanged
