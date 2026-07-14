@@ -56,11 +56,68 @@ be fixed too.
   contract (rootless `65534`, world-exec tools, pinned, no run-time install). Driver libraries and
   `nvidia-smi` are injected at runtime by the Container Toolkit via CDI, so the image itself need
   not bundle the driver.
+  **The image has essentially no GPU content — and that is deliberate.** All three things that make
+  the flavor "GPU" live *outside* the image: the `gpu` claims block is a host-side NVML read in the
+  server process (`gpu-attestation` spec: "decoupled from the container's runtime device grant");
+  `nvidia-smi` and the driver `.so`s are runtime CDI injections (the `utility` capability); and the
+  only hard image requirement is a working **`bash`**, since the executor runs
+  `["bash", "/workspace/<script>"]` (`script_executor.py:328`). So the honest minimal image is the
+  pinned hardened base + `USER 65534:65534`, with **no GPU packages** and likely **no `RUN`
+  layers** (`bash` ships in the base). The rust-build extras (`gcc`, rust toolchain, `oras`, `curl`)
+  are flavor-specific to *that* flavor, not baseline, and are omitted here.
+  **Keep `nvidia-smi` out for honesty, not just size:** a baked `nvidia-smi` could enumerate (or
+  fabricate) devices via a binary unrelated to the PCR4-measured host driver; CDI-only injection
+  makes the container's `nvidia-smi` *be* the measured driver's, so what the workload sees and what
+  the attestation reports share one measured root. This is the same honest-by-construction argument
+  the proposal makes for `utility` over `compute,utility`.
+  **The base image family is effectively forced, not chosen:** `["bash", …]` rules out distroless
+  (no shell), and CDI injecting glibc-built driver `.so`s rules out alpine/musl (the libs won't
+  load) — leaving a glibc base *with a shell*, i.e. `debian:bookworm-slim` (matching `rust-build`
+  for free consistency and driver-glibc compatibility), pinned to its amd64 manifest digest.
+  **One open input, deferred to the demo:** whatever the presence script invokes *beyond* `bash` +
+  CDI-injected `nvidia-smi`. If it parses `nvidia-smi --query-gpu … --format=csv` with coreutils it
+  adds nothing; if it needs `jq` or similar that is the single explicit `apt` line the flavor would
+  carry. This is a `github-runner-ec2-attestation-gpu-demo` fact not visible from this repo.
+- **Runtime device-node precondition (the sandbox user must actually reach the GPU).** `USER
+  65534:65534` satisfies the hardened *image* contract, but whether that user can open the GPU is
+  decided **outside the image**, by DAC on the host device nodes. The container runs `65534:65534`
+  with `cap_drop=ALL`, **no `group_add`** (no supplemental groups), and the rootless daemon uses
+  `nvidia-container-cli.no-cgroups` (`config.sh:266`), so the cgroup device controller is not the
+  gate — the *only* gate is the filesystem mode of `/dev/nvidiactl` and `/dev/nvidia0` (CDI
+  bind-mounts them with their host mode). Nothing in `config.sh` sets that mode, so the nodes get
+  NVIDIA's driver default of **`0666 root:root`** (world-readable) — under which `65534` opens them
+  and `nvidia-smi -L` succeeds. This works by *world-access, not by grant*: there is no
+  supplemental-group fallback, and `CAP_DAC_OVERRIDE` is dropped, so were the nodes ever
+  `0660 root:<group>` (a standard hardening) the sandbox user would be locked out. The `0666`
+  default is produced at boot by nvidia-modprobe/persistenced on the executor host and is **not**
+  part of the PCR4-measured erofs — so "the sandbox user can see the GPU" is an **un-attested
+  runtime precondition**, not a build-time guarantee. Presence-only narrows the exposure: `utility`
+  + `nvidia-smi -L` touches only `/dev/nvidiactl` + `/dev/nvidia0`, never `/dev/nvidia-uvm`
+  (compute). This precondition is verified by the spike below (which is why that spike runs
+  `nvidia-smi` **as `--user 65534:65534`**, not as root). If it ever fails, the fix is a
+  deterministic device-mode + `group_add` grant — more machinery than a presence sandbox should
+  need, and distinct from the read-only-rootfs fallback.
 - **Make the flavor's `env` the single source of truth for GPU at build time.** The KIWI image
   build SHALL install the NVIDIA driver + Container Toolkit (and apply the GPU image-size bump)
   when the flavor being built has `ENABLE_GPU=true` in its effective env — derived from that env,
   not from a separate, manually-passed `--enable-gpu` CLI flag. This closes the gap that would
   otherwise let runtime `ENABLE_GPU=true` diverge from a driver-less image.
+  **Decided mechanism (build-wiring):** `.github/scripts/build-kiwi-image.sh` SHALL derive its
+  `ENABLE_GPU` shell variable by reading the key from the `--env-file` it is already given, and
+  the `--enable-gpu` CLI flag SHALL be deleted. This is chosen over having the workflow
+  (`build-attestable-image.yml`) derive and pass `--enable-gpu`: reading from the env-file makes
+  the flavor `env` the *only* place "GPU on" is decided, so the build-time install and the baked
+  runtime config cannot drift — whereas a workflow-derived flag reintroduces a second decision
+  point that must agree by discipline. It is also honest-by-construction for attestation: both
+  consumers then trace to the *same PCR4-measured* effective env file, not to two derivations that
+  merely share an upstream. The mechanism is not new — the same script already reads
+  `CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST` out of the effective env by `grep`
+  (`build-kiwi-image.sh:498-499`); this applies that established pattern to one more key. The
+  derivation must run after the env file is copied in (`:87`) and before the size-bump
+  (`:105`)/driver-install-env (`:622`) that consume the variable. The `--enable-gpu` flag is
+  currently **dead** in the real pipeline — the workflow invokes the script with only
+  `--env-file` (+ `$SSH_FLAG`) and nothing passes `--enable-gpu` — so deleting it removes no live
+  behavior and no compatibility surface.
 - **Bump the NVIDIA Container Toolkit to ≥ 1.19.0** in `kiwi-descriptions/config.sh` (currently
   pinned `1.18.2-1`). The platform runs execution containers with `CONTAINER_READ_ONLY_ROOTFS=true`
   by default, which the GPU flavor inherits. On toolkit 1.18.2, CDI injection recreates the driver
@@ -98,11 +155,12 @@ be fixed too.
 ## Impact
 
 - **New files**: `flavors/gpu-presence/env`, `flavors/gpu-presence/Dockerfile`.
-- **Modified**: the KIWI build wiring so build-time GPU install derives from the flavor env —
-  either `build-attestable-image.sh`/`build-kiwi-image.sh` reading `ENABLE_GPU` from the
-  `--env-file` (preferred: single source of truth), or `build-attestable-image.yml` deriving and
-  passing `--enable-gpu` for GPU flavors. The `--enable-gpu` flag path
-  (`build-kiwi-image.sh:23-32,:105,:622`) is either retired or reduced to a derived value.
+- **Modified**: `.github/scripts/build-kiwi-image.sh` — derive the `ENABLE_GPU` shell variable
+  from the `--env-file` (single source of truth) and delete the `--enable-gpu` CLI flag
+  (`:23-24` defaults, `:31-33` flag parse). Add the grep-derivation after the env copy (`:87`) and
+  before the consumers at `:105` (size bump) and `:622` (driver-install builder env), mirroring the
+  existing `CONTAINER_IMAGE` read at `:498-499`. Nothing passes `--enable-gpu` today, so the flag
+  is dead and its removal changes no live pipeline behavior.
 - **Modified**: `kiwi-descriptions/config.sh` — bump `NVIDIA_CTK_VERSION` from `1.18.2-1` to a
   ≥ 1.19.0 release (read-only-rootfs support). Gated on `ENABLE_GPU=true`, so no effect on non-GPU
   flavors. Changes the GPU AMI's PCR4 (expected — the toolkit is part of the measured root).
@@ -118,11 +176,16 @@ be fixed too.
 - **Not affected**: the NVML collector, GPU env overlay/deny-list, CDI passthrough, and driver-
   install script — all already present. The `gpu-attestation` spec's requirements are unchanged;
   this change makes the platform able to *satisfy* them with a real flavor.
-- **Assumption to validate before/at apply (spike)**: toolkit 1.19.0's read-only-rootfs support is
-  documented but its mechanism is not; a `docker run --runtime=nvidia --read-only -e
-  NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=utility <base> nvidia-smi -L` on a real
-  G-series instance confirms end-to-end. If 1.19.x still writes into the container under read-only
-  rootfs, the fallback is an explicit, attested `CONTAINER_READ_ONLY_ROOTFS=false` on the GPU
-  flavor only.
+- **Assumptions to validate before/at apply (one spike, two preconditions)**: toolkit 1.19.0's
+  read-only-rootfs support is documented but its mechanism is not, and the sandbox user's GPU
+  access rests on the host device-node mode (above) — both are confirmed end-to-end by a single
+  `docker run` on a real G-series instance, run **as the sandbox user under read-only rootfs**:
+  `docker run --runtime=nvidia --read-only --user 65534:65534 -e NVIDIA_VISIBLE_DEVICES=all -e
+  NVIDIA_DRIVER_CAPABILITIES=utility <base> nvidia-smi -L`. The `--user 65534:65534` is
+  load-bearing: without it the spike would pass as root and hide the device-node-DAC precondition.
+  Fallbacks are distinct per precondition: if 1.19.x still writes into the container under
+  read-only rootfs → explicit, attested `CONTAINER_READ_ONLY_ROOTFS=false` on the GPU flavor only;
+  if the run fails on device-node permission as `65534` → a deterministic device-mode +
+  `group_add` grant (not a read-only relaxation).
 - **Enables**: the `github-runner-ec2-attestation-gpu-demo` `add-attested-gpu-presence-pipeline`
   consumer demo to run green against a real GPU-flavor executor.
