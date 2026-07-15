@@ -737,3 +737,100 @@ def test_config_sh_binary_existence_checks(dummy: int):
     assert "ERROR" in content, (
         "config.sh must output descriptive ERROR messages for missing binaries"
     )
+
+
+# add-gpu-flavor: image-build spec, "Toolkit-version regression check"
+def test_nvidia_ctk_version_at_least_1_19_0():
+    """
+    Regression test (image-build spec, "Toolkit-version regression check"):
+    the NVIDIA Container Toolkit pinned in the GPU driver-install path must be
+    >= 1.19.0, so CDI driver injection works under the hardened
+    CONTAINER_READ_ONLY_ROOTFS=true posture (native read-only-rootfs support
+    landed in toolkit 1.19.0).
+    """
+    import re
+
+    config_path = Path("kiwi-descriptions/config.sh")
+    assert config_path.exists(), "config.sh must exist"
+
+    content = config_path.read_text()
+    match = re.search(r'NVIDIA_CTK_VERSION="(\d+)\.(\d+)\.(\d+)-\d+"', content)
+    assert match is not None, (
+        "config.sh must define NVIDIA_CTK_VERSION as \"<major>.<minor>.<patch>-<release>\""
+    )
+
+    major, minor, _patch = (int(g) for g in match.groups())
+    assert (major, minor) >= (1, 19), (
+        f"NVIDIA_CTK_VERSION must be >= 1.19.0 for read-only-rootfs support, "
+        f"got {match.group(0)}"
+    )
+
+
+# add-gpu-flavor: image-build spec, "Baked-driver regression check"
+def test_no_flavor_dockerfile_bakes_nvidia_driver_tooling():
+    """
+    Regression test (image-build spec, "Baked-driver regression check"):
+    no flavors/*/Dockerfile may install the NVIDIA driver, nvidia-smi, CUDA,
+    or nvidia-utils packages. Driver tooling must be supplied at runtime only
+    via CDI injection from the PCR4-measured host driver — mirroring the
+    existing package-minimization regression tests.
+    """
+    flavors_dir = Path("flavors")
+    assert flavors_dir.is_dir(), "flavors/ directory must exist"
+
+    dockerfiles = sorted(flavors_dir.glob("*/Dockerfile"))
+    assert dockerfiles, "expected at least one flavor Dockerfile"
+
+    forbidden_substrings = [
+        "nvidia-smi",
+        "nvidia-driver",
+        "nvidia-driver-cuda",
+        "nvidia-utils",
+        "kmod-nvidia",
+        "cuda-toolkit",
+        "libcuda",
+    ]
+
+    for dockerfile in dockerfiles:
+        # Only inspect instruction lines — comments may legitimately explain
+        # *why* driver tooling is deliberately absent (e.g. mentioning
+        # "nvidia-smi" while documenting that it is CDI-injected, not baked).
+        instruction_lines = "\n".join(
+            line for line in dockerfile.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ).lower()
+        for forbidden in forbidden_substrings:
+            assert forbidden not in instruction_lines, (
+                f"{dockerfile} must not bake NVIDIA driver tooling "
+                f"(found '{forbidden}'); driver + nvidia-smi are injected at "
+                f"runtime via CDI, never baked into the image"
+            )
+
+
+# add-gpu-flavor: image-build spec, "Single source of truth, no separate flag"
+def test_build_kiwi_image_derives_enable_gpu_from_env_file():
+    """
+    Test (image-build spec, "Single source of truth, no separate flag"):
+    build-kiwi-image.sh must derive its ENABLE_GPU shell variable by reading
+    the key from the --env-file it already receives, and must carry no
+    --enable-gpu CLI flag — so the build-time driver install and the baked
+    runtime config both trace to the same PCR4-measured effective env and
+    cannot diverge.
+    """
+    import re
+
+    build_script_path = Path(".github/scripts/build-kiwi-image.sh")
+    assert build_script_path.exists(), "build-kiwi-image.sh must exist"
+
+    content = build_script_path.read_text()
+
+    assert "--enable-gpu" not in content, (
+        "build-kiwi-image.sh must not carry a --enable-gpu CLI flag; "
+        "ENABLE_GPU must be derived from the --env-file instead"
+    )
+
+    assert re.search(r"grep\s+-E\s+'\^ENABLE_GPU='", content), (
+        "build-kiwi-image.sh must derive ENABLE_GPU by grep-ing '^ENABLE_GPU=' "
+        "out of the effective env file, mirroring the existing "
+        "CONTAINER_IMAGE/CONTAINER_IMAGE_DIGEST reads"
+    )

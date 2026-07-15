@@ -11,30 +11,30 @@ proposal warns about. §1 and §2 are otherwise independent.
 
 ## 1. Build wiring — flavor env is the single source of truth (D3)
 
-- [ ] 1.1 In `.github/scripts/build-kiwi-image.sh`, derive the `ENABLE_GPU` shell variable by `grep`-ing the key out of the `--env-file` it already receives, mirroring the existing `CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST` reads at `:498-499`. Place the derivation after the effective env is copied into the build context (`:87`) and before the consumers at `:105` (image-size bump) and `:622` (`-e ENABLE_GPU` into the KIWI builder). Absent key ⇒ `false`.
-- [ ] 1.2 Delete the `--enable-gpu` CLI flag: the default at `:23-24` and the arg parse at `:31-33`. It is dead in the real pipeline (the workflow passes only `--env-file` + `$SSH_FLAG`), so removal changes no live behavior.
-- [ ] 1.3 Verify a non-GPU flavor (`default`/`rust-build`, no `ENABLE_GPU` key) derives `false`, installs no driver, applies no size bump, and builds byte-for-byte as before.
+- [x] 1.1 In `.github/scripts/build-kiwi-image.sh`, derive the `ENABLE_GPU` shell variable by `grep`-ing the key out of the `--env-file` it already receives, mirroring the existing `CONTAINER_IMAGE`/`CONTAINER_IMAGE_DIGEST` reads at `:498-499`. Place the derivation after the effective env is copied into the build context (`:87`) and before the consumers at `:105` (image-size bump) and `:622` (`-e ENABLE_GPU` into the KIWI builder). Absent key ⇒ `false`.
+- [x] 1.2 Delete the `--enable-gpu` CLI flag: the default at `:23-24` and the arg parse at `:31-33`. It is dead in the real pipeline (the workflow passes only `--env-file` + `$SSH_FLAG`), so removal changes no live behavior.
+- [x] 1.3 Verify a non-GPU flavor (`default`/`rust-build`, no `ENABLE_GPU` key) derives `false`, installs no driver, applies no size bump, and builds byte-for-byte as before.
 
 ## 2. Toolkit bump for read-only rootfs (D5)
 
-- [ ] 2.1 In `kiwi-descriptions/config.sh`, bump `NVIDIA_CTK_VERSION` from `1.18.2-1` to `1.19.1-1` (`:248`) and update the rationale comment (`:246`) to cite the two reasons: native read-only-rootfs support (landed 1.19.0) and the 1.19.1 fix removing the `multi-user.target` dependency from `nvidia-cdi-refresh.service` — the exact unit enabled at `:283`.
-- [ ] 2.2 Confirm `nvidia-container-toolkit-1.19.1-1` is available in the NVIDIA toolkit RPM repo for AL2023/`$basearch` (the repo configured at `config.sh:152`) — a `dnf`/repo check before relying on the pin.
+- [x] 2.1 In `kiwi-descriptions/config.sh`, bump `NVIDIA_CTK_VERSION` from `1.18.2-1` to `1.19.1-1` (`:248`) and update the rationale comment (`:246`) to cite the two reasons: native read-only-rootfs support (landed 1.19.0) and the 1.19.1 fix removing the `multi-user.target` dependency from `nvidia-cdi-refresh.service` — the exact unit enabled at `:283`.
+- [x] 2.2 Confirm `nvidia-container-toolkit-1.19.1-1` is available in the NVIDIA toolkit RPM repo for AL2023/`$basearch` (the repo configured at `config.sh:152`) — a `dnf`/repo check before relying on the pin. Confirmed live via repo `primary.xml.gz` for `x86_64`: `nvidia-container-toolkit-1.19.1-1` present.
 
 ## 3. The `gpu-presence` flavor files (D1 / D2 / D4 / D6)
 
-- [ ] 3.1 Add `flavors/gpu-presence/env`: `ENABLE_GPU=true`, `GPU_DEVICES=all`, `NVIDIA_DRIVER_CAPABILITIES=utility` (not `compute,utility` — D2), `CONTAINER_READ_ONLY_ROOTFS=true` and `CONTAINER_NETWORK_MODE=none` (D6), plus per-flavor authorization `ALLOWED_REPOSITORIES` (including the `github-runner-ec2-attestation-gpu-demo` repo) and `EXPECTED_AUDIENCE` matching the demo's OIDC dispatch. Follow `flavors/rust-build/env` for shape.
-- [ ] 3.2 Add `flavors/gpu-presence/Dockerfile`: `FROM debian:bookworm-slim` pinned to its amd64 manifest `@sha256:` digest, then `USER 65534:65534`. **No `RUN` layer, no GPU packages** — confirmed against the demo's `gpu-presence-workload.sh`, which invokes only CDI-injected `nvidia-smi` + bash builtins. `bash` ships in the base; driver + `nvidia-smi` arrive at runtime via CDI.
-- [ ] 3.3 Confirm the flavor's env keys all pass `validate_env.py` (every GPU key is already in `RECOGNIZED_ENV_KEYS`; `NVIDIA_DRIVER_CAPABILITIES` is a deny-listed server-controlled override with no allow-list gate, so `utility` is accepted).
+- [x] 3.1 Add `flavors/gpu-presence/env`: `ENABLE_GPU=true`, `GPU_DEVICES=all`, `NVIDIA_DRIVER_CAPABILITIES=utility` (not `compute,utility` — D2), `CONTAINER_READ_ONLY_ROOTFS=true` and `CONTAINER_NETWORK_MODE=none` (D6), plus per-flavor authorization `ALLOWED_REPOSITORIES` (including the `github-runner-ec2-attestation-gpu-demo` repo) and `EXPECTED_AUDIENCE` matching the demo's OIDC dispatch. Follow `flavors/rust-build/env` for shape.
+- [x] 3.2 Add `flavors/gpu-presence/Dockerfile`: `FROM debian:bookworm-slim` pinned to its amd64 manifest `@sha256:` digest, then `USER 65534:65534`. **No `RUN` layer, no GPU packages** — confirmed against the demo's `gpu-presence-workload.sh`, which invokes only CDI-injected `nvidia-smi` + bash builtins. `bash` ships in the base; driver + `nvidia-smi` arrive at runtime via CDI.
+- [x] 3.3 Confirm the flavor's env keys all pass `validate_env.py` (every GPU key is already in `RECOGNIZED_ENV_KEYS`; `NVIDIA_DRIVER_CAPABILITIES` is a deny-listed server-controlled override with no allow-list gate, so `utility` is accepted). Verified: `uv run python .github/scripts/validate_env.py flavors/default/env flavors/rust-build/env flavors/gpu-presence/env` passes.
 
 ## 4. Tests — satisfy the spec regression scenarios
 
-- [ ] 4.1 Regression test (image-build spec, "Toolkit-version regression check"): assert `NVIDIA_CTK_VERSION` in `config.sh` is ≥ 1.19.0.
-- [ ] 4.2 Regression test (image-build spec, "Baked-driver regression check"): assert no `flavors/*/Dockerfile` installs NVIDIA driver, `nvidia-smi`, CUDA, or `nvidia-utils` packages — mirroring the existing package-minimization regression test.
-- [ ] 4.3 Test (image-build spec, "Single source of truth"): assert `build-kiwi-image.sh` derives `ENABLE_GPU` from the env file and carries no `--enable-gpu` flag.
+- [x] 4.1 Regression test (image-build spec, "Toolkit-version regression check"): assert `NVIDIA_CTK_VERSION` in `config.sh` is ≥ 1.19.0. Added `test_nvidia_ctk_version_at_least_1_19_0` in `tests/test_kiwi_build_properties.py`.
+- [x] 4.2 Regression test (image-build spec, "Baked-driver regression check"): assert no `flavors/*/Dockerfile` installs NVIDIA driver, `nvidia-smi`, CUDA, or `nvidia-utils` packages — mirroring the existing package-minimization regression test. Added `test_no_flavor_dockerfile_bakes_nvidia_driver_tooling` in `tests/test_kiwi_build_properties.py`.
+- [x] 4.3 Test (image-build spec, "Single source of truth"): assert `build-kiwi-image.sh` derives `ENABLE_GPU` from the env file and carries no `--enable-gpu` flag. Added `test_build_kiwi_image_derives_enable_gpu_from_env_file` in `tests/test_kiwi_build_properties.py`.
 
 ## 5. Build + downstream handoff (Tier 2 — reliance gate)
 
-- [ ] 5.1 Confirm `detect_changes.py` auto-enrolls `flavors/gpu-presence/` into the build matrix (it enumerates `flavors/` minus `default`; no matrix code change expected).
+- [x] 5.1 Confirm `detect_changes.py` auto-enrolls `flavors/gpu-presence/` into the build matrix (it enumerates `flavors/` minus `default`; no matrix code change expected). Verified: `enumerate_flavors(Path("flavors"))` returns `['gpu-presence', 'rust-build']`.
 - [ ] 5.2 On a real pipeline run, confirm the `gpu-presence` row `{image digest, PCR4, AMI id, producing commit}` is written to `flavors.lock` (automatic pipeline output, like the single-flavor PCR4 in prior changes).
 - [ ] 5.3 Point verifier policy at the new GPU-flavor PCR4 recorded in `flavors.lock`. *(Largely the consumer/demo's concern — the demo verifies against `flavors.lock`; recorded here as the handoff, not necessarily code in this repo.)*
 

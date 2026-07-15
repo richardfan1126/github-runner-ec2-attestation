@@ -1,0 +1,28 @@
+# Per-flavor configuration deltas for gpu-presence (bucket ②, per-flavor keys).
+# Only keys that must be set per-flavor or that override flavors/default/env belong here.
+# Bucket ③ keys (CONTAINER_IMAGE, CONTAINER_IMAGE_DIGEST) are injected by the pipeline
+# after the image is built and pushed to GHCR — they MUST NOT appear in this file.
+
+# Per-flavor repository authorization (required; no default in flavors/default/env).
+# A flavor without these keys fails the build-time config-resolution gate (deny-all).
+ALLOWED_REPOSITORIES=richardfan1126/github-runner-ec2-attestation-caller,richardfan1126/github-runner-ec2-attestation-gpu-demo
+EXPECTED_AUDIENCE=test-workflow
+
+# GPU attestation: this is the flavor's single source of truth for ENABLE_GPU,
+# read by both the runtime config (src/config.py) and the KIWI build's driver
+# install (build-kiwi-image.sh derives its build-time ENABLE_GPU from this file).
+ENABLE_GPU=true
+GPU_DEVICES=all
+
+# utility, not the code default compute,utility (D2): injects nvidia-smi/NVML —
+# everything the presence workload's device enumeration needs — without the CUDA
+# runtime, so GPU compute is structurally impossible for this flavor, not merely
+# disallowed by policy.
+NVIDIA_DRIVER_CAPABILITIES=utility
+
+# Preserve the hardened sandbox posture unchanged (D6). The NVIDIA Container
+# Toolkit >= 1.19.0 bump (config.sh) is what makes CDI injection work under
+# read-only rootfs, so no relaxation is required for GPU access. The presence
+# workload needs no network.
+CONTAINER_READ_ONLY_ROOTFS=true
+CONTAINER_NETWORK_MODE=none
