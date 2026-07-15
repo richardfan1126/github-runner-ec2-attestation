@@ -122,9 +122,18 @@ All three things that make the flavor "GPU" live *outside* the image:
 3. the only hard image requirement is a working **`bash`**, because the executor runs
    `["bash", "/workspace/<script>"]` (`script_executor.py:328`).
 
-So the image is the pinned hardened base + `USER 65534:65534`, with **no GPU packages** and likely
+So the image is the pinned hardened base + `USER 65534:65534`, with **no GPU packages** and
 **no `RUN` layers** (`bash` ships in the base). The `rust-build` extras (`gcc`, rust toolchain,
 `oras`, `curl`) are specific to *that* flavor, not baseline, and are omitted.
+
+- **Confirmed against the actual workload (was an open question).** The demo's
+  `scripts/gpu-presence-workload.sh` (`github-runner-ec2-attestation-gpu-demo`) invokes **only**
+  `nvidia-smi --query-gpu=uuid --format=csv,noheader` and `nvidia-smi` — both CDI-injected — plus
+  bash builtins (`set`, `echo`, `||`, `true`, `exit`, redirection). It does not even *parse* the CSV;
+  it emits `csv,noheader` verbatim to stdout and leaves parsing to the host/caller-side
+  `verify_gpu_presence.py`. So the container needs nothing beyond `bash` + CDI-injected `nvidia-smi`:
+  **zero `apt` lines, no `RUN` layer.** The earlier hedge ("if it needs `jq`, that is the single
+  explicit `apt` line") is resolved to *no extra line*.
 
 - **Keep `nvidia-smi` out for honesty, not just size.** A baked `nvidia-smi` could enumerate (or
   fabricate) devices via a binary unrelated to the PCR4-measured host driver. CDI-only injection makes
@@ -145,8 +154,19 @@ The sandbox runs `CONTAINER_READ_ONLY_ROOTFS=true`, which the GPU flavor inherit
 rootfs** — so a read-only rootfs makes those writes fail and `nvidia-smi` cannot resolve
 `libnvidia-ml.so.1`. Toolkit **v1.19.0 adds native read-only-rootfs support**.
 
-**Decision:** bump `NVIDIA_CTK_VERSION` to a ≥ 1.19.0 release. Gated on `ENABLE_GPU=true`, so it only
-affects GPU-flavor builds; 1.19.x retains the `nvidia-cdi-refresh` service that 1.18.x was chosen for.
+**Decision:** bump `NVIDIA_CTK_VERSION` to **`1.19.1-1`** (the `-1` RPM release suffix mirrors the
+existing `1.18.2-1` format). Gated on `ENABLE_GPU=true`, so it only affects GPU-flavor builds; 1.19.x
+retains the `nvidia-cdi-refresh` service that 1.18.x was chosen for.
+
+- **Exact pin resolved (was an open question).** As of 2026-07-15, `v1.19.1` (2026-05-21) is the
+  latest *stable* release; `v1.20.0-rc.1` (2026-07-09) exists but is a pre-release RC and is not
+  chosen. 1.19.1 is affirmatively correct here, not merely an acceptable floor: its headline bugfix
+  **removes the `multi-user.target` dependency from `nvidia-cdi-refresh.service`** (and fixes the
+  WSL2 unit conditions) — that is the *exact* unit `config.sh:283` enables, so 1.19.1 directly
+  improves the service this repo depends on, on top of the ≥ 1.19.0 read-only-rootfs and
+  additional-GIDs features (both of which landed in 1.19.0). The one residual is an implementation
+  check: confirm `nvidia-container-toolkit-1.19.1-1` is present in the NVIDIA toolkit RPM repo for
+  AL2023/`$basearch` (a `dnf` check, folded into the config.sh-bump task).
 
 - **Why over the alternative:** the alternative is relaxing `CONTAINER_READ_ONLY_ROOTFS=false` on the
   GPU flavor, which weakens the PCR4-attested sandbox posture. The toolkit bump keeps the flavor's
@@ -227,6 +247,27 @@ network. D5 (toolkit ≥ 1.19.0) is precisely what makes this possible without r
   the world-access path), **not** a posture relaxation. Only if *both* paths fail would a
   deterministic device-mode + explicit `group_add` grant be needed.
 
+  **Why not bake a deterministic, attested grant proactively (instead of relying on the un-attested
+  `0666` default)?** Considered and rejected. The tempting move — a baked udev rule setting the nodes
+  `0660 root:<gpu-group>` so device access is a PCR4-measured configuration — actually *re-breaks the
+  container path* and buys little:
+    - The `0666` world default is the *only* posture that serves **both** principals with zero
+      machinery, precisely because it keeps the container's CDI-injected GID at `0` (always mapped in
+      rootless). A non-zero owning group gives the host deterministic access (add `gha-executor` to
+      `<gpu-group>`) but the container's injected `<gpu-group>` GID must then also be added to
+      `gha-executor`'s `/etc/subgid`, or rootless runc cannot map it and the container path fails —
+      the exact `video=44` tangle noted above. So the "clean" attested grant is really *three* baked
+      changes (udev rule + group membership + subgid entry), versus zero for `0666`.
+    - Even then it attests only the **rule file**, not the outcome: PCR4 measures the erofs (the udev
+      rule), never the runtime device node or its applied mode — the node is created by
+      nvidia-modprobe at runtime regardless. So Option B pays real complexity to attest a
+      *configuration intent*, while the runtime guarantee stays un-attested either way.
+  Hence `0666`-reliance is the deliberate sweet spot for a presence sandbox, not a deferral of due
+  diligence — and it is *safe* because a violated precondition yields the specified fail-closed
+  attestation error (`gpu-attestation` "NVML collection fails closed"), never a false `gpu` block. The
+  guarantee that matters (fail-closed) *is* specified; only the positive precondition is un-attested,
+  and correctly so.
+
 - **[The single spike covers two independent preconditions]** → Both preconditions are now
   *documented, default-on* 1.19.0 features (read-only rootfs; non-root device access via injected
   GIDs), so the spike's role is to **confirm the documented integration in our precise stack**
@@ -277,18 +318,36 @@ reverting it restores the (dead) flag.
 
 ## Open Questions
 
-- **What does the demo's presence script invoke beyond `bash` + CDI-injected `nvidia-smi`?** If it
-  parses `nvidia-smi --query-gpu … --format=csv` with coreutils, the image needs nothing more; if it
-  needs `jq` or similar, that is the single explicit `apt` line the Dockerfile would carry. This is a
-  `github-runner-ec2-attestation-gpu-demo` fact not visible from this repo, resolved when the flavor's
-  Dockerfile is written against the actual script.
-- **Exact ≥ 1.19.0 patch release to pin.** Choose the latest 1.19.x that still ships
-  `nvidia-cdi-refresh`, confirmed available in the NVIDIA toolkit RPM repo for AL2023/`$basearch`.
-  Note 1.19.1 is a bugfix release that specifically hardens `nvidia-cdi-refresh` (removes the
-  `multi-user.target` dependency; WSL2 unit-condition fixes) — worth preferring over 1.19.0 unless a
-  regression surfaces.
-- **Does the default-on additional-GIDs injection need disabling for our rootless setup?** Expected
-  *no* (the injected GID is `0`, always mapped in rootless), but the spike settles it. If it must be
-  disabled, the lever is the `no-additional-gids-for-device-nodes` CDI feature flag, applied where
-  `config.sh` generates/refreshes the CDI spec — a one-line, in-scope change, not a posture
-  relaxation.
+The three questions originally logged here were resolved during exploration (2026-07-15); their
+resolutions now live in the decisions above. Recorded here for traceability:
+
+- **~~What does the demo's presence script invoke beyond `bash` + CDI-injected `nvidia-smi`?~~**
+  **Resolved → nothing.** The demo's `scripts/gpu-presence-workload.sh` uses only CDI-injected
+  `nvidia-smi` + bash builtins, so the Dockerfile carries zero `apt` lines / no `RUN` layer. See D4.
+- **~~Exact ≥ 1.19.0 patch release to pin.~~** **Resolved → `1.19.1-1`** (latest stable; directly
+  hardens the `nvidia-cdi-refresh` unit this repo enables; 1.20.0-rc.1 rejected as pre-release).
+  See D5.
+- **~~Does the default-on additional-GIDs injection need disabling for our rootless setup?~~**
+  **Resolved analytically → no.** The device nodes are `root:root`, so the injected additional GID is
+  `0`, which always maps to the host user in rootless — harmless. The spike's leg (a) confirms it
+  empirically as a byproduct; the `no-additional-gids-for-device-nodes` off-switch remains the inline
+  fallback under the spike (see Risks) if that expectation is ever violated. No separate work item.
+
+Genuine residuals (implementation-time checks, not open design questions):
+
+- Confirm `nvidia-container-toolkit-1.19.1-1` is available in the NVIDIA toolkit RPM repo for
+  AL2023/`$basearch` (a `dnf` check performed while making the `config.sh` bump).
+- The spike (see Risks / Migration Plan) still validates the two *runtime* preconditions on real
+  G-series hardware; these are un-attested runtime facts by design, not design unknowns.
+
+Out-of-scope enhancement surfaced during exploration (deliberately **not** part of this change):
+
+- **Startup host-NVML self-check as the service user.** The `remote-executor` "Startup verification
+  when enabled" scenario checks the *container* GPU path (a test `runtime=nvidia` container) but not
+  that the *host* NVML read — the load-bearing consumer that produces the `gpu` block — succeeds as
+  `gha-executor`. A boot-time "verify host NVML enumerates as the service user, else fail to start"
+  check would align with the platform's fail-fast-at-startup convention and surface a broken
+  device-node precondition at boot instead of at first-request attestation. This is only a
+  fail-fast-*timing* improvement, not a correctness gap (fail-closed already prevents a wrong
+  attestation), and it is an **executor-code change**, which this flavor-only change explicitly does
+  not make (see Non-Goals). Parked as a future `remote-executor`/`gpu-attestation` enhancement.
