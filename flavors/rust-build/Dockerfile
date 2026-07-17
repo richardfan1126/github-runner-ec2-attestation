@@ -16,7 +16,7 @@ RUN apt-get update && \
         ca-certificates=20230311+deb12u1 \
         gcc=4:12.2.0-3 \
         libc6-dev=2.36-9+deb12u14 \
-        curl=7.88.1-10+deb12u14 && \
+        curl=7.88.1-10+deb12u15 && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Rust 1.96.0 into /opt/rust (world-readable; real cargo/rustc, not proxy shims).
