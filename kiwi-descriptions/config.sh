@@ -147,6 +147,23 @@ echo "✓ All rootless Docker binaries verified"
 if [ "${ENABLE_GPU}" = "true" ]; then
     echo "=== Installing NVIDIA GPU Driver and Container Toolkit (GPU mode) ==="
 
+    # --- Provision DNS for the GPU package downloads ------------------------
+    # KIWI runs config.sh inside the image chroot, which has no populated
+    # /etc/resolv.conf, so dnf cannot resolve the AL2023/NVIDIA repos. The GPU
+    # dnf installs below are config.sh's ONLY network operations, which is why
+    # this only surfaced once a GPU flavor first exercised this path (the KIWI
+    # prepare phase resolves the same repos fine from the builder context).
+    # Standard GitHub-hosted runners have public egress, so a public resolver
+    # works. The original resolv.conf state (symlink/file/absent) is saved with
+    # mv and restored after the installs, so no build-time resolver is measured
+    # into PCR4 — runtime DNS is systemd-resolved's job.
+    _GPU_HAD_RESOLV=false
+    if [ -e /etc/resolv.conf ] || [ -L /etc/resolv.conf ]; then
+        mv /etc/resolv.conf /etc/resolv.conf.gpu-build-bak
+        _GPU_HAD_RESOLV=true
+    fi
+    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+
     # Add the official NVIDIA Container Toolkit RPM repository.
     # The repo URL is stable and provides packages for RHEL/CentOS/AL2023.
     cat > /etc/yum.repos.d/nvidia-container-toolkit.repo << 'NVIDIA_REPO'
@@ -255,6 +272,15 @@ NVIDIA_CUDA_REPO
     echo "Installing nvidia-container-toolkit-${NVIDIA_CTK_VERSION}..."
     dnf install -y "nvidia-container-toolkit-${NVIDIA_CTK_VERSION}"
     echo "✓ nvidia-container-toolkit ${NVIDIA_CTK_VERSION} installed"
+
+    # --- Restore original resolv.conf ---------------------------------------
+    # All network operations are done (the nvidia-ctk config and systemctl steps
+    # below are local). Drop the temporary resolver so the measured image keeps
+    # only its original DNS configuration, identical to non-GPU flavors.
+    rm -f /etc/resolv.conf
+    if [ "${_GPU_HAD_RESOLV}" = "true" ]; then
+        mv /etc/resolv.conf.gpu-build-bak /etc/resolv.conf
+    fi
 
     # Configure the NVIDIA runtime for rootless Docker.
     # The daemon.json lives under the gha-executor user's config directory

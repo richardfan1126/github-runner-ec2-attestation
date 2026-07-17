@@ -766,6 +766,37 @@ def test_nvidia_ctk_version_at_least_1_19_0():
     )
 
 
+def test_config_sh_gpu_dns_provision_is_restored():
+    """
+    Regression guard: config.sh must provision a temporary DNS resolver for the
+    GPU package downloads (the config.sh chroot has no /etc/resolv.conf), but it
+    MUST restore the original resolv.conf afterward. A build-time resolver left
+    baked into the image would be measured into PCR4 — a silent attestation
+    divergence from the non-GPU flavors. This asserts the provision is balanced
+    by a restore, so a future edit can't provision-and-forget.
+    """
+    content = Path("kiwi-descriptions/config.sh").read_text()
+
+    provisions_dns = "nameserver" in content and "/etc/resolv.conf" in content
+    if not provisions_dns:
+        # No temporary resolver is written, so nothing to restore — fine.
+        return
+
+    # If a temporary resolver is written, the original must be moved aside and
+    # moved back, and the temporary file removed, so it is not baked in.
+    assert "mv /etc/resolv.conf /etc/resolv.conf.gpu-build-bak" in content, (
+        "config.sh writes a temporary resolv.conf but does not save the original "
+        "with `mv /etc/resolv.conf /etc/resolv.conf.gpu-build-bak`"
+    )
+    assert "mv /etc/resolv.conf.gpu-build-bak /etc/resolv.conf" in content, (
+        "config.sh writes a temporary resolv.conf but never restores the original "
+        "— it would be measured into PCR4, diverging from non-GPU flavors"
+    )
+    assert "rm -f /etc/resolv.conf" in content, (
+        "config.sh must remove the temporary resolv.conf before restoring the original"
+    )
+
+
 # add-gpu-flavor: image-build spec, "Baked-driver regression check"
 def test_no_flavor_dockerfile_bakes_nvidia_driver_tooling():
     """
