@@ -89,7 +89,11 @@ fi
 # can never diverge. Mirrors the CONTAINER_IMAGE/_DIGEST reads later in this script.
 ENABLE_GPU="false"
 if [ -n "${EFFECTIVE_ENV_FILE}" ]; then
-    ENABLE_GPU=$(grep -E '^ENABLE_GPU=' "${EFFECTIVE_ENV_FILE}" | head -n1 | cut -d= -f2-)
+    # `|| true`: ENABLE_GPU is optional, so grep exits 1 for non-GPU flavors
+    # (default/rust-build). Under `set -e -o pipefail` (:19) that non-zero would
+    # abort the whole build — unlike the mandatory CONTAINER_IMAGE read below,
+    # which always matches. Absent key ⇒ empty ⇒ defaults to false.
+    ENABLE_GPU=$(grep -E '^ENABLE_GPU=' "${EFFECTIVE_ENV_FILE}" | head -n1 | cut -d= -f2- || true)
     ENABLE_GPU="${ENABLE_GPU:-false}"
 fi
 echo "ENABLE_GPU=${ENABLE_GPU} (derived from effective env)"

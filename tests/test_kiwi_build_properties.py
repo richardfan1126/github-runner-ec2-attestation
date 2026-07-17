@@ -834,3 +834,65 @@ def test_build_kiwi_image_derives_enable_gpu_from_env_file():
         "out of the effective env file, mirroring the existing "
         "CONTAINER_IMAGE/CONTAINER_IMAGE_DIGEST reads"
     )
+
+
+def _extract_enable_gpu_derivation() -> str:
+    """
+    Extract the real ENABLE_GPU derivation block from build-kiwi-image.sh:
+    from the `ENABLE_GPU="false"` seed through the `echo "ENABLE_GPU=..."`
+    report line. Executing this exact text (rather than a copy) keeps the
+    runtime regression test honest against the shipped script.
+    """
+    content = Path(".github/scripts/build-kiwi-image.sh").read_text()
+    lines = content.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.strip() == 'ENABLE_GPU="false"')
+    end = next(
+        i for i, ln in enumerate(lines)
+        if i > start and ln.strip().startswith('echo "ENABLE_GPU=')
+    )
+    return "\n".join(lines[start:end + 1])
+
+
+@pytest.mark.parametrize(
+    "env_body, expected",
+    [
+        # Non-GPU flavor (default/rust-build): no ENABLE_GPU key. Under
+        # `set -e -o pipefail` the grep exits 1 on no match; the derivation
+        # must NOT abort the build and must default to false. This is the
+        # exact case that broke the rust-build pipeline.
+        ("CONTAINER_IMAGE=foo\nEXPECTED_AUDIENCE=bar\n", "false"),
+        # GPU flavor: key present, must derive true.
+        ("ENABLE_GPU=true\nGPU_DEVICES=all\n", "true"),
+        # Key explicitly false.
+        ("ENABLE_GPU=false\n", "false"),
+    ],
+)
+def test_build_kiwi_image_enable_gpu_derivation_runs_under_pipefail(env_body, expected):
+    """
+    Runtime regression (image-build spec, "Non-GPU flavor derives false and
+    builds unchanged"): the ENABLE_GPU derivation must execute cleanly under
+    `set -e -o pipefail` — the mode the real script runs in — for a flavor
+    whose env omits the key. A purely static text assertion missed that a
+    non-matching grep under pipefail aborts the whole build; this runs the
+    shipped derivation to guard the actual behavior.
+    """
+    derivation = _extract_enable_gpu_derivation()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write(env_body)
+        env_path = f.name
+    try:
+        script = f'set -e -o pipefail\nEFFECTIVE_ENV_FILE={env_path}\n{derivation}\n'
+        result = subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, text=True,
+        )
+    finally:
+        os.unlink(env_path)
+
+    assert result.returncode == 0, (
+        "ENABLE_GPU derivation aborted under `set -e -o pipefail` "
+        f"(stderr: {result.stderr!r}). A non-GPU flavor must not fail the build."
+    )
+    assert f"ENABLE_GPU={expected} " in result.stdout, (
+        f"expected ENABLE_GPU={expected}, got stdout: {result.stdout!r}"
+    )
