@@ -20,16 +20,11 @@ set -e -o pipefail
 
 # Parse command-line arguments
 ENABLE_SSH="false"
-ENABLE_GPU="false"
 EFFECTIVE_ENV_FILE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --enable-ssh)
             ENABLE_SSH="true"
-            shift
-            ;;
-        --enable-gpu)
-            ENABLE_GPU="true"
             shift
             ;;
         --env-file)
@@ -87,6 +82,17 @@ if [ -n "${EFFECTIVE_ENV_FILE}" ]; then
     cp "${EFFECTIVE_ENV_FILE}" "${TEMP_IMAGE_DIR}/root/etc/github-actions-remote-executor/env"
     echo "✓ Effective env installed from ${EFFECTIVE_ENV_FILE}"
 fi
+
+# Derive the build-time ENABLE_GPU decision from the flavor's effective env file —
+# the single source of truth shared with the runtime config (D3) — rather than from
+# a separate CLI flag, so the build-time driver install and the baked runtime config
+# can never diverge. Mirrors the CONTAINER_IMAGE/_DIGEST reads later in this script.
+ENABLE_GPU="false"
+if [ -n "${EFFECTIVE_ENV_FILE}" ]; then
+    ENABLE_GPU=$(grep -E '^ENABLE_GPU=' "${EFFECTIVE_ENV_FILE}" | head -n1 | cut -d= -f2-)
+    ENABLE_GPU="${ENABLE_GPU:-false}"
+fi
+echo "ENABLE_GPU=${ENABLE_GPU} (derived from effective env)"
 
 # Conditionally remove SSH-related ignore directives when --enable-ssh is passed
 if [ "${ENABLE_SSH}" = "true" ]; then

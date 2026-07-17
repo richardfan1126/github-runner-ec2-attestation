@@ -243,9 +243,15 @@ NVIDIA_CUDA_REPO
     # Install NVIDIA Container Toolkit at a pinned version for reproducibility.
     # To update: change the version below and verify compatibility with the
     # NVIDIA driver version installed in task 192.8.
-    # Using v1.18.2 because it includes the nvidia-cdi-refresh systemd service
-    # (introduced in v1.18.0) which automatically regenerates CDI specs at boot.
-    NVIDIA_CTK_VERSION="1.18.2-1"
+    # Using v1.19.1 for two reasons: (1) v1.19.0 adds native read-only-rootfs
+    # support, required because CONTAINER_READ_ONLY_ROOTFS=true is the hardened
+    # default the GPU flavor inherits — on 1.18.x, CDI injection's soname-symlink
+    # and ldcache hooks write into the container rootfs, which fails under
+    # read-only; (2) v1.19.1 additionally removes the multi-user.target
+    # dependency from nvidia-cdi-refresh.service — the exact unit enabled below —
+    # fixing a startup-ordering issue on top of the nvidia-cdi-refresh systemd
+    # service introduced in v1.18.0.
+    NVIDIA_CTK_VERSION="1.19.1-1"
     echo "Installing nvidia-container-toolkit-${NVIDIA_CTK_VERSION}..."
     dnf install -y "nvidia-container-toolkit-${NVIDIA_CTK_VERSION}"
     echo "✓ nvidia-container-toolkit ${NVIDIA_CTK_VERSION} installed"
