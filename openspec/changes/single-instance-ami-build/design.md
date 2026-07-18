@@ -142,6 +142,15 @@ both the provision offset and the destroy margin. Confirm the ~80-min worst case
 one measured single-instance run (as in D11) and adjust the pair while holding
 `TTL ≈ timeout-minutes + 30`.
 
+*Caveat — the measured GPU leg is undersized until the OOS `sed` bug is fixed.* The
+worst-case estimate above assumes the **intended 8 GB** gpu image, but the GPU
+image-size `sed` no-op (proposal Notes, out of scope) means the gpu flavor currently
+builds a **5 GB** image, so any confirmation run measures a ~60%-smaller gpu upload
+than the estimate. Hold the `timeout-minutes`/TTL pair to the **8 GB** assumption —
+do **not** re-tune it down to hug a measured 5 GB gpu leg, or a later GPU fix (→8 GB)
+silently eats the margin. (Same undersizing applies to D11's compile-gate/worst-case
+confirmation.)
+
 *Alternative considered:* rely on `always()` alone — rejected; it structurally
 misses the hard-death and ceiling cases, and this change *removes* the script's
 `finally` destroy, so teardown attempts drop from two to one (see D3).
@@ -305,9 +314,13 @@ comfortably fit `build-ami-instance-role-<run_id>-<attempt>`.
 **Threading — one Terraform `run_id` string var**, passed **identically on apply
 and destroy** (trivially consistent because D1 keeps both in the same job with the
 same `github.*` context), interpolated into the account-unique names above and
-into the run-id tag. The refactored `build-ami.py` never sees it: provisioning and
-teardown moved to the workflow (D1), so `run_id` is a pure workflow→Terraform
-concern and the script only receives host + SSH key.
+into the run-id tag. Provisioning and teardown moved to the workflow (D1), so for
+*Terraform* purposes `run_id` is a pure workflow→Terraform concern and the script
+runs no Terraform. The script *does*, however, receive `run_id` as a plain input
+for one narrowly-scoped purpose — tagging the EBS snapshots it creates (see D13) —
+so the single run-scoped identifier covers **instance** orphans (Terraform tag) and
+**snapshot** orphans (coldsnap tag) alike. That input carries no Terraform or
+resource-naming responsibility; it is a tag value only.
 
 **Replaces the existing `timestamp()` hack.** `ssh_key.tf` currently derives
 `key_name` from `formatdate(..., timestamp())`, which is non-deterministic, not
@@ -389,13 +402,37 @@ does **not** slow uploads.
   64-worker upload's network/EBS demand, and is ~half the `c5.9xlarge` cost — the
   lowest-regression-risk pick.
 
-*Empirical caveat:* confirm the compile time and that the network baseline is not
-the bottleneck for one 64-worker upload on a single measured run; `c5.2xlarge`
-remains a fallback if the measurement shows the compile gate stays fast enough.
+**The upload clears coldsnap's 10-min `StartSnapshot` timeout with wide margin on
+any candidate instance — which reinforces (not threatens) the downsize.** coldsnap
+sets a hardcoded 10-min server-side timeout, a *hard* per-upload deadline. But the
+data is small: images are 5 GB provisioned today (8 GB intended for gpu), 512-KiB
+blocks, so even a full-image upload is ~10k–16k blocks. Clearing 10 min needs only
+~68 Mbps (5 GB) to ~110 Mbps (8 GB) and ~17–27 blocks/s across the 64 workers —
+roughly two orders of magnitude below c5.2xlarge's ~2.5 Gbps baseline. The real
+ceiling is the **account/region EBS Direct API throttle, which is
+instance-independent** — exactly D11's thesis. And D5's **sequential** uploads hand
+each upload the *full* account throttle (vs the old matrix's 2×64 sharing it), so
+cliff margin is *better* than before. Net: the 10-min timeout is real but never
+close on any candidate type; it makes the instance-independence argument stronger,
+not weaker.
+
+*Empirical caveat (narrowed):* the only instance-sensitive item left to confirm on
+one measured run is the **compile-gate time** (the single CPU-bound step); the
+upload axis is settled by the arithmetic above. `c5.2xlarge` remains a fallback if
+the measured compile gate stays fast enough.
 
 *EBS-pressure lever, if ever needed:* coldsnap's 64-worker concurrency is a
 hardcoded constant with **no CLI flag** in v0.9.0, so tuning EBS API pressure is a
 **coldsnap-version** decision, not a runtime flag — out of scope here.
+
+*Cost lever (pre-existing, not introduced by this change):* the script invokes
+`coldsnap upload <raw>` **without** `--omit-zero-blocks`, so it uploads every block
+including the ~3 GB of zeros in a 5 GB image. Because `PutSnapshotBlock` is billed
+**per request**, that is ~6k wasted billable calls per flavor per run (×flavors ×
+runs) and ~60% needless upload time. `--omit-zero-blocks` cuts the transfer to
+actual content with no correctness impact (EBS reads unwritten blocks as zero). It
+is not required to clear the cliff, so it is recorded as an optional efficiency
+follow-up rather than folded into this change's scope.
 
 ### D12 — Reconnect-and-resume on transport failure
 
@@ -423,12 +460,87 @@ flavor's partial `~/artifacts`, and **D5/D8 two-pass** excludes it automatically
 (no snapshot ID ⇒ not in Pass 2). The decisions already made are exactly what make
 mid-run reconnect tractable.
 
+**Caveat — "clean by construction" covers local + in-process state, *not*
+server-side EBS.** `coldsnap upload` is a *third* state location that D4/D5/D8 do
+not touch: it calls the EBS Direct API `StartSnapshot` at the **start** of the
+upload (snapshot is born `pending`), streams blocks for minutes, calls
+`CompleteSnapshot`, and only **then** prints the ID we parse. So a drop anywhere in
+that multi-minute window — the likeliest place to drop — leaves a snapshot that
+exists in AWS but whose ID we never captured; wipe-and-reuse (a local `rm`) and the
+two-pass exclusion (keyed on a *captured* ID) both miss it, and D2's self-destruct +
+run-id tag cover orphan **instances**, not orphan **snapshots**. Worse, with
+`get_pty=False` the abandoned `coldsnap` is commonly reparented to init and keeps
+running, and because the unlinked `.raw` inode survives while its fd is open, the
+zombie can reach `CompleteSnapshot` **after** we resume — minting a fully-billed
+orphan *and* briefly running its 64 `PutSnapshotBlock` workers alongside the next
+flavor's, transiently violating D5's "sequential ⇒ never 2×64" guarantee.
+
+**Mitigation (adopted): kill the abandoned upload on reconnect, before resuming.**
+After a successful reconnect and before wiping for the next flavor, the driver makes
+a best-effort `pkill` of the stale `coldsnap` over the fresh channel. This closes
+both the 2×64 concurrency spike and the "zombie completes a stray snapshot" path in
+one cheap step. It does **not** reclaim a snapshot already created server-side —
+but that residual is smaller than it first looks: `coldsnap` sets `StartSnapshot`'s
+`Timeout` to a hardcoded **10 minutes** (`SNAPSHOT_TIMEOUT_MINUTES`, v0.9.0), so a
+snapshot that never reaches `CompleteSnapshot` auto-transitions to `error` and its
+blocks are deleted within ~10 min. The `pkill`'d (still-`pending`) orphan therefore
+**self-heals**; only a snapshot the zombie managed to `CompleteSnapshot` **before**
+the `pkill` landed (a narrow race) — or one whose `register_ami` later fails in
+Pass 2 — persists as a durable `completed` orphan. Because this change tags every
+upload with `coldsnap upload --tag run_id=…` (D13), those durable orphans carry the
+**same run-id key** as orphan instances — so the residual is rare, self-limiting,
+*and* attributable to its run. See the Risks bullet and Open Questions.
+
 *Not required for correctness — an availability upgrade.* `update-flavors-lock`
 already carries forward any lost flavor (worst case without D12: this run updates
 nothing, prior AMIs persist), so D12 is a resilience improvement in the same
 "don't let a shared domain sink the run" spirit as the rest of the change, not a
 correctness precondition. It is cheap precisely because C2's resume-at-next falls
 out of D4/D5 at no extra cost.
+
+### D13 — Tag EBS snapshots with the run-id at upload (orphan identifiability, in scope)
+
+D2/D9 make orphan **instances** identifiable by a run-id tag, and D12 established
+that a mid-upload reconnect can also leak an orphan **snapshot**. Earlier drafts
+punted *both* the snapshot tag and the sweep to a single deferred follow-up — but
+that conflated two very different things. The **reaper** (a scheduled job that
+actually deletes stale resources) is genuinely separate ops work and stays
+deferred. **Identifiability** — can a human or a query attribute an orphan to its
+owning run? — is the precondition that makes deferring the reaper *safe*, and it is
+cheap. Without it, the design's "the run-id tag enables a sweep" claim is aspirational
+for snapshots: they'd carry no such tag. This change therefore pulls snapshot
+tagging **into scope** so that claim is real, and leaves only the reaper deferred.
+
+**Mechanism.** coldsnap v0.9.0 `upload --tag KEY=VALUE` applies tags via `set_tags`
+on the **`StartSnapshot`** call (verified in `src/upload.rs`), i.e. at snapshot
+*birth* — so even a `pending` snapshot abandoned mid-upload is tagged, not just a
+`completed` one. This change invokes `coldsnap upload --tag run_id=${run_id}` for
+every flavor. Every snapshot — the normal product snapshots *and* any D12
+reconnect-race orphan or Pass-2 `register_ami` failure — then carries the **same
+run-id key** as orphan instances. Instance orphans and snapshot orphans collapse
+into **one gap under one run-scoped key**, sweepable by one `describe-*
+--filters Name=tag:run_id,Values=<id>` predicate, with the run's active/inactive
+state resolvable via the GitHub API.
+
+**D9 tension — resolved explicitly, not silently.** D9 stated "the script never
+sees `run_id`." Tagging requires threading `run_id` into the script's `coldsnap
+upload` invocation, so that statement no longer holds in full. This is a
+**deliberate, narrow reversal**, scoped tightly: `run_id` reaches the script as a
+plain input used **only** as a tag value; the script still runs **no Terraform**,
+performs **no resource naming**, and provisioning/teardown stay entirely in the
+workflow (D1). The identifier is shared; the *responsibility* is not.
+
+**What stays deferred:** the reaper itself — a scheduled sweep that deletes stale
+tagged instances and snapshots whose run is no longer active. Tagging (this
+decision) is the enabler; automated deletion is the follow-up.
+
+*Future option this tag unlocks (not adopted here):* on a D12 reconnect, instead of
+merely `pkill`-ing the abandoned upload and orphaning its snapshot, the driver could
+`DescribeSnapshots --filters Name=tag:run_id` to **find and adopt** a snapshot the
+zombie already completed — turning the leak into the actual artifact and driving the
+durable-orphan count to zero. It needs the tag to exist (hence D13 is its
+precondition) but adds real matching/validation logic, so it is recorded as a
+possible later refinement, not folded in now.
 
 ## Risks / Trade-offs
 
@@ -447,6 +559,22 @@ out of D4/D5 at no extra cost.
   present) and D12 (bounded reconnect-and-resume at the flavor boundary, clean via
   D4/D5). Residual worst case is still safe: lost flavors carry forward via
   `update-flavors-lock`.
+
+- **Reconnect-and-resume can leak an EBS snapshot per interrupted upload.**
+  `coldsnap upload` creates the snapshot server-side (`StartSnapshot`) minutes
+  before it prints the ID we capture, so a mid-upload transport drop (D12) leaves a
+  `pending`/`completed` snapshot with no captured ID — invisible to wipe-and-reuse
+  and the two-pass exclusion, and uncovered by D2's instance-only self-destruct/tag.
+  Because D12 *resumes* instead of aborting (the old matrix lost the whole leg, so
+  at most one such orphan per run), a flaky link can in principle mint one orphan
+  **per interrupted flavor**. → Bounded on two axes: coldsnap's hardcoded 10-min
+  `StartSnapshot` timeout auto-errors any still-`pending` orphan (blocks deleted),
+  so the `pkill`'d one self-heals and only a `completed`-before-`pkill` race (or a
+  Pass-2 `register_ami` failure) durably persists; and this change tags every upload
+  with `coldsnap upload --tag run_id=…` (D13), so those durable ones carry the same
+  run-id key as orphan instances and are sweepable by the same out-of-band reaper
+  (deferred; see Open Questions). Residual durable leak is therefore rare,
+  self-limiting, and identifiable — not unbounded.
 
 - **Toolchain install becomes a run-wide single point of failure.** Consolidating
   N installs into one keeps expected loss at `N·p` but makes it all-or-nothing —
@@ -498,6 +626,16 @@ This is a build-pipeline change with no runtime/deployed-artifact surface, so
   paired with TTL `shutdown -h +150`, holding `TTL ≈ timeout-minutes + 30`.
   Confirm the ~80-min worst-case estimate on one measured single-instance run and
   adjust the pair if needed.
-- **Out-of-band orphan sweep** — the run-id tag *enables* a scheduled sweep of
-  stale `build-ami` instances, but whether to add one is out of scope here; noted
-  as a possible follow-up.
+- **Out-of-band orphan reaper** — *identifiability is now in scope; the reaper is
+  not.* Both orphan classes — stale `build-ami` **instances** (D2/D9 tag) and orphan
+  **EBS snapshots** from a mid-upload reconnect (D12) — now carry the **same run-id
+  key**, because this change tags instances via Terraform *and* snapshots via
+  `coldsnap upload --tag run_id=…` (D13). What remains deferred is the **reaper
+  itself**: a scheduled job that queries `describe-instances` / `describe-snapshots`
+  by `tag:run_id`, checks each run's active/inactive state via the GitHub API, and
+  deletes the genuinely-abandoned ones. That is greenfield ops work (a cron/Lambda),
+  separate from this pipeline change, and is left as a follow-up — but it is now a
+  *one-predicate* sweep against a tag that actually exists, not the fuzzy
+  owner+age+unreferenced heuristic an untagged world would have forced. See D13 for
+  the deliberate, narrowly-scoped D9 reversal this required (the script now receives
+  `run_id` as a tag value only).
