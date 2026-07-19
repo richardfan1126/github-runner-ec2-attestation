@@ -2,15 +2,20 @@ data "aws_iam_policy_document" "github_actions_permissions" {
 
   # ── EC2: instance lifecycle ──────────────────────────────────────────────────
   # Terraform aws_instance apply/destroy + boto3 waiters used by build-ami.py.
-  # The full set of Describe* calls Terraform 5.x issues when reading instance
-  # state: block devices (DescribeVolumes), credit specs (DescribeInstanceCreditSpecifications),
-  # and placement groups (DescribePlacementGroups).
+  # ModifyInstanceAttribute is required because the instance sets
+  # instance_initiated_shutdown_behavior = "terminate" (D2 self-terminating
+  # backstop), which Terraform applies as a post-create ModifyInstanceAttribute
+  # call. The full set of Describe* calls Terraform 5.x issues when reading
+  # instance state: block devices (DescribeVolumes), credit specs
+  # (DescribeInstanceCreditSpecifications), and placement groups
+  # (DescribePlacementGroups).
   statement {
     sid    = "EC2InstanceLifecycle"
     effect = "Allow"
     actions = [
       "ec2:RunInstances",
       "ec2:TerminateInstances",
+      "ec2:ModifyInstanceAttribute",
       "ec2:DescribeInstances",
       "ec2:DescribeInstanceStatus",
       "ec2:DescribeInstanceAttribute",
@@ -161,7 +166,9 @@ data "aws_iam_policy_document" "github_actions_permissions" {
 
   # ── IAM: PassRole ────────────────────────────────────────────────────────────
   # Required so Terraform can attach the instance profile to the EC2 instance.
-  # Scoped to the specific instance role created by terraform/build-ami/.
+  # Scoped to the instance role created by terraform/build-ami/. That role is
+  # run-scoped (D9): its name is build-ami-instance-role-<run_id>, so the ARN
+  # must use a wildcard suffix — a fixed name never matches the real role.
   statement {
     sid    = "IAMPassRole"
     effect = "Allow"
@@ -169,7 +176,7 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "iam:PassRole",
     ]
     resources = [
-      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/build-ami-instance-role",
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/build-ami-instance-role-*",
     ]
   }
 
