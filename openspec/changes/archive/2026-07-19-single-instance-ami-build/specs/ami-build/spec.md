@@ -1,231 +1,4 @@
-# ami-build Specification
-
-## Purpose
-
-Convert the published, attested KIWI image artifact into an AWS AMI, and orchestrate that conversion as a CI job. This capability covers the AMI_Build_Script (`scripts/build-ami.py`) that, against a single shared build instance provisioned by the workflow, verifies each flavor's GitHub attestation (including optional producing-workflow identity), downloads and validates the artifact, uploads the raw disk image to an EBS snapshot, registers an AMI with the correct boot/TPM attributes, and outputs a per-flavor result — driving all selected flavors as a two-pass loop and closing SSH plus deleting the temp key on exit, but no longer running Terraform itself; the `build-ami` GitHub Actions job that owns the Terraform apply/destroy lifecycle of that shared instance and drives the script after `build-flavor-image`; and the Terraform IAM role that the job assumes via OIDC.
-
-Artifact production and the debug-image annotation are specified in `image-build`; deployment of the resulting AMI in `deployment`.
-
-## Requirements
-
-### Requirement: build-ami job dependency and trigger
-
-The `build-ami` job SHALL declare `needs: [detect-changes, build-flavor-image]`, where
-`build-flavor-image` is the **single** per-flavor producer job (parametrized by rebuild
-level), so it runs only after that producer completes. Because there is no second,
-conditionally-skipped sibling producer, the job SHALL express its trigger and skip behavior
-**without** `always()` and without a hand-written upstream-result boolean: ordinary `needs`
-resolution combined with the job's own ref/event gate SHALL suffice. The job SHALL run on
-pushes to `main`, on `workflow_dispatch` with `enable_ssh: false`, and on
-`workflow_dispatch` with `enable_ssh: true` (Debug_Build), but SHALL be skipped on pushes
-to `develop` and SHALL be skipped when the producer produced nothing to build.
-
-#### Scenario: Runs after the producer on applicable triggers
-
-- **WHEN** the workflow is triggered by a push to `main`, or by `workflow_dispatch` with
-  either value of `enable_ssh`, and the producer job built at least one flavor
-- **THEN** the `build-ami` job executes after the single `build-flavor-image` producer
-  completes successfully, via ordinary `needs` resolution (no `always()`)
-
-#### Scenario: Skipped on develop
-
-- **WHEN** the workflow is triggered by a push to `develop`
-- **THEN** the `build-ami` job is skipped
-
-#### Scenario: Cascade-skips cleanly when nothing was built
-
-- **WHEN** a run produces an empty rebuild matrix (no flavors to build)
-- **THEN** the producer job and `build-ami` skip cleanly through ordinary `needs`
-  propagation, with no `always()` gate needed to suppress a spurious run
-
-### Requirement: build-ami runner, checkout, and environment
-
-The `build-ami` job SHALL run on `ubuntu-24.04`, check out the repository with `submodules: recursive` as its first step, install Terraform via `hashicorp/setup-terraform` pinned to a specific version, and set up Python by running `uv sync` and invoking the script via `uv run`.
-
-#### Scenario: Job environment prepared
-
-- **WHEN** the `build-ami` job starts
-- **THEN** it runs on `ubuntu-24.04`, checks out with `actions/checkout@v4` and recursive submodules, installs a pinned Terraform (e.g. `1.12.2`), runs `uv sync`, and invokes `uv run python scripts/build-ami.py`
-
-### Requirement: build-ami AWS credentials via OIDC
-
-The `build-ami` job SHALL obtain AWS credentials via `aws-actions/configure-aws-credentials` using OIDC to assume the role in `vars.AWS_ROLE_ARN`, setting the region from `vars.AWS_REGION` (default `us-east-1`), and SHALL NOT store long-lived AWS keys.
-
-#### Scenario: Short-lived credentials assumed
-
-- **WHEN** the `build-ami` job acquires credentials
-- **THEN** it assumes `vars.AWS_ROLE_ARN` via OIDC, uses `vars.AWS_REGION` (defaulting to `us-east-1`), and stores no long-lived access keys as secrets
-
-#### Scenario: Least-privilege job permissions
-
-- **WHEN** the `build-ami` job declares permissions
-- **THEN** it declares `id-token: write`, `contents: read`, and `packages: read`, and does NOT declare `attestations: write` or `packages: write`
-
-### Requirement: AMI_Build_Script invocation and outputs
-
-The `build-ami` job SHALL invoke AMI_Build_Script with the digest-pinned artifact reference and supporting arguments, upload the result JSON, and summarize it, passing `--allow-debug` only for Debug_Builds.
-
-#### Scenario: Script arguments
-
-- **WHEN** the `build-ami` job invokes AMI_Build_Script
-- **THEN** it passes `--artifact-ref ${{ needs.build-flavor-image.outputs.artifact_ref }}`, `--region <configured region>`, `--output-file ami_build_result.json`, and `--expected-workflow .github/workflows/build-attestable-image.yml`
-- **AND** it passes `--allow-debug` only when triggered via `workflow_dispatch` with `enable_ssh: true`, and not otherwise
-
-#### Scenario: Result artifact and summary on success
-
-- **WHEN** AMI_Build_Script exits 0
-- **THEN** the job uploads `ami_build_result.json` as artifact `ami-build-result` with 90-day retention and appends the AMI ID, snapshot ID, region, and build timestamp to `$GITHUB_STEP_SUMMARY` (plus an explicit debug warning for a successful Debug_Build)
-
-#### Scenario: Failure handling
-
-- **WHEN** AMI_Build_Script exits non-zero
-- **THEN** the job does not upload the artifact, fails the job, and appends a failure notice to `$GITHUB_STEP_SUMMARY`
-
-### Requirement: Build instance provisioning
-
-The `build-ami` **workflow job** — not AMI_Build_Script — SHALL provision a single shared temporary Build_Instance via `terraform apply` in the specified region before invoking the script, isolated in its own VPC with SSH restricted to the operator's IP, using Amazon Linux 2023 with IMDSv2 required and an IAM instance profile scoped to EC2/EBS snapshot operations. AMI_Build_Script SHALL receive the instance connection details (host and SSH private key path) and the run identifier (`${github.run_id}-${github.run_attempt}`, used solely as an EBS-snapshot tag value) as inputs, and SHALL NOT run Terraform or perform any resource naming itself.
-
-#### Scenario: Isolated build instance provisioned by the workflow
-
-- **WHEN** the `build-ami` job provisions the Build_Instance
-- **THEN** a `terraform apply` step (owned by the workflow, on the same runner that will later destroy it) creates a VPC (10.2.0.0/16) with a public subnet (10.2.1.0/24), Internet Gateway and route table, a security group allowing SSH only from the operator IP `/32`, a 4096-bit RSA key (saved to a 600-permission temp file), and an AL2023 instance with IMDSv2 required, then waits for running + status checks
-- **AND** AMI_Build_Script is invoked against that already-provisioned instance with its host and SSH key path, and does not itself call `terraform apply` or `terraform destroy`
-
-#### Scenario: Artifact reference validated and digest-pinned
-
-- **WHEN** AMI_Build_Script receives a flavor's `artifact_ref` argument
-- **THEN** it validates the reference against a strict allowlist (rejecting shell metacharacters), requires an `@sha256:` digest component (terminating otherwise), and uses only the digest — ignoring any tag — for both verification and pull
-
-### Requirement: SSH connectivity verification
-
-The AMI_Converter SHALL verify SSH connectivity to the Build_Instance via paramiko before installing tools, connecting as `ec2-user` with retries and keepalive, and failing with a connection error if all retries are exhausted.
-
-#### Scenario: Connectivity retried before proceeding
-
-- **WHEN** the AMI_Converter verifies SSH connectivity
-- **THEN** it connects as `ec2-user` with the generated key, retrying up to 10 times with 30-second delays, 30-second keepalive, and 10-second connection/banner timeouts, failing with a connection error if all retries fail
-
-### Requirement: Build tool installation
-
-The AMI_Converter SHALL install the tools needed for verification and AMI creation on the shared Build_Instance (git, gcc, a signature-verified Rust toolchain, ORAS, GitHub CLI, and coldsnap built from a pinned source) **once per run, before the flavor loop**, verifying each installation and streaming output to logs. Because every flavor depends on this install, it is a **gate**: any install failure SHALL hard-abort the whole run (no per-flavor isolation applies to install). The install SHALL react to the failure kind — **transient** causes (download timeout, clone rate-limit, mirror hiccup) SHALL be retried with backoff at per-step granularity so a late cheap-step blip does not trigger a full coldsnap recompile, while **deterministic** causes (bad version pin, GPG/checksum mismatch, upstream 404, source that will not compile) SHALL fail fast without retry.
-
-#### Scenario: Tools installed once and verified
-
-- **WHEN** the AMI_Converter installs build tools at the start of the run
-- **THEN** it installs git/gcc via dnf, installs Rust from the official standalone tarball after GPG-verifying its detached signature (key 85AB96E6FA1BE5FE), installs ORAS (checksum-verified) to `/usr/local/bin`, installs GitHub CLI, builds coldsnap via `cargo install --locked` from a pinned tag, and verifies `oras version`, `gh version`, and `coldsnap --help` — a single time, shared by all subsequent flavors
-
-#### Scenario: Transient install failure retried, deterministic fails fast
-
-- **WHEN** a tool install step fails
-- **THEN** a transient failure (e.g. curl/network timeout, clone rate-limit) is retried with backoff at per-step granularity, and a deterministic failure (integrity mismatch, compile error, upstream 404) fails fast without retry
-
-#### Scenario: Install failure hard-aborts the whole run
-
-- **WHEN** the toolchain install cannot succeed after its retry policy
-- **THEN** the AMI_Converter fails the entire run with an integrity/installation error before entering the flavor loop, producing zero AMIs (the install is a gate, not an isolatable per-flavor unit)
-
-### Requirement: Artifact signature verification
-
-Before downloading the artifact, the Signature_Verifier SHALL verify the artifact's GitHub attestation against the exact `sha256:` digest from the artifact reference, offline using the downloaded bundle, and SHALL NOT proceed with an untrusted artifact under any circumstances.
-
-#### Scenario: Attestation verified against digest
-
-- **WHEN** tools are installed
-- **THEN** the Signature_Verifier fetches the manifest digest via `oras manifest fetch`, downloads the attestation bundle from `api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest}`, and runs `gh attestation verify oci://` with `-R` and offline `-b bundle.json`, proceeding only on exit code 0 and terminating without creating an AMI on any non-zero exit
-
-#### Scenario: Verification and pull use the same digest
-
-- **WHEN** the artifact is verified and later pulled
-- **THEN** both use the same `sha256:` digest from the artifact reference (not a mutable tag), ensuring cryptographic binding, as covered by regression tests
-
-### Requirement: Optional producing-workflow verification
-
-When `--expected-workflow` is provided, the Signature_Verifier SHALL verify the producing workflow identity from the attestation certificate's SubjectAlternativeName, terminating on mismatch.
-
-#### Scenario: Workflow identity enforced
-
-- **WHEN** `--expected-workflow` is provided
-- **THEN** the verifier runs `gh attestation verify --format json` (without `GH_FORCE_TTY`), extracts the SAN via `jq`, and considers identity verified only if the SAN contains the expected workflow path as a substring, terminating with a workflow-mismatch error otherwise; a separate human-readable verification run uses `GH_FORCE_TTY=1`
-
-#### Scenario: Skipped when not requested
-
-- **WHEN** `--expected-workflow` is not provided
-- **THEN** workflow identity verification is skipped
-
-### Requirement: Artifact download and validation
-
-After signature verification, the AMI_Converter SHALL pull the artifact bundle into `~/artifacts` on the Build_Instance and validate that the raw disk image and `pcr_measurements.json` are present and parseable, failing on any missing or unparseable file.
-
-#### Scenario: Artifact contents validated
-
-- **WHEN** signature verification succeeds
-- **THEN** the AMI_Converter pulls the artifact via ORAS into `~/artifacts`, verifies a `.raw` image and `pcr_measurements.json` exist in `~/artifacts/build-output`, parses the JSON to extract PCR4/PCR7, logs artifact sizes, and fails with a file-not-found or parsing error if any check fails
-
-### Requirement: Snapshot upload and AMI registration
-
-The AMI_Converter SHALL upload the validated raw disk image to an EBS snapshot via coldsnap and register an AMI with the attributes required for an attestable NitroTPM instance, after validating the raw filename safely.
-
-#### Scenario: Raw filename validated against injection
-
-- **WHEN** the AMI_Converter selects the raw image
-- **THEN** it enumerates `.raw` files programmatically (not `ls *.raw`), requires exactly one, validates the basename against `^[a-zA-Z0-9][a-zA-Z0-9._-]*\.raw$`, and uses `shlex.quote()` or subprocess list args — rejecting filenames with shell metacharacters before constructing any shell command (covered by regression tests)
-
-#### Scenario: Snapshot and AMI created with attestable attributes
-
-- **WHEN** the raw image is validated
-- **THEN** coldsnap uploads it, the snapshot ID is parsed and waited on to completion, and the AMI is registered with `VirtualizationType=hvm`, `BootMode=uefi`, `Architecture=x86_64`, `TpmSupport=v2.0`, `EnaSupport=True`, `RootDeviceName=/dev/xvda`, a block device mapping to the snapshot, and a name `attestable-ami-imported-{architecture}-{timestamp}` using AWS-allowed characters
-
-#### Scenario: Failure modes
-
-- **WHEN** snapshot upload, the snapshot waiter, or AMI registration fails
-- **THEN** the AMI_Converter fails with the corresponding upload/waiter/ClientError error
-
-### Requirement: Build result output and infrastructure cleanup
-
-On successful registration the AMI_Converter SHALL write a per-flavor result JSON (`ami_id`, `snapshot_id`, `region`, `build_timestamp`, `pcr_measurements`) for each flavor. In its `finally` block the AMI_Converter SHALL close the SSH connection and securely delete the temporary SSH key, and SHALL NOT run `terraform destroy` — teardown of the shared Build_Instance is owned by the workflow's `always()` destroy step (see the workflow-owned lifecycle requirement), not by the script.
-
-#### Scenario: Per-flavor result written
-
-- **WHEN** a flavor's AMI registration succeeds
-- **THEN** the AMI_Converter writes that flavor's result (including PCR4/PCR7 and an ISO 8601 `build_timestamp`) to its `--output-file` as 2-space-indented JSON
-
-#### Scenario: Script finally closes SSH and deletes key only
-
-- **WHEN** the conversion finishes or fails
-- **THEN** the `finally` block closes SSH, overwrites the temp SSH key with random bytes before unlinking, and logs (without failing) any cleanup error, but does **not** invoke `terraform destroy` — infrastructure teardown is performed by the workflow job
-
-### Requirement: Single-entry verifier record emission
-
-After the AMI is registered, the `build-ami` job SHALL emit a **single-entry verifier record** mapping the baked image's manifest digest → PCR4 → AMI id → producing commit through the surfaces available **after** the AMI exists: the GitHub job log, the step summary, and a tag on the registered AMI. The container image manifest digest is **additionally** carried as an ORAS annotation on the published KIWI artifact, but that annotation is fixed at publish time (alongside the existing `pcr4`/`pcr7` annotations) and SHALL NOT be amended with the AMI id afterward — the published artifact is immutable and digest-bound by its Sigstore attestation, and the AMI id does not exist until publishing has completed. The record SHALL be a clean single-entry seed whose field set is a subset of the multi-flavor `flavors.lock` introduced by the `execution-build-images` change, and SHALL NOT change the runtime NitroTPM attestation or its `user_data`.
-
-#### Scenario: Record emitted across post-AMI surfaces
-
-- **WHEN** AMI registration succeeds
-- **THEN** the job emits a record containing the container image manifest digest, PCR4, the registered AMI id, and the producing commit to the job log and the step summary, and tags the registered AMI with the container image manifest digest
-
-#### Scenario: Published-artifact annotation carries only the image digest
-
-- **WHEN** the KIWI artifact was published earlier by the build-flavor-image job
-- **THEN** the container image manifest digest is the only verifier-record field carried as an ORAS annotation on that artifact (alongside `pcr4`/`pcr7`), and the AMI id is never added to the published artifact's annotations — because amending them would change the artifact digest and break its Sigstore attestation, and because the AMI id does not yet exist at publish time
-
-#### Scenario: Verifier join is PCR4
-
-- **WHEN** a remote verifier reads the published record
-- **THEN** it can obtain a live NitroTPM attestation showing that PCR4 and conclude the instance runs the recorded image digest, with no change to the runtime attestation or `user_data` required
-
-#### Scenario: Single-entry seed for flavors.lock
-
-- **WHEN** the record is serialized
-- **THEN** it is a single entry (one image manifest digest → PCR4 → AMI id → producing commit) whose field set is a subset of the per-flavor `flavors.lock` that the `execution-build-images` change introduces, so that change need not retrofit a record format onto an already-shipped AMI
-
-### Requirement: AMI build IAM permission scoping
-
-The Terraform IAM policy for the Build_Instance SHALL scope EC2/EBS permissions to the specific region and account using resource ARN patterns and the `aws:RequestedRegion` condition, never `Resource = "*"` for snapshot and image operations.
-
-#### Scenario: Region- and account-scoped policy
-
-- **WHEN** the Build_Instance IAM policy is defined
-- **THEN** it scopes snapshots (`arn:aws:ec2:{region}::snapshot/*`), images (`arn:aws:ec2:{region}::image/*`), and volumes (`arn:aws:ec2:{region}:{account}:volume/*`) with the `aws:RequestedRegion` condition, and does not use a wildcard resource for EC2 snapshot/image operations
+## MODIFIED Requirements
 
 ### Requirement: Per-flavor AMI build matrix
 
@@ -246,33 +19,55 @@ The `build-ami` stage SHALL build every flavor selected by the dynamic matrix on
 - **WHEN** the pipeline runs on `develop`
 - **THEN** changed-flavor images are built and published but no AMIs are registered
 
-### Requirement: Multi-flavor flavors.lock aggregation written back by the pipeline
+### Requirement: Build instance provisioning
 
-After each per-flavor AMI is registered, the pipeline SHALL aggregate the per-flavor verifier records into the git-committed `flavors.lock`, generalizing the single-entry verifier record (one image manifest digest → PCR4 → AMI id → producing commit) from one image to N flavors using the same field set. The pipeline SHALL write back and commit `flavors.lock`, carrying forward unchanged entries for flavors not rebuilt, serializing updates via a concurrency group, and recording each flavor's `producing commit` as the source commit that supplied its inputs.
+The `build-ami` **workflow job** — not AMI_Build_Script — SHALL provision a single shared temporary Build_Instance via `terraform apply` in the specified region before invoking the script, isolated in its own VPC with SSH restricted to the operator's IP, using Amazon Linux 2023 with IMDSv2 required and an IAM instance profile scoped to EC2/EBS snapshot operations. AMI_Build_Script SHALL receive the instance connection details (host and SSH private key path) and the run identifier (`${github.run_id}-${github.run_attempt}`, used solely as an EBS-snapshot tag value) as inputs, and SHALL NOT run Terraform or perform any resource naming itself.
 
-#### Scenario: Each registered AMI lands an entry
+#### Scenario: Isolated build instance provisioned by the workflow
 
-- **WHEN** a flavor's AMI is registered
-- **THEN** its `{image manifest digest, PCR4, AMI id, producing commit}` entry is written into `flavors.lock` and committed back, while the per-AMI post-registration surfaces (job log, step summary, AMI tag) continue to be emitted as in the single-entry record
+- **WHEN** the `build-ami` job provisions the Build_Instance
+- **THEN** a `terraform apply` step (owned by the workflow, on the same runner that will later destroy it) creates a VPC (10.2.0.0/16) with a public subnet (10.2.1.0/24), Internet Gateway and route table, a security group allowing SSH only from the operator IP `/32`, a 4096-bit RSA key (saved to a 600-permission temp file), and an AL2023 instance with IMDSv2 required, then waits for running + status checks
+- **AND** AMI_Build_Script is invoked against that already-provisioned instance with its host and SSH key path, and does not itself call `terraform apply` or `terraform destroy`
 
-#### Scenario: Subset rebuild preserves other entries
+#### Scenario: Artifact reference validated and digest-pinned
 
-- **WHEN** a run rebuilds only some flavors
-- **THEN** `flavors.lock` retains the existing entries for the flavors not rebuilt
+- **WHEN** AMI_Build_Script receives a flavor's `artifact_ref` argument
+- **THEN** it validates the reference against a strict allowlist (rejecting shell metacharacters), requires an `@sha256:` digest component (terminating otherwise), and uses only the digest — ignoring any tag — for both verification and pull
 
-#### Scenario: Debug build does not overwrite production entry
+### Requirement: Build tool installation
 
-- **WHEN** a `workflow_dispatch` debug/SSH build targets a single flavor
-- **THEN** it does not overwrite that flavor's production `flavors.lock` entry
+The AMI_Converter SHALL install the tools needed for verification and AMI creation on the shared Build_Instance (git, gcc, a signature-verified Rust toolchain, ORAS, GitHub CLI, and coldsnap built from a pinned source) **once per run, before the flavor loop**, verifying each installation and streaming output to logs. Because every flavor depends on this install, it is a **gate**: any install failure SHALL hard-abort the whole run (no per-flavor isolation applies to install). The install SHALL react to the failure kind — **transient** causes (download timeout, clone rate-limit, mirror hiccup) SHALL be retried with backoff at per-step granularity so a late cheap-step blip does not trigger a full coldsnap recompile, while **deterministic** causes (bad version pin, GPG/checksum mismatch, upstream 404, source that will not compile) SHALL fail fast without retry.
 
-### Requirement: GitHub Actions IAM role Terraform stack
+#### Scenario: Tools installed once and verified
 
-A simple Terraform stack at `terraform/github-actions-iam-role/` SHALL create the IAM role the `build-ami` job assumes via OIDC, restricting trust to this repository and granting only the permissions AMI_Build_Script needs, parameterized for reuse across accounts/forks.
+- **WHEN** the AMI_Converter installs build tools at the start of the run
+- **THEN** it installs git/gcc via dnf, installs Rust from the official standalone tarball after GPG-verifying its detached signature (key 85AB96E6FA1BE5FE), installs ORAS (checksum-verified) to `/usr/local/bin`, installs GitHub CLI, builds coldsnap via `cargo install --locked` from a pinned tag, and verifies `oras version`, `gh version`, and `coldsnap --help` — a single time, shared by all subsequent flavors
 
-#### Scenario: Repository-scoped trust and outputs
+#### Scenario: Transient install failure retried, deterministic fails fast
 
-- **WHEN** the IAM_Role_Stack is applied
-- **THEN** it creates a role whose trust policy restricts assumption to the `repo:owner/github-runner-ec2-attestation:*` subject claim via GitHub Actions OIDC, attaches a policy granting EC2 provisioning, EBS snapshot management, AMI registration, and IAM pass-role, outputs the role ARN, accepts region and repository owner/name as variables, optionally creates the OIDC provider (boolean default `true`), and ships a `README.md` documenting variables and one-time apply
+- **WHEN** a tool install step fails
+- **THEN** a transient failure (e.g. curl/network timeout, clone rate-limit) is retried with backoff at per-step granularity, and a deterministic failure (integrity mismatch, compile error, upstream 404) fails fast without retry
+
+#### Scenario: Install failure hard-aborts the whole run
+
+- **WHEN** the toolchain install cannot succeed after its retry policy
+- **THEN** the AMI_Converter fails the entire run with an integrity/installation error before entering the flavor loop, producing zero AMIs (the install is a gate, not an isolatable per-flavor unit)
+
+### Requirement: Build result output and infrastructure cleanup
+
+On successful registration the AMI_Converter SHALL write a per-flavor result JSON (`ami_id`, `snapshot_id`, `region`, `build_timestamp`, `pcr_measurements`) for each flavor. In its `finally` block the AMI_Converter SHALL close the SSH connection and securely delete the temporary SSH key, and SHALL NOT run `terraform destroy` — teardown of the shared Build_Instance is owned by the workflow's `always()` destroy step (see the workflow-owned lifecycle requirement), not by the script.
+
+#### Scenario: Per-flavor result written
+
+- **WHEN** a flavor's AMI registration succeeds
+- **THEN** the AMI_Converter writes that flavor's result (including PCR4/PCR7 and an ISO 8601 `build_timestamp`) to its `--output-file` as 2-space-indented JSON
+
+#### Scenario: Script finally closes SSH and deletes key only
+
+- **WHEN** the conversion finishes or fails
+- **THEN** the `finally` block closes SSH, overwrites the temp SSH key with random bytes before unlinking, and logs (without failing) any cleanup error, but does **not** invoke `terraform destroy` — infrastructure teardown is performed by the workflow job
+
+## ADDED Requirements
 
 ### Requirement: Workflow-owned build instance lifecycle
 

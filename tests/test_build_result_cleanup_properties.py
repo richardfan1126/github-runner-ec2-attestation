@@ -143,42 +143,37 @@ def test_build_result_completeness(ami_id, snapshot_id, region, pcr_measurements
             os.unlink(output_file)
 
 
-# --- Property 76: Infrastructure Cleanup Guarantee ---
+# --- Property 76: Script Resource Cleanup Guarantee ---
 
 @settings(max_examples=20)
 @given(
-    region=region_strategy(),
-    instance_type=st.sampled_from(["c5.9xlarge", "m5.xlarge", "t3.large"]),
     build_succeeds=st.booleans(),
 )
-def test_infrastructure_cleanup_guarantee(region, instance_type, build_succeeds):
+def test_infrastructure_cleanup_guarantee(build_succeeds):
     """
-    Property 76: Infrastructure Cleanup Guarantee
+    Property 76: Script Resource Cleanup Guarantee
 
-    For any build execution (success or failure), cleanup_infrastructure
-    should always be called.
+    The script's cleanup closes the SSH connection and securely deletes the temp
+    SSH key. Teardown of the shared build instance is now owned by the workflow's
+    always() terraform destroy step (D1) — the script runs NO terraform destroy.
 
-    **Validates: Requirements 20.1, 20.2, 20.3, 20.4, 20.5**
+    **Validates: Requirements 20.7, 20.8, 20.9, 21.15**
     """
-    allowed_ssh_cidr = "1.2.3.4/32"
     ssh_key_path = "/tmp/fake-key.pem"
 
     mock_ssh_client = Mock()
 
-    with patch.object(build_ami.subprocess, 'run') as mock_run, \
-         patch.object(build_ami.os.path, 'exists', return_value=True), \
+    # The script no longer imports subprocess / owns terraform teardown.
+    assert not hasattr(build_ami, 'cleanup_infrastructure'), \
+        "Script must not own terraform teardown any more (workflow owns destroy)"
+
+    with patch.object(build_ami.os.path, 'exists', return_value=True), \
          patch.object(build_ami.os.path, 'getsize', return_value=256), \
          patch.object(build_ami.os, 'urandom', return_value=b'\x00' * 256), \
          patch('builtins.open', create=True) as mock_open, \
          patch.object(build_ami.os, 'unlink') as mock_unlink:
 
-        # Terraform destroy succeeds
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
-        build_ami.cleanup_infrastructure(
-            region=region,
-            instance_type=instance_type,
-            allowed_ssh_cidr=allowed_ssh_cidr,
+        build_ami.cleanup_script_resources(
             ssh_key_path=ssh_key_path,
             ssh_client=mock_ssh_client,
         )
@@ -186,21 +181,7 @@ def test_infrastructure_cleanup_guarantee(region, instance_type, build_succeeds)
         # SSH client should be closed
         mock_ssh_client.close.assert_called_once()
 
-        # Terraform destroy should be called
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
-        assert 'terraform' in cmd[0]
-        assert 'destroy' in cmd
-        assert '-auto-approve' in cmd
-
-        # Verify terraform variables are passed
-        cmd_str = ' '.join(cmd)
-        assert f'region={region}' in cmd_str
-        assert f'instance_type={instance_type}' in cmd_str
-        assert f'allowed_ssh_cidr={allowed_ssh_cidr}' in cmd_str
-
-        # SSH key should be deleted
+        # SSH key should be securely deleted (overwrite then unlink)
         mock_unlink.assert_called_once_with(ssh_key_path)
 
 
@@ -208,36 +189,39 @@ def test_infrastructure_cleanup_guarantee(region, instance_type, build_succeeds)
 
 @settings(max_examples=20)
 @given(
-    region=region_strategy(),
-    instance_type=st.sampled_from(["c5.9xlarge", "m5.xlarge", "t3.large"]),
     error_message=st.text(min_size=1, max_size=50).filter(lambda x: x.strip()),
 )
-def test_build_failure_cleanup(region, instance_type, error_message):
+def test_build_failure_cleanup(error_message):
     """
     Property 77: Build Failure Cleanup
 
-    For any build failure, cleanup should still execute and the function
-    should return exit code 1.
+    For any build failure, the script's finally cleanup should still execute
+    (close SSH + delete key) and main() should return exit code 1.
 
     **Validates: Requirements 20.12**
     """
-    allowed_ssh_cidr = "1.2.3.4/32"
-
-    # Mock parse_arguments to return controlled args
+    # Mock parse_arguments to return controlled args for the new CLI.
     mock_args = Mock()
-    mock_args.artifact_ref = "ghcr.io/owner/repo:tag"
-    mock_args.region = region
-    mock_args.instance_type = instance_type
-    mock_args.output_file = "test_output.json"
+    mock_args.host = "1.2.3.4"
+    mock_args.ssh_key_path = "/tmp/key.pem"
+    mock_args.run_id = "123-1"
+    mock_args.flavors_manifest = "flavors-manifest.json"
+    mock_args.region = "us-east-1"
+    mock_args.output_dir = "."
+    mock_args.artifacts_base_path = "~/artifacts"
+    mock_args.allow_debug = False
+    mock_args.expected_workflow = None
+    mock_args.producing_commit = "deadbeef"
 
     with patch.object(build_ami, 'parse_arguments', return_value=mock_args), \
-         patch.object(build_ami, 'validate_artifact_reference'), \
          patch.object(build_ami, 'validate_aws_region'), \
-         patch.object(build_ami, 'validate_output_file_path'), \
-         patch.object(build_ami, 'get_user_public_ip', return_value="1.2.3.4"), \
-         patch.object(build_ami, 'provision_ami_build_instance', side_effect=RuntimeError(error_message)), \
-         patch.object(build_ami, 'cleanup_infrastructure') as mock_cleanup, \
-         patch('boto3.client'):
+         patch.object(build_ami, 'validate_run_id'), \
+         patch.object(build_ami, 'load_flavors_manifest',
+                      return_value=[{"flavor": "default", "artifact_ref": "ghcr.io/o/r@sha256:" + "a" * 64}]), \
+         patch.object(build_ami.os, 'makedirs'), \
+         patch.object(build_ami, 'boto3'), \
+         patch.object(build_ami, 'verify_ssh_connectivity', side_effect=RuntimeError(error_message)), \
+         patch.object(build_ami, 'cleanup_script_resources') as mock_cleanup:
 
         exit_code = build_ami.main()
 
@@ -247,7 +231,6 @@ def test_build_failure_cleanup(region, instance_type, error_message):
         # Cleanup should always be called even on failure
         mock_cleanup.assert_called_once()
 
-        # Verify cleanup was called with correct parameters
+        # Verify cleanup was called with the temp SSH key path
         call_kwargs = mock_cleanup.call_args[1]
-        assert call_kwargs['region'] == region
-        assert call_kwargs['instance_type'] == instance_type
+        assert call_kwargs['ssh_key_path'] == "/tmp/key.pem"

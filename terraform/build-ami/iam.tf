@@ -1,5 +1,7 @@
 resource "aws_iam_role" "build_instance_role" {
-  name = "build-ami-instance-role"
+  # Run-scoped name (D9): IAM role names are account-global, so a fixed name
+  # collides when runs overlap. run_id makes it unique per run/attempt.
+  name = "build-ami-instance-role-${var.run_id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -15,12 +17,14 @@ resource "aws_iam_role" "build_instance_role" {
   })
 
   tags = {
-    Name = "build-ami-instance-role"
+    Name   = "build-ami-instance-role"
+    run_id = var.run_id
   }
 }
 
 resource "aws_iam_policy" "build_instance_policy" {
-  name        = "build-ami-instance-policy"
+  # Run-scoped name (D9): IAM policy names are account-global.
+  name        = "build-ami-instance-policy-${var.run_id}"
   description = "Policy for AMI build instance to create snapshots and register AMIs"
 
   policy = jsonencode({
@@ -44,8 +48,8 @@ resource "aws_iam_policy" "build_instance_policy" {
         ]
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion"  = data.aws_region.current.name
-            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+            "aws:RequestedRegion" = data.aws_region.current.name
+            "aws:ResourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
       },
@@ -78,8 +82,8 @@ resource "aws_iam_policy" "build_instance_policy" {
         ]
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion"  = data.aws_region.current.name
-            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+            "aws:RequestedRegion" = data.aws_region.current.name
+            "aws:ResourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
       },
@@ -97,8 +101,8 @@ resource "aws_iam_policy" "build_instance_policy" {
         Resource = "arn:aws:ec2:${data.aws_region.current.name}::snapshot/*"
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion"  = data.aws_region.current.name
-            "aws:ResourceAccount"  = data.aws_caller_identity.current.account_id
+            "aws:RequestedRegion" = data.aws_region.current.name
+            "aws:ResourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
       }
@@ -106,7 +110,8 @@ resource "aws_iam_policy" "build_instance_policy" {
   })
 
   tags = {
-    Name = "build-ami-instance-policy"
+    Name   = "build-ami-instance-policy"
+    run_id = var.run_id
   }
 }
 
@@ -116,10 +121,12 @@ resource "aws_iam_role_policy_attachment" "build_instance_policy_attachment" {
 }
 
 resource "aws_iam_instance_profile" "build_instance_profile" {
-  name = "build-ami-instance-profile"
+  # Run-scoped name (D9): instance-profile names are account-global.
+  name = "build-ami-instance-profile-${var.run_id}"
   role = aws_iam_role.build_instance_role.name
 
   tags = {
-    Name = "build-ami-instance-profile"
+    Name   = "build-ami-instance-profile"
+    run_id = var.run_id
   }
 }

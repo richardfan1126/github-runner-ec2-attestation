@@ -269,13 +269,16 @@ def test_install_all_tools_failure_propagation(failing_tool: str):
     **Validates: Requirements 16.12**
     """
     mock_ssh_client = Mock()
-    
-    with patch.object(build_ami, 'execute_remote_command') as mock_execute:
+
+    # Transient install failures now retry with backoff (D10); patch sleep so the
+    # retries do not blow Hypothesis's per-example deadline or slow the suite.
+    with patch.object(build_ami, 'execute_remote_command') as mock_execute, \
+         patch.object(build_ami.time, 'sleep'):
         executed_commands = []
-        
-        def side_effect(ssh_client, command, stream_output=True):
+
+        def side_effect(ssh_client, command, stream_output=True, timeout=None):
             executed_commands.append(command)
-            
+
             # Fail at the specified tool
             if failing_tool == "system_deps" and "git gcc" in command:
                 return (1, "", "Failed to install system deps")

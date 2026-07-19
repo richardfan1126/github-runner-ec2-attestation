@@ -1,5 +1,7 @@
 resource "aws_security_group" "build_instance_sg" {
-  name        = "build-ami-instance-sg"
+  # Run-scoped GroupName (D9): SG names must be unique within a VPC/account
+  # context, so a fixed name collides across overlapping runs.
+  name        = "build-ami-instance-sg-${var.run_id}"
   description = "Security group for AMI build instance"
   vpc_id      = aws_vpc.build_vpc.id
 
@@ -20,6 +22,7 @@ resource "aws_security_group" "build_instance_sg" {
   }
 
   tags = {
-    Name = "build-ami-instance-sg"
+    Name   = "build-ami-instance-sg"
+    run_id = var.run_id
   }
 }

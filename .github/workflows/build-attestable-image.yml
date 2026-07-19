@@ -397,9 +397,22 @@ jobs:
       needs.detect-changes.outputs.has_ami_builds == 'true' &&
       (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
-    strategy:
-      matrix: ${{ fromJSON(needs.detect-changes.outputs.ami_matrix) }}
-      max-parallel: 2
+    # Single job (no per-flavor matrix): one shared instance builds every flavor,
+    # compiling the toolchain once (task 7.1). Explicit timeout well under GitHub's
+    # 6 h default, paired with the instance self-destruct TTL (shutdown -h +150) so
+    # `worst-case run << timeout-minutes < TTL` holds (D2, task 7.6).
+    timeout-minutes: 120
+
+    env:
+      # ${github.run_id}-${github.run_attempt}: run-scoped identifier passed
+      # IDENTICALLY to terraform apply and destroy (run-scoped naming + orphan tag,
+      # D9), and to the script as the snapshot tag value (D13). run_attempt is part
+      # of the value because re-runs reuse run_id.
+      RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      # NOTE: $RUNNER_TEMP is a shell env var set by the runner (the `runner` context
+      # is not available in job-level `env`), so SSH_KEY_PATH is composed in-shell
+      # in the steps below rather than here.
 
     permissions:
       id-token: write
@@ -429,101 +442,163 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-extras
 
-      - name: Download build context for ${{ matrix.flavor }}
+      - name: Download all build contexts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: build-context-${{ matrix.flavor }}
-          path: .
+          pattern: build-context-*
+          path: contexts
 
-      - name: Read build context
-        id: ctx
+      - name: Build flavors manifest
+        env:
+          AMI_MATRIX: ${{ needs.detect-changes.outputs.ami_matrix }}
         run: |
-          ARTIFACT_REF=$(jq -r '.artifact_ref' build-context.json)
-          CONTAINER_IMAGE_DIGEST=$(jq -r '.container_image_digest' build-context.json)
-          echo "artifact_ref=${ARTIFACT_REF}" >> $GITHUB_OUTPUT
-          echo "container_image_digest=${CONTAINER_IMAGE_DIGEST}" >> $GITHUB_OUTPUT
-          # Save relaxations for the AMI build script (task 7.2): {} means fully hardened
-          jq '.relaxations // {}' build-context.json > relaxations.json
+          # Combine the per-flavor build-context-<flavor> artifacts into a single
+          # manifest the multi-flavor driver consumes.
+          FLAVORS=$(echo "$AMI_MATRIX" | jq -r '.include[].flavor')
+          MANIFEST='[]'
+          for FLAVOR in $FLAVORS; do
+            CTX="contexts/build-context-${FLAVOR}/build-context.json"
+            if [ ! -f "$CTX" ]; then
+              echo "::error::Missing build context for flavor '${FLAVOR}' (${CTX})"
+              exit 1
+            fi
+            ENTRY=$(jq --arg flavor "$FLAVOR" '{
+              flavor: $flavor,
+              artifact_ref: .artifact_ref,
+              container_image_digest: .container_image_digest,
+              relaxations: (.relaxations // {})
+            }' "$CTX")
+            MANIFEST=$(echo "$MANIFEST" | jq --argjson e "$ENTRY" '. + [$e]')
+          done
+          echo "$MANIFEST" | jq '.' > flavors-manifest.json
+          echo "flavors-manifest.json:"
+          cat flavors-manifest.json
 
-      - name: Build AMI (${{ matrix.flavor }})
+      - name: Provision shared build instance (terraform apply)
+        id: provision
+        run: |
+          # The WORKFLOW owns the Terraform lifecycle (D1): apply here, always()
+          # destroy below — both in this job on this runner, because the build-ami
+          # state is gitignored and local (only this runner can destroy what it
+          # applied). SSH is restricted to this runner's public IP.
+          RUNNER_IP=$(curl -sf --retry 3 https://checkip.amazonaws.com)
+          cd terraform/build-ami
+          terraform init -input=false
+          terraform apply -auto-approve \
+            -var "region=${AWS_REGION}" \
+            -var "instance_type=c5.4xlarge" \
+            -var "allowed_ssh_cidr=${RUNNER_IP}/32" \
+            -var "run_id=${RUN_ID}"
+          # Export the instance host and write the SSH key to a 600 temp file.
+          # $RUNNER_TEMP is absolute, so this is correct despite the cd above.
+          echo "instance_host=$(terraform output -raw instance_public_ip)" >> "$GITHUB_OUTPUT"
+          terraform output -raw ssh_private_key > "$RUNNER_TEMP/build-ami-key.pem"
+          chmod 600 "$RUNNER_TEMP/build-ami-key.pem"
+
+      - name: Build AMIs (all flavors on the shared instance)
         run: |
           ALLOW_DEBUG_FLAG=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
             ALLOW_DEBUG_FLAG="--allow-debug"
           fi
+          mkdir -p ami-results-flat
           uv run python scripts/build-ami.py \
-            --artifact-ref "${{ steps.ctx.outputs.artifact_ref }}" \
-            --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
-            --output-file ami_build_result.json \
+            --host "${{ steps.provision.outputs.instance_host }}" \
+            --ssh-key-path "$RUNNER_TEMP/build-ami-key.pem" \
+            --run-id "${RUN_ID}" \
+            --flavors-manifest flavors-manifest.json \
+            --region "${AWS_REGION}" \
+            --output-dir ami-results-flat \
             --expected-workflow .github/workflows/build-attestable-image.yml \
-            --container-image-digest "${{ steps.ctx.outputs.container_image_digest }}" \
             --producing-commit "${{ github.sha }}" \
-            --relaxations-file relaxations.json \
             $ALLOW_DEBUG_FLAG
 
-      - name: Upload AMI build result
-        if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ami-build-result-${{ matrix.flavor }}
-          path: ami_build_result.json
-          retention-days: 90
-
-      - name: Write success summary
-        if: success()
-        run: |
-          AMI_ID=$(jq -r '.ami_id' ami_build_result.json)
-          SNAPSHOT_ID=$(jq -r '.snapshot_id' ami_build_result.json)
-          REGION=$(jq -r '.region' ami_build_result.json)
-          BUILD_TIMESTAMP=$(jq -r '.build_timestamp' ami_build_result.json)
-          echo "## AMI Build Complete (${{ matrix.flavor }}) ✅" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### AMI Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **AMI ID**: \`${AMI_ID}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Snapshot ID**: \`${SNAPSHOT_ID}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Region**: \`${REGION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Timestamp**: \`${BUILD_TIMESTAMP}\`" >> $GITHUB_STEP_SUMMARY
-
-          CID=$(jq -r '.verifier_record.container_image_digest // "unknown"' ami_build_result.json)
-          PCR4=$(jq -r '.verifier_record.pcr4 // .pcr_measurements.pcr4' ami_build_result.json)
-          COMMIT=$(jq -r '.verifier_record.producing_commit // "unknown"' ami_build_result.json)
-          {
-            echo ""
-            echo "### Verifier Record (${{ matrix.flavor }})"
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Container image digest | \`${CID}\` |"
-            echo "| PCR4 | \`${PCR4}\` |"
-            echo "| AMI ID | \`${AMI_ID}\` |"
-            echo "| Producing commit | \`${COMMIT}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "Verifier record: container_image_digest=${CID} pcr4=${PCR4} ami_id=${AMI_ID} producing_commit=${COMMIT}"
-
-      - name: Write debug warning
-        if: success() && github.event_name == 'workflow_dispatch' && inputs.enable_ssh == true
-        run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> ⚠️ **WARNING: This AMI was built from a debug artifact (enable_ssh: true).**" >> $GITHUB_STEP_SUMMARY
-          echo "> This AMI is NOT intended for production use." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-      - name: Write failure summary
-        if: failure()
-        run: |
-          echo "## AMI Build Failed (${{ matrix.flavor }}) ❌" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The AMI build step failed. Check the job logs for details." >> $GITHUB_STEP_SUMMARY
-
-      - name: Cleanup Terraform resources
+      - name: Reshape per-flavor results into per-flavor artifact layout
         if: always()
         run: |
+          # The script writes flat ami_build_result-<flavor>.json (task 4.7). Reshape
+          # each into ami-results/ami-build-result-<flavor>/ami_build_result.json so
+          # update-flavors-lock consumes it unchanged (per-flavor entry keyed by
+          # flavor, file named ami_build_result.json). Only flavors that produced a
+          # result appear — preserving per-flavor failure isolation (D8).
+          shopt -s nullglob
+          mkdir -p ami-results
+          for f in ami-results-flat/ami_build_result-*.json; do
+            base=$(basename "$f")                        # ami_build_result-<flavor>.json
+            flavor=${base#ami_build_result-}             # <flavor>.json
+            flavor=${flavor%.json}                       # <flavor>
+            mkdir -p "ami-results/ami-build-result-${flavor}"
+            cp "$f" "ami-results/ami-build-result-${flavor}/ami_build_result.json"
+          done
+          echo "Reshaped results:"; find ami-results -type f || true
+
+      - name: Upload AMI build results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # Single artifact whose internal layout is ami-build-result-<flavor>/
+          # ami_build_result.json, so update-flavors-lock's per-flavor read path is
+          # unchanged (task 7.7).
+          name: ami-build-results
+          path: ami-results/
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Write AMI build summary
+        if: always()
+        run: |
+          shopt -s nullglob
+          RESULTS=(ami-results-flat/ami_build_result-*.json)
+          if [ ${#RESULTS[@]} -eq 0 ]; then
+            echo "## AMI Build — no per-flavor results produced ❌" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No flavor produced an AMI. Check the job logs." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "## AMI Build Results ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Flavor | AMI ID | Snapshot | PCR4 | Producing commit |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | --- | --- | --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+          for f in "${RESULTS[@]}"; do
+            base=$(basename "$f"); flavor=${base#ami_build_result-}; flavor=${flavor%.json}
+            AMI_ID=$(jq -r '.ami_id' "$f")
+            SNAPSHOT_ID=$(jq -r '.snapshot_id' "$f")
+            PCR4=$(jq -r '.verifier_record.pcr4 // .pcr_measurements.pcr4' "$f")
+            COMMIT=$(jq -r '.verifier_record.producing_commit // "unknown"' "$f")
+            echo "| ${flavor} | \`${AMI_ID}\` | \`${SNAPSHOT_ID}\` | \`${PCR4}\` | \`${COMMIT}\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.enable_ssh }}" = "true" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> ⚠️ **WARNING: These AMIs were built from debug artifacts (enable_ssh: true).**" >> "$GITHUB_STEP_SUMMARY"
+            echo "> They are NOT intended for production use." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Cleanup shared build instance (terraform destroy)
+        if: always()
+        run: |
+          # Single always() teardown (D1/D3). Because the script no longer runs a
+          # finally-block destroy, this is the ONLY workflow-driven attempt, so it
+          # must be robust: retry with backoff (destroy is idempotent/convergent — a
+          # re-run only removes what remains) and FAIL LOUD if it cannot converge,
+          # rather than green-washing a possible orphan. The instance self-destruct
+          # (D2) is the safety net beneath even a fully-failed destroy. run_id is
+          # passed IDENTICALLY to the apply above (D9).
           cd terraform/build-ami
           terraform init -input=false
-          terraform destroy -auto-approve \
-            -var "region=${{ vars.AWS_REGION || 'us-east-1' }}" \
-            -var "instance_type=c5.9xlarge" \
-            -var "allowed_ssh_cidr=0.0.0.0/0" \
-          || echo "::warning::Terraform destroy encountered errors. Manual cleanup may be required."
+          for attempt in 1 2 3 4 5; do
+            if terraform destroy -auto-approve \
+                -var "region=${AWS_REGION}" \
+                -var "instance_type=c5.4xlarge" \
+                -var "allowed_ssh_cidr=0.0.0.0/0" \
+                -var "run_id=${RUN_ID}"; then
+              echo "Terraform destroy succeeded on attempt ${attempt}"
+              exit 0
+            fi
+            echo "::warning::Terraform destroy attempt ${attempt} failed; retrying with backoff..."
+            sleep $((attempt * 30))
+          done
+          echo "::error::Terraform destroy did not converge after retries. A build-ami orphan may remain (tag run_id=${RUN_ID}); the instance self-destruct TTL is the backstop. Manual cleanup may be required."
+          exit 1
 
   update-flavors-lock:
     needs: [detect-changes, build-ami]
@@ -548,7 +623,13 @@ jobs:
       - name: Download all AMI build results
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: ami-build-result-*
+          # build-ami now emits one artifact whose internal layout is
+          # ami-build-result-<flavor>/ami_build_result.json (the single-instance job
+          # cannot dynamically emit N separate artifacts). The per-flavor read/merge
+          # logic below is unchanged — it still reads
+          # ami-results/ami-build-result-<flavor>/ami_build_result.json and carries
+          # forward any flavor missing a result (failure isolation, task 7.7).
+          name: ami-build-results
           path: ami-results/
 
       - name: Update flavors.lock

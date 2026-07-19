@@ -85,7 +85,7 @@ def test_snapshot_upload_returns_valid_snapshot_id(raw_filename, snapshot_id):
 
         mock_execute.side_effect = side_effect
 
-        result = build_ami.upload_snapshot(mock_ssh_client, "us-east-1")
+        result = build_ami.upload_snapshot(mock_ssh_client, "us-east-1", "123-1")
 
         assert result.startswith("snap-"), \
             f"Snapshot ID should start with 'snap-', got: {result}"
@@ -121,7 +121,7 @@ def test_snapshot_upload_parses_id_from_multiline_output(raw_filename, snapshot_
 
         mock_execute.side_effect = side_effect
 
-        result = build_ami.upload_snapshot(mock_ssh_client, "us-east-1")
+        result = build_ami.upload_snapshot(mock_ssh_client, "us-east-1", "123-1")
         assert result == snapshot_id
 
 
@@ -149,7 +149,7 @@ def test_snapshot_upload_fails_when_no_snapshot_id(raw_filename):
         mock_execute.side_effect = side_effect
 
         with pytest.raises(RuntimeError):
-            build_ami.upload_snapshot(mock_ssh_client, "us-east-1")
+            build_ami.upload_snapshot(mock_ssh_client, "us-east-1", "123-1")
 
 
 @settings(max_examples=20)
@@ -176,7 +176,7 @@ def test_snapshot_upload_fails_on_coldsnap_error(raw_filename):
         mock_execute.side_effect = side_effect
 
         with pytest.raises(RuntimeError, match="coldsnap upload failed"):
-            build_ami.upload_snapshot(mock_ssh_client, "us-east-1")
+            build_ami.upload_snapshot(mock_ssh_client, "us-east-1", "123-1")
 
 
 # --- Property 74: AMI Registration Configuration ---
@@ -326,7 +326,7 @@ def test_coldsnap_output_streamed_to_logs(raw_filename, snapshot_id):
 
         mock_execute.side_effect = side_effect
 
-        build_ami.upload_snapshot(mock_ssh_client, "us-east-1")
+        build_ami.upload_snapshot(mock_ssh_client, "us-east-1", "123-1")
 
         # Verify coldsnap command was called
         coldsnap_calls = [
@@ -365,4 +365,4 @@ def test_coldsnap_uses_full_binary_path(raw_filename, snapshot_id):
 
         mock_execute.side_effect = side_effect
 
-        build_ami.upload_snapshot(mock_ssh_client, "us-east-1")
+        build_ami.upload_snapshot(mock_ssh_client, "us-east-1", "123-1")
