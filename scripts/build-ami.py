@@ -193,7 +193,7 @@ def validate_run_id(run_id: str) -> None:
 
     Expected value is ``${github.run_id}-${github.run_attempt}`` — two integers
     joined by a hyphen. It is interpolated into a remote shell command (the
-    ``coldsnap upload --tag run_id=<run_id>`` invocation, D13) and used as an
+    ``coldsnap upload --tag Key=run_id,Value=<run_id>`` invocation, D13) and used as an
     EBS-snapshot tag value, so it is restricted to a strict, shell-safe pattern.
 
     Args:
@@ -1287,7 +1287,7 @@ def upload_snapshot(
 
     coldsnap_command = (
         f"/home/ec2-user/.cargo/bin/coldsnap upload "
-        f"--tag run_id={run_id} {raw_image_path}"
+        f"--tag Key=run_id,Value={run_id} {raw_image_path}"
     )
     exit_code, stdout, stderr = execute_remote_command(
         ssh_client,
@@ -1877,7 +1877,7 @@ def parse_arguments() -> argparse.Namespace:
         type=str,
         required=True,
         help='Run identifier (${github.run_id}-${github.run_attempt}), used SOLELY '
-             'as an EBS-snapshot tag value (coldsnap upload --tag run_id=<run_id>). '
+             'as an EBS-snapshot tag value (coldsnap upload --tag Key=run_id,Value=<run_id>). '
              'The script runs no Terraform and does no resource naming (D13).'
     )
 
