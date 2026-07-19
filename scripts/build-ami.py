@@ -12,13 +12,10 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 import logging
-import tempfile
 import time
 from typing import Any, Optional, Tuple
-from urllib import request
 
 import boto3
 import paramiko
@@ -35,17 +32,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def get_user_public_ip() -> str:
+# Generous wall-clock backstop for a single remote command (D6). Sized well above
+# the longest legitimate command — the ~5 min mostly-silent coldsnap compile and a
+# 10–15 min 8 GB `coldsnap upload` — so it never false-aborts slow-but-progressing
+# work. It is only the last-resort catch for a truly wedged channel; transport
+# liveness (below) is the *primary*, fast death detector.
+DEFAULT_COMMAND_TIMEOUT = 2700  # 45 minutes
+
+# Bounded SSH reconnect budget on a transport/timeout error (D12). The reconnect
+# outcome is the host-alive-vs-dead discriminator.
+RECONNECT_MAX_ATTEMPTS = 5
+RECONNECT_DELAY = 30
+
+# Per-step toolchain-install retry budget for *transient* failures only (D10).
+INSTALL_MAX_ATTEMPTS = 3
+INSTALL_BASE_DELAY = 10
+
+
+class RemoteCommandTimeout(Exception):
+    """Raised when a remote command exceeds the wall-clock backstop (D6).
+
+    Treated by the driver as a transport/timeout signal (host suspect), triggering
+    the bounded reconnect path (D12) — never as a flavor-local application error.
     """
-    Get the user's public IP address for SSH access configuration.
-    
-    Returns:
-        Public IP address as a string
+
+
+class TransportError(Exception):
+    """Raised when the SSH transport dies mid-command (D6).
+
+    Distinct from a non-zero command exit (which means the host is healthy but the
+    command failed). Treated by the driver as host-suspect (D7/D12).
     """
-    with request.urlopen('https://checkip.amazonaws.com', timeout=5) as response:
-        my_ip = response.read().decode('utf-8').strip()
-        logger.info(f"Detected my public IP: {my_ip}")
-        return my_ip
+
+
+class TransientInstallError(RuntimeError):
+    """A toolchain-install failure that is worth retrying (D10).
+
+    Raised for network-dominated steps (download/clone/dnf) where a blip is
+    plausibly transient. Deterministic failures (GPG/checksum mismatch, compile
+    error, upstream 404) raise plain ``RuntimeError`` and fail fast without retry.
+    """
+
 
 def validate_artifact_reference(artifact_ref: str) -> None:
     """
@@ -160,6 +187,29 @@ def validate_aws_region(region: str) -> None:
     logger.info(f"AWS region validated: {region}")
 
 
+def validate_run_id(run_id: str) -> None:
+    """
+    Validate the run identifier format.
+
+    Expected value is ``${github.run_id}-${github.run_attempt}`` — two integers
+    joined by a hyphen. It is interpolated into a remote shell command (the
+    ``coldsnap upload --tag run_id=<run_id>`` invocation, D13) and used as an
+    EBS-snapshot tag value, so it is restricted to a strict, shell-safe pattern.
+
+    Args:
+        run_id: Run identifier
+
+    Raises:
+        ValueError: If the run id format is invalid
+    """
+    if not re.match(r'^[0-9]+-[0-9]+$', run_id):
+        raise ValueError(
+            f"Invalid run id format: {run_id}. "
+            "Expected ${github.run_id}-${github.run_attempt} (digits-digits)."
+        )
+    logger.info(f"Run id validated: {run_id}")
+
+
 def validate_output_file_path(output_file: str) -> None:
     """
     Validate output file path.
@@ -190,165 +240,6 @@ def validate_output_file_path(output_file: str) -> None:
         )
 
     logger.info(f"Output file path validated: {output_file}")
-
-def provision_ami_build_instance(
-    region: str,
-    instance_type: str,
-) -> Tuple[str, str, str]:
-    """
-    Provision AMI build EC2 instance using Terraform.
-    
-    Args:
-        region: AWS region for the instance
-        instance_type: EC2 instance type
-    
-    Returns:
-        Tuple of (instance_id, instance_public_ip, ssh_private_key_pem)
-    """
-    logger.info("Provisioning AMI build EC2 instance with Terraform...")
-    
-    my_public_ip = get_user_public_ip()
-    allowed_ssh_cidr = f"{my_public_ip}/32"
-    
-    logger.info(f"  Region: {region}")
-    logger.info(f"  Instance Type: {instance_type}")
-    logger.info(f"  Allowed SSH CIDR: {allowed_ssh_cidr}")
-    
-    # Initialize Terraform
-    tf_working_dir = Path(__file__).parent.parent / 'terraform' / 'build-ami'
-    
-    # Initialize Terraform
-    logger.info("Initializing Terraform...")
-    result = subprocess.run(
-        ['terraform', 'init'],
-        cwd=tf_working_dir,
-        capture_output=True,
-        text=True
-    )
-    
-    if result.returncode != 0:
-        logger.error(f"Terraform init failed: {result.stderr}")
-        raise RuntimeError(f"Terraform init failed: {result.stderr}")
-    
-    logger.info("Terraform initialized successfully")
-    
-    # Prepare variables
-    tf_vars = {
-        'region': region,
-        'instance_type': instance_type,
-        'allowed_ssh_cidr': allowed_ssh_cidr
-    }
-    
-    # Apply Terraform configuration
-    logger.info("Applying Terraform configuration (this may take 2-3 minutes)...")
-    cmd = ['terraform', 'apply', '-auto-approve']
-    for key, value in tf_vars.items():
-        cmd.extend(['-var', f'{key}={value}'])
-    
-    result = subprocess.run(
-        cmd,
-        cwd=tf_working_dir,
-        capture_output=True,
-        text=True
-    )
-    
-    if result.returncode != 0:
-        logger.error(f"Terraform apply failed: {result.stderr}")
-        raise RuntimeError(f"Terraform apply failed: {result.stderr}")
-    
-    logger.info("AMI build infrastructure provisioned successfully")
-    
-    # Retrieve outputs
-    logger.info("Retrieving Terraform outputs...")
-    result = subprocess.run(
-        ['terraform', 'output', '-json'],
-        cwd=tf_working_dir,
-        capture_output=True,
-        text=True
-    )
-    
-    if result.returncode != 0:
-        raise RuntimeError("Failed to retrieve Terraform outputs")
-    
-    outputs = json.loads(result.stdout)
-    
-    # Parse outputs
-    instance_id = outputs['instance_id']['value']
-    instance_public_ip = outputs['instance_public_ip']['value']
-    ssh_private_key = outputs['ssh_private_key']['value']
-    
-    logger.info(f"AMI build instance provisioned: {instance_id}")
-    logger.info(f"Public IP: {instance_public_ip}")
-    
-    return instance_id, instance_public_ip, ssh_private_key
-
-def save_ssh_private_key(ssh_private_key_pem: str) -> str:
-    """
-    Save SSH private key for SSH client to connect to the instance
-    
-    Args:
-        ssh_private_key_pem: SSH private key in PEM format
-    
-    Returns:
-        Path to the temporary key file
-    """
-    # Create temporary file
-    fd, key_path = tempfile.mkstemp(suffix='.pem', prefix='import-key-')
-    
-    try:
-        # Write key to file
-        with os.fdopen(fd, 'w') as f:
-            f.write(ssh_private_key_pem)
-        
-        # Set secure permissions (600 - owner read/write only)
-        os.chmod(key_path, 0o600)
-        
-        logger.info(f"SSH private key saved to: {key_path}")
-        return key_path
-        
-    except Exception as e:
-        # Clean up on error
-        try:
-            os.close(fd)
-        except Exception:
-            pass
-        try:
-            os.unlink(key_path)
-        except Exception:
-            pass
-        raise RuntimeError(f"Failed to save SSH private key: {e}")
-
-def wait_for_instance_ready(ec2_client: Any, instance_id: str, timeout: int = 300) -> None:
-    """
-    Wait for the instance to be running and status checks to pass.
-    
-    Args:
-        ec2_client: Boto3 EC2 client
-        instance_id: Instance ID to wait for
-        timeout: Maximum time to wait in seconds
-    """
-    logger.info(f"Waiting for instance {instance_id} to be ready...")
-    
-    try:
-        # Wait for instance to be running
-        waiter = ec2_client.get_waiter('instance_running')
-        waiter.wait(
-            InstanceIds=[instance_id],
-            WaiterConfig={'Delay': 15, 'MaxAttempts': timeout // 15}
-        )
-        logger.info("Instance is running")
-        
-        # Wait for status checks to pass
-        waiter = ec2_client.get_waiter('instance_status_ok')
-        waiter.wait(
-            InstanceIds=[instance_id],
-            WaiterConfig={'Delay': 15, 'MaxAttempts': timeout // 15}
-        )
-        logger.info("Instance status checks passed")
-        
-    except WaiterError as e:
-        logger.error(f"Instance failed to become ready: {e}")
-        raise
 
 def verify_ssh_connectivity(
     host: str,
@@ -402,33 +293,63 @@ def verify_ssh_connectivity(
 def execute_remote_command(
     ssh_client: paramiko.SSHClient,
     command: str,
-    stream_output: bool = True
+    stream_output: bool = True,
+    timeout: int = DEFAULT_COMMAND_TIMEOUT,
 ) -> tuple[int, str, str]:
     """
     Execute a command on the remote instance via SSH.
-    
+
+    Hardened against a build instance that dies mid-command (D6). The old loop
+    spun `while not exit_status_ready(): time.sleep(0.1)` with no timeout and no
+    channel-liveness check — paramiko does not raise when the host dies, so the
+    channel simply never reports ready and the loop spins forever. Under the old
+    per-flavor matrix that only wedged one leg (killed by the job timeout); on the
+    shared single instance a hang during flavor 1's upload would mean flavors 2 and
+    3 never start and the per-flavor `try/except` never runs. Two guards fix that:
+
+    - **Transport liveness (primary, fast).** Each idle poll checks
+      `transport.is_active()`. Keepalive (`set_keepalive(30)`, set at connect time)
+      carries the connection through the mostly-silent compile stretch AND causes
+      paramiko to mark the transport inactive within a couple of missed keepalive
+      acks (~60–90 s) when the host genuinely dies — so a dead host raises promptly
+      via this check, not via the slow wall-clock. Keepalive is a *dependency* of
+      this check, not a substitute (paramiko does not raise out of this read-loop on
+      keepalive failure by itself — surfacing it is exactly this function's job).
+    - **Wall-clock backstop (generous).** A comfortably-large upper bound
+      (`DEFAULT_COMMAND_TIMEOUT`) catches a truly wedged-but-"active" channel
+      without false-aborting a legitimately long, slow-but-progressing command.
+
     Args:
         ssh_client: Connected paramiko SSHClient
         command: Command to execute
         stream_output: Whether to stream output to logger
-    
+        timeout: Wall-clock backstop in seconds for this single command
+
     Returns:
         Tuple of (exit_code, stdout, stderr)
+
+    Raises:
+        TransportError: If the SSH transport dies during the command (host suspect)
+        RemoteCommandTimeout: If the wall-clock backstop is exceeded
     """
     logger.debug(f"Executing command: {command}")
-    
+
+    transport = ssh_client.get_transport()
+    if transport is None or not transport.is_active():
+        raise TransportError("SSH transport is not active before command execution")
+
     stdin, stdout, stderr = ssh_client.exec_command(command, get_pty=False)
-    
+
     stdout_lines = []
     stderr_lines = []
-    
+
     # Set channels to non-blocking to avoid deadlock
     stdout.channel.setblocking(0)
     stderr.channel.setblocking(0)
-    
-    # Read stdout and stderr concurrently to avoid buffer deadlock
-    while not stdout.channel.exit_status_ready():
-        # Wait for data to be available
+
+    start_time = time.time()
+
+    def _drain_stdout() -> bool:
         if stdout.channel.recv_ready():
             data = stdout.channel.recv(4096).decode('utf-8', errors='replace')
             for line in data.splitlines():
@@ -437,7 +358,10 @@ def execute_remote_command(
                     stdout_lines.append(line)
                     if stream_output:
                         logger.info(f"  {line}")
-        
+            return True
+        return False
+
+    def _drain_stderr() -> bool:
         if stderr.channel.recv_stderr_ready():
             data = stderr.channel.recv_stderr(4096).decode('utf-8', errors='replace')
             for line in data.splitlines():
@@ -446,30 +370,38 @@ def execute_remote_command(
                     stderr_lines.append(line)
                     if stream_output:
                         logger.warning(f"  {line}")
+            return True
+        return False
 
-        time.sleep(0.1)
-    
+    # Read stdout and stderr concurrently to avoid buffer deadlock
+    while not stdout.channel.exit_status_ready():
+        got_data = _drain_stdout()
+        got_data = _drain_stderr() or got_data
+
+        if not got_data:
+            # No data this poll — apply the liveness/backstop guards before sleeping.
+            # Primary signal: is the transport still up? A dead host trips this within
+            # ~60–90 s via keepalive, long before the wall-clock backstop.
+            if not transport.is_active():
+                raise TransportError(
+                    "SSH transport died during remote command (host suspect)"
+                )
+            # Generous wall-clock backstop for a wedged-but-active channel.
+            if time.time() - start_time > timeout:
+                raise RemoteCommandTimeout(
+                    f"Remote command exceeded {timeout}s wall-clock backstop; "
+                    "assuming a wedged channel"
+                )
+            time.sleep(0.1)
+
     # Read any remaining data after command completes
-    while stdout.channel.recv_ready():
-        data = stdout.channel.recv(4096).decode('utf-8', errors='replace')
-        for line in data.splitlines():
-            line = line.rstrip()
-            if line:
-                stdout_lines.append(line)
-                if stream_output:
-                    logger.info(f"  {line}")
-    
-    while stderr.channel.recv_stderr_ready():
-        data = stderr.channel.recv_stderr(4096).decode('utf-8', errors='replace')
-        for line in data.splitlines():
-            line = line.rstrip()
-            if line:
-                stderr_lines.append(line)
-                if stream_output:
-                    logger.warning(f"  {line}")
-    
+    while _drain_stdout():
+        pass
+    while _drain_stderr():
+        pass
+
     exit_code = stdout.channel.recv_exit_status()
-    
+
     return exit_code, '\n'.join(stdout_lines), '\n'.join(stderr_lines)
 
 def install_system_dependencies(ssh_client: paramiko.SSHClient) -> None:
@@ -486,15 +418,16 @@ def install_system_dependencies(ssh_client: paramiko.SSHClient) -> None:
     """
     logger.info("Installing system dependencies (git, gcc)...")
     
-    # Install git and gcc via dnf package manager
+    # Install git and gcc via dnf package manager. A dnf failure here is
+    # network-dominated (mirror hiccup) — treat as transient/retriable (D10).
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
         "sudo dnf install -y git gcc",
         stream_output=True
     )
     if exit_code != 0:
-        raise RuntimeError(f"Failed to install system packages: {stderr}")
-    
+        raise TransientInstallError(f"Failed to install system packages: {stderr}")
+
     logger.info("  ✓ git and gcc installed")
 
 def install_rust(ssh_client: paramiko.SSHClient) -> None:
@@ -537,8 +470,10 @@ def install_rust(ssh_client: paramiko.SSHClient) -> None:
         stream_output=True
     )
     if 'key 85AB96E6FA1BE5FE' not in stderr or ('imported' not in stderr and 'not changed' not in stderr):
-        raise RuntimeError(f"Failed to import Rust GPG signing key: {stderr}")
-    
+        # Fetched over the network via curl | gpg — a failure is plausibly a
+        # transient blip rather than a rotated key, so allow a retry (D10).
+        raise TransientInstallError(f"Failed to import Rust GPG signing key: {stderr}")
+
     # Step 2: Download the standalone tarball
     logger.info("  Downloading Rust standalone tarball...")
     exit_code, _, stderr = execute_remote_command(
@@ -547,8 +482,8 @@ def install_rust(ssh_client: paramiko.SSHClient) -> None:
         stream_output=True
     )
     if exit_code != 0:
-        raise RuntimeError(f"Failed to download Rust tarball: {stderr}")
-    
+        raise TransientInstallError(f"Failed to download Rust tarball: {stderr}")
+
     # Step 3: Download the detached GPG signature
     logger.info("  Downloading GPG signature...")
     exit_code, _, stderr = execute_remote_command(
@@ -557,7 +492,7 @@ def install_rust(ssh_client: paramiko.SSHClient) -> None:
         stream_output=True
     )
     if exit_code != 0:
-        raise RuntimeError(f"Failed to download Rust GPG signature: {stderr}")
+        raise TransientInstallError(f"Failed to download Rust GPG signature: {stderr}")
     
     # Step 4: Verify the GPG signature
     logger.info("  Verifying GPG signature...")
@@ -630,16 +565,16 @@ def install_oras(ssh_client: paramiko.SSHClient) -> None:
     """
     
     exit_code, stdout, stderr = execute_remote_command(ssh_client, download_cmd, stream_output=True)
-    
+
     if exit_code != 0:
-        raise RuntimeError(f"Failed to download ORAS: {stderr}")
-    
+        raise TransientInstallError(f"Failed to download ORAS: {stderr}")
+
     # Verify SHA-256 checksum of the downloaded archive (Requirements: 17.13, 17.14)
     checksum_cmd = f"sha256sum /tmp/oras_{oras_version}_linux_amd64.tar.gz"
     exit_code, stdout, stderr = execute_remote_command(ssh_client, checksum_cmd, stream_output=False)
-    
+
     if exit_code != 0:
-        raise RuntimeError(f"Failed to compute ORAS checksum: {stderr}")
+        raise TransientInstallError(f"Failed to compute ORAS checksum: {stderr}")
     
     computed_checksum = stdout.strip().split()[0]
     if computed_checksum != ORAS_SHA256_CHECKSUM:
@@ -704,9 +639,10 @@ def install_github_cli(ssh_client: paramiko.SSHClient) -> None:
     """
     
     exit_code, stdout, stderr = execute_remote_command(ssh_client, install_cmd, stream_output=True)
-    
+
     if exit_code != 0:
-        raise RuntimeError(f"Failed to install GitHub CLI: {stderr}")
+        # dnf repo add + install is network-dominated — retriable (D10).
+        raise TransientInstallError(f"Failed to install GitHub CLI: {stderr}")
     
     # Verify installation by executing gh version command
     exit_code, stdout, _ = execute_remote_command(
@@ -744,19 +680,25 @@ def install_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     # Pinned coldsnap version (Requirements: 17.15)
     COLDSNAP_VERSION = "v0.9.0"
     
-    # Clone coldsnap repository at pinned tag
+    # Clone coldsnap repository at pinned tag. A clone failure is network-dominated
+    # (git rate-limit / connectivity) — retriable (D10). `rm -rf` first so a retry
+    # after a partial clone starts from a clean tree.
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        f"git clone --branch {COLDSNAP_VERSION} --depth 1 https://github.com/awslabs/coldsnap.git",
+        f"rm -rf coldsnap && git clone --branch {COLDSNAP_VERSION} --depth 1 https://github.com/awslabs/coldsnap.git",
         stream_output=True
     )
     if exit_code != 0:
-        raise RuntimeError(f"Failed to clone coldsnap repository: {stderr}")
-    
+        raise TransientInstallError(f"Failed to clone coldsnap repository: {stderr}")
+
     # Build and install coldsnap using cargo install --locked.
     # PATH must include the cargo bin dir so that cargo can locate rustc internally —
     # non-login SSH sessions do not source ~/.bashrc or ~/.profile, so the directory
     # is not on PATH by default even though we installed Rust there.
+    #
+    # A compile failure is DETERMINISTIC (source that won't build, bad pin) — raise
+    # plain RuntimeError so the per-step retry (D10) fails fast rather than burning
+    # the expensive CPU-bound compile again for nothing.
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
         "cd coldsnap && PATH=/home/ec2-user/.cargo/bin:$PATH /home/ec2-user/.cargo/bin/cargo install --locked coldsnap",
@@ -777,147 +719,230 @@ def install_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     else:
         raise RuntimeError("Failed to verify coldsnap installation")
 
+def run_install_step(
+    step_fn: Any,
+    name: str,
+    ssh_client: paramiko.SSHClient,
+    max_attempts: int = INSTALL_MAX_ATTEMPTS,
+    base_delay: int = INSTALL_BASE_DELAY,
+) -> None:
+    """
+    Run one toolchain-install step with transient-retry / fail-fast semantics (D10).
+
+    Reacts to the *kind* of failure (the same transient-vs-deterministic distinction
+    D7 applies to the flavor loop, here applied to install):
+
+    - **TransientInstallError** (download timeout, clone rate-limit, dnf mirror
+      hiccup) → retry with exponential backoff, up to ``max_attempts``.
+    - **RuntimeError** (GPG/checksum mismatch, compile error, upstream 404 —
+      deterministic) → re-raise immediately; a retry would only burn the expensive
+      compile again for nothing.
+
+    Retries are scoped to a single step (the install functions are already
+    separate), so a late cheap-step blip does not trigger a full coldsnap recompile.
+
+    Args:
+        step_fn: The install function to run (takes the ssh_client)
+        name: Human-readable step name for logging
+        ssh_client: Connected paramiko SSHClient
+        max_attempts: Max attempts for transient failures
+        base_delay: Base backoff delay in seconds (doubled each retry)
+
+    Raises:
+        RuntimeError: On a deterministic failure, or after transient retries exhaust
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            step_fn(ssh_client)
+            return
+        except TransientInstallError as e:
+            if attempt >= max_attempts:
+                logger.error(f"{name}: transient failure persisted after {max_attempts} attempts")
+                raise RuntimeError(f"{name} failed after {max_attempts} attempts: {e}")
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(f"{name}: transient failure (attempt {attempt}/{max_attempts}): {e}")
+            logger.warning(f"{name}: retrying in {delay}s...")
+            time.sleep(delay)
+        # Deterministic RuntimeError (not a TransientInstallError) propagates
+        # immediately — fail fast, no retry.
+
+
 def install_all_tools(ssh_client: paramiko.SSHClient) -> None:
     """
-    Install all required tools on the build instance in sequence.
-    
+    Install all required tools on the build instance **once per run** (D10).
+
+    Consolidating the toolchain install from once-per-flavor to once-per-run moves
+    it *before* the flavor loop, where it is a **gate**: every flavor depends on it,
+    so it is not an isolatable per-flavor unit. Any install failure therefore
+    hard-aborts the whole run (zero results) — the caller must not enter the flavor
+    loop. Each step runs through ``run_install_step`` for per-step transient-retry /
+    deterministic-fail-fast handling.
+
     Executes installation functions in order: system dependencies, Rust, ORAS,
-    GitHub CLI, and coldsnap. Logs installation progress at INFO level.
-    Terminates build immediately if any tool installation fails.
-    
+    GitHub CLI, and coldsnap. Streams output to logs; each step self-verifies.
+
     Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8, 16.9, 16.10, 16.11, 16.12
-    
+
     Args:
         ssh_client: Connected paramiko SSHClient
-        
+
     Raises:
-        RuntimeError: If any tool installation fails with descriptive error
+        RuntimeError: If any tool installation fails (hard-abort of the whole run)
     """
-    logger.info("Installing all required tools...")
+    logger.info("Installing all required tools (once per run, before the flavor loop)...")
     logger.info("")
-    
+
+    steps = [
+        (install_system_dependencies, "system dependencies (git, gcc)"),
+        (install_rust, "Rust toolchain"),
+        (install_oras, "ORAS CLI"),
+        (install_github_cli, "GitHub CLI"),
+        (install_coldsnap, "coldsnap"),
+    ]
+
     try:
-        # Install system dependencies (git, gcc)
-        install_system_dependencies(ssh_client)
-        logger.info("")
-        
-        # Install Rust toolchain
-        install_rust(ssh_client)
-        logger.info("")
-        
-        # Install ORAS CLI
-        install_oras(ssh_client)
-        logger.info("")
-        
-        # Install GitHub CLI
-        install_github_cli(ssh_client)
-        logger.info("")
-        
-        # Install coldsnap
-        install_coldsnap(ssh_client)
-        logger.info("")
-        
+        for step_fn, name in steps:
+            run_install_step(step_fn, name, ssh_client)
+            logger.info("")
+
         logger.info("✓ All tools installed successfully")
-        
+
     except RuntimeError as e:
         logger.error(f"Tool installation failed: {e}")
-        logger.error("Build process will terminate immediately")
+        logger.error("Install is a gate — the whole run is aborted (zero AMIs produced)")
         raise
 
-def pull_artifact_from_ghcr(ssh_client: paramiko.SSHClient, artifact_ref: str) -> None:
+def reset_artifacts_dir(ssh_client: paramiko.SSHClient, artifacts_base: str) -> None:
+    """
+    Wipe and recreate the shared artifacts working directory (D4, wipe-and-reuse).
+
+    On the single shared instance every flavor reuses one artifacts tree, so it must
+    be reset to a known-empty state before each flavor's pull. This is required for
+    both correctness — the upload path enforces exactly one ``.raw`` in
+    ``build-output``, which a previous flavor's leftover would violate — and capacity
+    — only one flavor's OCI blob + unpacked ``.raw`` occupies the 30 GB root at a
+    time, instead of all flavors accumulating.
+
+    Args:
+        ssh_client: Connected paramiko SSHClient
+        artifacts_base: Base artifacts directory on the instance (e.g. ~/artifacts)
+
+    Raises:
+        RuntimeError: If the reset fails
+    """
+    logger.info(f"Resetting artifacts working directory: {artifacts_base}")
+    exit_code, _, stderr = execute_remote_command(
+        ssh_client,
+        f"rm -rf {artifacts_base} && mkdir -p {artifacts_base}",
+        stream_output=False,
+    )
+    if exit_code != 0:
+        raise RuntimeError(f"Failed to reset artifacts directory {artifacts_base}: {stderr}")
+
+
+def pull_artifact_from_ghcr(
+    ssh_client: paramiko.SSHClient,
+    artifact_ref: str,
+    artifacts_base: str = "~/artifacts",
+) -> None:
     """
     Pull artifact bundle from GitHub Container Registry using ORAS.
-    
-    Creates ~/artifacts directory on the build instance, executes oras pull
-    to download the artifact bundle using the exact sha256 digest (ignoring
-    any mutable tag), streams output to logger, verifies exit code is 0,
-    and lists downloaded files with sizes.
-    
+
+    Executes oras pull to download the artifact bundle using the exact sha256 digest
+    (ignoring any mutable tag), streams output to logger, verifies exit code is 0,
+    and lists downloaded files with sizes. The caller is expected to have already
+    reset ``artifacts_base`` (wipe-and-reuse, D4).
+
     Args:
         ssh_client: Connected paramiko SSHClient
         artifact_ref: GitHub Container Registry artifact reference (digest-pinned)
-    
+        artifacts_base: Base artifacts directory on the instance (e.g. ~/artifacts)
+
     Raises:
         RuntimeError: If directory creation, ORAS pull, or file listing fails
-    
+
     Requirements: 15.19, 18.1, 18.2, 18.3, 18.8, 18.9
     """
     # Use only the digest for the pull — ignore any mutable tag
     digest_ref = get_digest_pinned_ref(artifact_ref)
     logger.info(f"Pulling artifact from GHCR using digest: {digest_ref}")
-    
-    # Create working directory for artifacts
+
+    # Ensure the working directory exists (reset_artifacts_dir normally created it)
     exit_code, _, stderr = execute_remote_command(
         ssh_client,
-        "mkdir -p ~/artifacts",
+        f"mkdir -p {artifacts_base}",
         stream_output=False
     )
-    
+
     if exit_code != 0:
         raise RuntimeError(f"Failed to create artifacts directory: {stderr}")
-    
+
     # Pull artifacts using ORAS with digest-pinned reference (no authentication required for public repos)
     logger.info("Downloading artifacts with ORAS...")
-    pull_cmd = f"cd ~/artifacts && oras pull {digest_ref}"
-    
+    pull_cmd = f"cd {artifacts_base} && oras pull {digest_ref}"
+
     exit_code, stdout, stderr = execute_remote_command(ssh_client, pull_cmd, stream_output=True)
-    
+
     if exit_code != 0:
         raise RuntimeError(f"ORAS pull failed: {stderr}")
-    
+
     logger.info("Artifacts downloaded successfully")
-    
-    # List downloaded files in ~/artifacts/build-output using ls -lh
+
+    # List downloaded files in build-output using ls -lh
     logger.info("Listing downloaded artifacts...")
     exit_code, stdout, stderr = execute_remote_command(
         ssh_client,
-        "ls -lh ~/artifacts/build-output",
+        f"ls -lh {artifacts_base}/build-output",
         stream_output=False
     )
-    
+
     if exit_code != 0:
         raise RuntimeError(f"Failed to list artifacts in build-output: {stderr}")
-    
+
     logger.info(f"Downloaded artifacts:\n{stdout}")
 
 
-def validate_artifact_files(ssh_client: paramiko.SSHClient) -> None:
+def validate_artifact_files(
+    ssh_client: paramiko.SSHClient,
+    artifacts_base: str = "~/artifacts",
+) -> None:
     """
     Validate that required artifact files exist after download.
-    
-    Verifies the raw disk image exists using ls ~/artifacts/build-output/*.raw
+
+    Verifies the raw disk image exists using ls <base>/build-output/*.raw
     and pcr_measurements.json exists using test -f command.
-    
+
     Args:
         ssh_client: Connected paramiko SSHClient
-    
+        artifacts_base: Base artifacts directory on the instance (e.g. ~/artifacts)
+
     Raises:
         RuntimeError: If raw disk image or pcr_measurements.json is missing
-    
+
     Requirements: 18.4, 18.5, 18.10, 18.11
     """
     logger.info("Validating downloaded artifact files...")
-    
+
     # Verify raw disk image exists
     exit_code, stdout, _ = execute_remote_command(
         ssh_client,
-        "ls ~/artifacts/build-output/*.raw",
+        f"ls {artifacts_base}/build-output/*.raw",
         stream_output=False
     )
-    
+
     if exit_code != 0:
         raise RuntimeError("Raw disk image (.raw file) not found in build-output directory")
-    
+
     # Verify pcr_measurements.json exists
     exit_code, _, _ = execute_remote_command(
         ssh_client,
-        "test -f ~/artifacts/build-output/pcr_measurements.json",
+        f"test -f {artifacts_base}/build-output/pcr_measurements.json",
         stream_output=False
     )
-    
+
     if exit_code != 0:
         raise RuntimeError("pcr_measurements.json not found in build-output directory")
-    
+
     logger.info("All required artifact files verified successfully")
 
 
@@ -1005,31 +1030,35 @@ def check_debug_annotation(ssh_client: paramiko.SSHClient, artifact_ref: str, al
         logger.info("Artifact is not a debug image (debug=%s), proceeding normally", debug_value)
 
 
-def validate_pcr_measurements(ssh_client: paramiko.SSHClient) -> dict:
+def validate_pcr_measurements(
+    ssh_client: paramiko.SSHClient,
+    artifacts_base: str = "~/artifacts",
+) -> dict:
     """
     Read and validate PCR measurements from pcr_measurements.json.
-    
+
     Reads pcr_measurements.json content using cat command, parses JSON,
     extracts PCR4 and PCR7 from Measurements field, validates they are
     non-empty hex strings, and returns a dict with pcr4 and pcr7.
-    
+
     Args:
         ssh_client: Connected paramiko SSHClient
-    
+        artifacts_base: Base artifacts directory on the instance (e.g. ~/artifacts)
+
     Returns:
         Dict with structure: {"Measurements": {"PCR4": "...", "PCR7": "..."}}
-    
+
     Raises:
         RuntimeError: If reading, parsing, or validation fails
-    
+
     Requirements: 18.6, 18.7, 18.12
     """
     logger.info("Reading and validating PCR measurements...")
-    
+
     # Read pcr_measurements.json content using cat command
     exit_code, stdout, _ = execute_remote_command(
         ssh_client,
-        "cat ~/artifacts/build-output/pcr_measurements.json",
+        f"cat {artifacts_base}/build-output/pcr_measurements.json",
         stream_output=False
     )
     
@@ -1189,23 +1218,36 @@ def verify_artifact_signature(
 
     return True
 
-def upload_snapshot(ssh_client: paramiko.SSHClient, region: str) -> str:
+def upload_snapshot(
+    ssh_client: paramiko.SSHClient,
+    region: str,
+    run_id: str,
+    artifacts_base: str = "~/artifacts",
+) -> str:
     """
     Upload the raw disk image to an EBS snapshot using coldsnap.
-    
+
+    The upload is tagged ``run_id=<run_id>`` (D13). coldsnap v0.9.0 applies
+    ``--tag`` on the ``StartSnapshot`` call — i.e. at snapshot *birth* — so even a
+    snapshot abandoned mid-upload (e.g. a D12 reconnect race) carries the run id
+    from creation, giving orphan snapshots the same run-scoped sweep key as orphan
+    instances.
+
     Args:
         ssh_client: Connected paramiko SSHClient
         region: AWS region for snapshot creation
-    
+        run_id: Run identifier applied as the ``run_id`` snapshot tag value
+        artifacts_base: Base artifacts directory on the instance (e.g. ~/artifacts)
+
     Returns:
         Snapshot ID string
     """
     logger.info("Uploading raw disk image to EBS snapshot...")
-    
+
     # Find the raw disk image file in build-output directory using programmatic listing
     exit_code, stdout, stderr = execute_remote_command(
         ssh_client,
-        "find ~/artifacts/build-output -maxdepth 1 -name '*.raw' -type f",
+        f"find {artifacts_base}/build-output -maxdepth 1 -name '*.raw' -type f",
         stream_output=False
     )
     
@@ -1235,17 +1277,24 @@ def upload_snapshot(ssh_client: paramiko.SSHClient, region: str) -> str:
         )
     
     logger.info(f"Found raw disk image: {raw_image_path}")
-    
-    # Upload using coldsnap with subprocess list arguments (no shell interpolation)
+
+    # Defense-in-depth: run_id is interpolated into the remote shell command below,
+    # so re-assert the strict format even though the CLI already validated it.
+    validate_run_id(run_id)
+
+    # Upload using coldsnap, tagging the snapshot with the run id at StartSnapshot (D13).
     logger.info("Uploading snapshot with coldsnap (this may take several minutes)...")
-    
-    coldsnap_command = f"/home/ec2-user/.cargo/bin/coldsnap upload {raw_image_path}"
+
+    coldsnap_command = (
+        f"/home/ec2-user/.cargo/bin/coldsnap upload "
+        f"--tag run_id={run_id} {raw_image_path}"
+    )
     exit_code, stdout, stderr = execute_remote_command(
         ssh_client,
         coldsnap_command,
         stream_output=True
     )
-    
+
     if exit_code != 0:
         raise RuntimeError(f"coldsnap upload failed: {stderr}")
     
@@ -1445,25 +1494,291 @@ def generate_build_result(
     return build_result
 
 
-def cleanup_infrastructure(
-    region: str,
-    instance_type: str,
-    allowed_ssh_cidr: str,
-    ssh_key_path: str,
-    ssh_client: Optional[paramiko.SSHClient] = None
-) -> None:
+# Transport/timeout exceptions that mean "host suspect" (D7): the host may have
+# died, so the driver attempts a bounded reconnect (D12) rather than treating the
+# failure as flavor-local.
+_TRANSPORT_EXCEPTIONS = (TransportError, RemoteCommandTimeout, paramiko.SSHException, OSError)
+
+
+def kill_stale_coldsnap(ssh_client: paramiko.SSHClient) -> None:
     """
-    Destroy all resources:
-    - Close SSH client connection if open
-    - Terraform infrastructure
-    - SSH key
+    Best-effort terminate any abandoned ``coldsnap`` upload on the instance (D12).
+
+    After a transport drop interrupted an in-flight upload, the remote ``coldsnap``
+    process (spawned with ``get_pty=False``) is commonly reparented to init and keeps
+    running: because the unlinked ``.raw`` inode survives while its fd is open, the
+    zombie can reach ``CompleteSnapshot`` *after* the driver resumes — minting a
+    fully-billed orphan snapshot the driver never captured AND briefly running a
+    second set of 64 ``PutSnapshotBlock`` workers alongside the next flavor's,
+    transiently violating D5's "sequential ⇒ never 2×64" guarantee. Killing it over
+    the fresh channel before wiping closes both paths in one cheap step. Failures are
+    swallowed — this is a courtesy cleanup, not a correctness gate.
 
     Args:
-        region: AWS region for the instance
-        instance_type: EC2 instance type for the instance
-        allowed_ssh_cidr: CIDR block for SSH access
-        ssh_key_path: Path to the temporary SSH key file
-        ssh_client: Optional SSH client to close before cleanup
+        ssh_client: Freshly reconnected paramiko SSHClient
+    """
+    try:
+        logger.info("Best-effort: terminating any abandoned coldsnap upload...")
+        # `|| true` so a "no matching process" exit (the common, healthy case) is not
+        # itself treated as a failure.
+        execute_remote_command(
+            ssh_client,
+            "pkill -f coldsnap || true",
+            stream_output=False,
+            timeout=60,
+        )
+    except Exception as e:
+        logger.warning(f"Best-effort coldsnap kill failed (ignored): {e}")
+
+
+def reconnect_ssh(
+    host: str,
+    username: str,
+    ssh_key_path: str,
+) -> Optional[paramiko.SSHClient]:
+    """
+    Attempt a bounded SSH reconnect after a transport/timeout error (D12).
+
+    Reuses ``verify_ssh_connectivity``'s existing retry loop. The reconnect outcome
+    is itself the **host-alive vs host-dead discriminator**: success ⇒ the host was
+    alive (a transient TCP drop) ⇒ the driver resumes; failure after the bounded
+    attempts ⇒ the host is genuinely dead ⇒ the driver falls through to D7's abort.
+
+    Returns:
+        A connected SSHClient on success, or None if all attempts failed.
+    """
+    logger.warning("Transport error — attempting bounded SSH reconnect (host-alive probe)...")
+    try:
+        return verify_ssh_connectivity(
+            host,
+            username,
+            ssh_key_path,
+            max_attempts=RECONNECT_MAX_ATTEMPTS,
+            delay=RECONNECT_DELAY,
+        )
+    except (paramiko.SSHException, OSError) as e:
+        logger.error(f"SSH reconnect failed after {RECONNECT_MAX_ATTEMPTS} attempts: {e}")
+        return None
+
+
+def build_flavor_pass1(
+    ssh_client: paramiko.SSHClient,
+    flavor: dict,
+    region: str,
+    run_id: str,
+    artifacts_base: str,
+    allow_debug: bool,
+    expected_workflow: Optional[str],
+) -> dict:
+    """
+    Pass 1 for a single flavor (D5): wipe → pull → verify → validate → upload.
+
+    Runs the host-dependent portion of one flavor's build on the shared instance and
+    returns the captured snapshot id plus the metadata Pass 2 needs to register the
+    AMI. Once ``coldsnap upload`` returns a snapshot id the flavor is safe from host
+    death (D8) — the snapshot lives server-side and Pass 2 runs off the runner's
+    boto3 client — so the caller discards the ``.raw`` afterward (implicitly, via the
+    next flavor's wipe).
+
+    Application errors (bad signature, debug gate, validation) raise ``RuntimeError``
+    (host healthy → flavor-local). Transport/timeout errors propagate as their own
+    exception types (host suspect → driver reconnect path).
+
+    Args:
+        ssh_client: Connected paramiko SSHClient
+        flavor: Manifest entry {flavor, artifact_ref, container_image_digest, relaxations}
+        region: AWS region
+        run_id: Run identifier (snapshot tag value)
+        artifacts_base: Shared artifacts base dir on the instance
+        allow_debug: Whether debug artifacts are permitted
+        expected_workflow: Expected workflow path for provenance verification
+
+    Returns:
+        Dict: {flavor, snapshot_id, pcr_measurements, container_image_digest, relaxations}
+    """
+    name = flavor["flavor"]
+    artifact_ref = flavor["artifact_ref"]
+
+    logger.info("")
+    logger.info("-" * 80)
+    logger.info(f"Pass 1 — building flavor: {name}")
+    logger.info("-" * 80)
+
+    # Wipe-and-reuse: start every flavor from a known-empty tree (D4).
+    reset_artifacts_dir(ssh_client, artifacts_base)
+
+    # Verify the artifact signature BEFORE downloading the artifact bytes
+    # (Requirements 17.9/17.10/17.12 — verify-before-download). `verify_artifact_signature`
+    # targets the registry directly (`gh attestation verify oci://…`), so it needs no
+    # local pull. Failure is an application error (host healthy) → RuntimeError.
+    if not verify_artifact_signature(ssh_client, artifact_ref, expected_workflow=expected_workflow):
+        raise RuntimeError(f"Signature verification FAILED for flavor '{name}'")
+
+    # Pull the (now-verified) digest-pinned artifact bundle.
+    pull_artifact_from_ghcr(ssh_client, artifact_ref, artifacts_base)
+
+    # Validate the pulled files, enforce the debug production gate, read PCRs.
+    validate_artifact_files(ssh_client, artifacts_base)
+    check_debug_annotation(ssh_client, artifact_ref, allow_debug)
+    pcr_measurements = validate_pcr_measurements(ssh_client, artifacts_base)
+
+    # Upload to an EBS snapshot, tagged with the run id (D13). This is the last
+    # host-dependent moment for this flavor (D8).
+    snapshot_id = upload_snapshot(ssh_client, region, run_id, artifacts_base)
+
+    logger.info(f"Pass 1 complete for '{name}': snapshot {snapshot_id}")
+
+    return {
+        "flavor": name,
+        "snapshot_id": snapshot_id,
+        "pcr_measurements": pcr_measurements,
+        "container_image_digest": flavor.get("container_image_digest"),
+        "relaxations": flavor.get("relaxations") or {},
+    }
+
+
+def run_build_driver(
+    ssh_client: paramiko.SSHClient,
+    ec2_client: Any,
+    flavors: list,
+    host: str,
+    username: str,
+    ssh_key_path: str,
+    region: str,
+    run_id: str,
+    producing_commit: Optional[str],
+    artifacts_base: str,
+    output_dir: str,
+    allow_debug: bool,
+    expected_workflow: Optional[str],
+) -> Tuple[dict, paramiko.SSHClient]:
+    """
+    Two-pass multi-flavor driver on the shared instance (D5, D7, D8, D12).
+
+    **Pass 1 (sequential, host-dependent):** build each flavor and capture its
+    snapshot id. React to the *kind* of failure (D7):
+
+    - **Application error** (RuntimeError: bad signature / debug gate / validation)
+      → host healthy → record the flavor failed and **continue**.
+    - **Transport/timeout** (raised paramiko/timeout exception) → host suspect →
+      attempt a bounded reconnect (D12). Reconnect success ⇒ host was alive ⇒
+      best-effort kill the abandoned upload, record the interrupted flavor as
+      failed/indeterminate, and **resume at the next flavor**. Reconnect failure ⇒
+      host genuinely dead ⇒ **stop** further Pass 1 flavors (mark them skipped).
+
+    **Pass 2 (batched, host-independent):** for every flavor that captured a snapshot
+    id, wait for completion and register the AMI via the runner's boto3 client — this
+    survives the build instance dying (D8). A Pass-1-failed flavor is excluded; a
+    Pass-2 wait/register failure for one flavor does not abort the others.
+
+    Returns:
+        (results, ssh_client): a {flavor: status} map and the possibly-reconnected
+        SSH client (so the caller's finally can close the live one).
+    """
+    results: dict = {}
+    captured: list = []  # Pass-1 successes eligible for Pass 2
+
+    # ---- Pass 1 -------------------------------------------------------------
+    idx = 0
+    while idx < len(flavors):
+        flavor = flavors[idx]
+        name = flavor["flavor"]
+        try:
+            result = build_flavor_pass1(
+                ssh_client, flavor, region, run_id, artifacts_base,
+                allow_debug, expected_workflow,
+            )
+            captured.append(result)
+            results[name] = "pass1-ok"
+            idx += 1
+        except _TRANSPORT_EXCEPTIONS as e:
+            # Host suspect — the reconnect outcome decides alive vs dead (D12).
+            logger.error(f"Transport/timeout error building flavor '{name}': {e}")
+            results[name] = "failed-transport-indeterminate"
+            new_client = reconnect_ssh(host, username, ssh_key_path)
+            if new_client is not None:
+                # Host was alive: clean up the abandoned upload, resume at next flavor.
+                ssh_client = new_client
+                kill_stale_coldsnap(ssh_client)
+                logger.warning(f"Reconnected — resuming at the flavor after '{name}'")
+                idx += 1
+                continue
+            # Host genuinely dead: stop Pass 1, mark the rest skipped (D7).
+            logger.error("Reconnect failed — host is genuinely dead; aborting remaining Pass 1 flavors")
+            for skipped in flavors[idx + 1:]:
+                results[skipped["flavor"]] = "skipped-host-dead"
+            break
+        except RuntimeError as e:
+            # Application error — host healthy, continue to the next flavor (D7).
+            logger.error(f"Application error building flavor '{name}': {e}")
+            results[name] = "failed-application"
+            idx += 1
+
+    # ---- Pass 2 -------------------------------------------------------------
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info(f"Pass 2 — waiting on {len(captured)} snapshot(s) and registering AMIs")
+    logger.info("=" * 80)
+
+    architecture = "x86_64"
+    for result in captured:
+        name = result["flavor"]
+        snapshot_id = result["snapshot_id"]
+        try:
+            wait_for_snapshot(ec2_client, snapshot_id)
+
+            ami_name = (
+                f"attestable-ami-{name}-{architecture}-"
+                f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
+            )
+            ami_id = register_ami(
+                ec2_client, snapshot_id, architecture, ami_name,
+                container_image_digest=result["container_image_digest"],
+                producing_commit=producing_commit,
+            )
+
+            output_file = os.path.join(output_dir, f"ami_build_result-{name}.json")
+            generate_build_result(
+                ami_id=ami_id,
+                snapshot_id=snapshot_id,
+                region=region,
+                pcr_measurements=result["pcr_measurements"],
+                output_file=output_file,
+                container_image_digest=result["container_image_digest"],
+                producing_commit=producing_commit,
+                relaxations=result["relaxations"],
+            )
+            results[name] = "success"
+            logger.info(f"✓ Flavor '{name}' registered: {ami_id}")
+        except Exception as e:
+            # Isolate Pass-2 failure to this flavor — do not abort the others (D5).
+            logger.error(f"Pass 2 failed for flavor '{name}': {e}")
+            results[name] = "failed-pass2"
+
+    return results, ssh_client
+
+
+def cleanup_script_resources(
+    ssh_key_path: Optional[str],
+    ssh_client: Optional[paramiko.SSHClient] = None,
+) -> None:
+    """
+    Release the resources the *script* owns (D1): close the SSH connection and
+    securely delete the temporary SSH key.
+
+    The script no longer runs ``terraform destroy`` — teardown of the shared build
+    instance is owned by the workflow's ``always()`` destroy step, on the same
+    runner that ran ``terraform apply`` (the build-ami Terraform state is gitignored
+    and local, so only that runner can destroy it). Keeping destroy out of the
+    script is what lets the workflow own the single, retrying, fail-loud teardown.
+
+    Note: when this script is handed a pre-provisioned key path (the normal path),
+    the key file is the workflow's to manage; secure-deleting it here is a
+    best-effort courtesy and is guarded so it never fails the run.
+
+    Args:
+        ssh_key_path: Path to the temporary SSH key file (may be None)
+        ssh_client: Optional SSH client to close
 
     Requirements: 20.7, 20.8, 20.9, 20.10, 20.11, 20.13, 20.14
     """
@@ -1475,40 +1790,7 @@ def cleanup_infrastructure(
         except Exception as e:
             logger.error(f"Failed to close SSH client: {e}")
 
-    logger.info("Destroying infrastructure with Terraform...")
-
-    # Initialize Terraform
-    tf_working_dir = Path(__file__).parent.parent / 'terraform' / 'build-ami'
-
-    # Prepare variables (same as used during apply)
-    tf_vars = {
-        'region': region,
-        'instance_type': instance_type,
-        'allowed_ssh_cidr': allowed_ssh_cidr
-    }
-
-    # Destroy infrastructure with auto-approve flag and variables
-    cmd = ['terraform', 'destroy', '-auto-approve']
-    for key, value in tf_vars.items():
-        cmd.extend(['-var', f'{key}={value}'])
-
-    result = subprocess.run(
-        cmd,
-        cwd=tf_working_dir,
-        capture_output=True,
-        text=True
-    )
-
-    if result.returncode != 0:
-        logger.error(f"Terraform destroy failed: {result.stderr}")
-    else:
-        logger.info("Infrastructure destroyed successfully")
-
-    # NOTE: Terraform state (terraform/build-ami/) contains sensitive SSH key
-    # material. Ensure state files are not committed to version control and are
-    # stored securely if retained.
-
-    # Clean up temporary SSH key file
+    # Securely delete the temporary SSH key file (overwrite before unlink)
     if ssh_key_path and os.path.exists(ssh_key_path):
         try:
             # Overwrite with random bytes before unlinking to prevent recovery
@@ -1518,51 +1800,123 @@ def cleanup_infrastructure(
                 f.write(os.urandom(file_size))
             os.unlink(ssh_key_path)
             logger.info(f"Temporary SSH key file securely deleted: {ssh_key_path}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to securely delete SSH key {ssh_key_path}: {e}")
+
+def load_flavors_manifest(manifest_path: str) -> list:
+    """
+    Load and validate the multi-flavor build manifest.
+
+    The workflow builds this from the per-flavor ``build-context-<flavor>``
+    artifacts. It is a JSON array; each entry describes one flavor to build on the
+    shared instance:
+
+        [
+          {"flavor": "default",
+           "artifact_ref": "ghcr.io/owner/repo/pkg@sha256:...",
+           "container_image_digest": "sha256:...",
+           "relaxations": {}},
+          ...
+        ]
+
+    Each ``artifact_ref`` is validated against the same strict, digest-pinned
+    allowlist the single-flavor path used.
+
+    Args:
+        manifest_path: Path to the manifest JSON file
+
+    Returns:
+        List of validated flavor entries
+
+    Raises:
+        ValueError: If the manifest is malformed or any entry is invalid
+    """
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    if not isinstance(manifest, list) or not manifest:
+        raise ValueError(f"Flavors manifest must be a non-empty JSON array: {manifest_path}")
+
+    for entry in manifest:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Each manifest entry must be an object, got: {entry!r}")
+        if not entry.get("flavor"):
+            raise ValueError(f"Manifest entry missing 'flavor': {entry!r}")
+        if not entry.get("artifact_ref"):
+            raise ValueError(f"Manifest entry for '{entry.get('flavor')}' missing 'artifact_ref'")
+        validate_artifact_reference(entry["artifact_ref"])
+
+    logger.info(f"Loaded {len(manifest)} flavor(s) from manifest: "
+                f"{', '.join(e['flavor'] for e in manifest)}")
+    return manifest
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description='Convert pre-built KIWI image from GitHub Container Registry and create AMI'
+        description='Build one AMI per flavor on a single pre-provisioned instance'
     )
-    
+
     parser.add_argument(
-        '--artifact-ref',
+        '--host',
         type=str,
         required=True,
-        help='GitHub Container Registry artifact reference with digest pin '
-             '(e.g., ghcr.io/owner/repo/package:tag@sha256:<64 hex chars> or '
-             'ghcr.io/owner/repo/package@sha256:<64 hex chars>). '
-             'A @sha256: digest is REQUIRED; tag-only references are rejected.'
+        help='Public host/IP of the pre-provisioned build instance (provisioned by '
+             'the workflow via terraform apply). The script does NOT provision it.'
     )
-    
+
+    parser.add_argument(
+        '--ssh-key-path',
+        type=str,
+        required=True,
+        help='Path to the SSH private key file for the pre-provisioned instance.'
+    )
+
+    parser.add_argument(
+        '--run-id',
+        type=str,
+        required=True,
+        help='Run identifier (${github.run_id}-${github.run_attempt}), used SOLELY '
+             'as an EBS-snapshot tag value (coldsnap upload --tag run_id=<run_id>). '
+             'The script runs no Terraform and does no resource naming (D13).'
+    )
+
+    parser.add_argument(
+        '--flavors-manifest',
+        type=str,
+        required=True,
+        help='Path to the JSON manifest listing the flavors to build (each with '
+             'flavor, artifact_ref, container_image_digest, relaxations).'
+    )
+
     parser.add_argument(
         '--region',
         type=str,
         default='us-east-1',
         help='AWS region for AMI creation (e.g., us-east-1)'
     )
-    
+
     parser.add_argument(
-        '--instance-type',
+        '--output-dir',
         type=str,
-        default='c5.9xlarge',
-        help='Instance type for AMI build instance (default: c5.9xlarge)'
+        default='.',
+        help='Directory where per-flavor ami_build_result-<flavor>.json files are '
+             'written (default: current directory).'
     )
-    
+
     parser.add_argument(
-        '--output-file',
+        '--artifacts-base-path',
         type=str,
-        default='ami_build_result.json',
-        help='Output file for build result (default: ami_build_result.json)'
+        default='~/artifacts',
+        help='Base artifacts working directory on the build instance, reset before '
+             'each flavor (wipe-and-reuse). Default: ~/artifacts.'
     )
 
     parser.add_argument(
         '--allow-debug',
         action='store_true',
         default=False,
-        help='Allow building AMI from debug (SSH-enabled) artifacts. '
+        help='Allow building AMIs from debug (SSH-enabled) artifacts. '
              'Without this flag, debug artifacts are rejected.'
     )
 
@@ -1576,15 +1930,6 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        '--container-image-digest',
-        type=str,
-        default=None,
-        help='The baked execution container image manifest digest (sha256:...). '
-             'Tagged onto the registered AMI and emitted in the single-entry '
-             'verifier record so external verifiers can map AMI -> image digest.'
-    )
-
-    parser.add_argument(
         '--producing-commit',
         type=str,
         default=None,
@@ -1593,187 +1938,102 @@ def parse_arguments() -> argparse.Namespace:
              'creates afterward. Defaults to the GITHUB_SHA environment variable.'
     )
 
-    parser.add_argument(
-        '--relaxations-file',
-        type=str,
-        default=None,
-        help='Path to a JSON file containing bucket-① relaxations for this flavor '
-             '(produced by print_config.py --relaxations-output). Included in '
-             'verifier_record.relaxations in the output (task 7.2). '
-             'If absent or unreadable, relaxations default to {}.'
-    )
-
     return parser.parse_args()
 
+
 def main() -> int:
-    """Main entry point for AMI build script."""
+    """Main entry point for the multi-flavor AMI build driver."""
     args = parse_arguments()
-    
+
     logger.info("=" * 80)
-    logger.info("Starting AMI Build Process")
+    logger.info("Starting AMI Build Process (single shared instance, multi-flavor)")
     logger.info("=" * 80)
-    logger.info(f"Artifact Reference: {args.artifact_ref}")
+    logger.info(f"Host: {args.host}")
     logger.info(f"Region: {args.region}")
-    logger.info(f"Instance Type: {args.instance_type}")
-    
-    # Validate configuration (Requirement 14.2)
+    logger.info(f"Run id: {args.run_id}")
+
+    # Validate configuration
     logger.info("")
     logger.info("Validating configuration...")
     try:
-        validate_artifact_reference(args.artifact_ref)
         validate_aws_region(args.region)
-        validate_output_file_path(args.output_file)
-    except ValueError as e:
+        validate_run_id(args.run_id)
+        flavors = load_flavors_manifest(args.flavors_manifest)
+    except (ValueError, FileNotFoundError, json.JSONDecodeError) as e:
         logger.error(f"Configuration validation failed: {e}")
         return 1
 
+    # Ensure the output directory exists.
+    os.makedirs(args.output_dir, exist_ok=True)
+
     # Initialize AWS clients
     ec2_client = boto3.client('ec2', region_name=args.region)
-    
-    instance_id: Optional[str] = None
+
     ssh_client: Optional[paramiko.SSHClient] = None
-    ssh_key_path: Optional[str] = None
-    ami_id: Optional[str] = None
-    snapshot_id: Optional[str] = None
-    
-    # Contruct allowed SSH CIDR from user public IP address
-    my_public_ip = get_user_public_ip()
-    allowed_ssh_cidr = f"{my_public_ip}/32"
-    
+    # C_src: the source commit that triggered this build. Prefer the explicit CLI
+    # arg (so the workflow can document intent); fall back to GITHUB_SHA.
+    producing_commit = args.producing_commit or os.environ.get("GITHUB_SHA")
+
     try:
-        # Provision AMI build instance
+        # Connect to the already-provisioned instance (the workflow owns terraform
+        # apply/destroy; the script only builds on the instance — D1).
         logger.info("")
         logger.info("=" * 80)
-        logger.info("Provisioning AMI build instance")
+        logger.info("Connecting to the pre-provisioned build instance")
         logger.info("=" * 80)
-        
-        instance_id, public_ip, ssh_private_key = provision_ami_build_instance(
-            region=args.region,
-            instance_type=args.instance_type,
-        )
+        ssh_client = verify_ssh_connectivity(args.host, 'ec2-user', args.ssh_key_path)
 
-        # Save SSH private key to temporary file
-        ssh_key_path = save_ssh_private_key(ssh_private_key)
-        
-        # Wait for instance to be ready
-        wait_for_instance_ready(ec2_client, instance_id)
-        
-        # Verify SSH connectivity
-        ssh_client = verify_ssh_connectivity(
-            public_ip,
-            'ec2-user',
-            ssh_key_path
-        )
-
-        # Use SSH command to install tools on the instance
+        # Install the toolchain ONCE, before the flavor loop (gate — D10).
         logger.info("")
         logger.info("=" * 80)
-        logger.info("Installing Tools on AMI build Instance")
+        logger.info("Installing tools once (before the flavor loop)")
         logger.info("=" * 80)
-        
         install_all_tools(ssh_client)
 
-        # Verify artifact signature
+        # Drive all flavors in two passes with failure isolation (D5/D7/D8/D12).
         logger.info("")
         logger.info("=" * 80)
-        logger.info("Verifying Artifact Signature")
+        logger.info("Building flavors (two-pass driver)")
         logger.info("=" * 80)
-        
-        signature_valid = verify_artifact_signature(
-            ssh_client,
-            args.artifact_ref,
-            expected_workflow=args.expected_workflow
-        )
-
-        if not signature_valid:
-            # Signature verification failed - terminate without creating AMI
-            logger.error("")
-            logger.error("=" * 80)
-            logger.error("SIGNATURE VERIFICATION FAILED")
-            logger.error("=" * 80)
-            logger.error("The artifact signature could not be verified.")
-            logger.error("This could indicate:")
-            logger.error("  - The artifact was not attested")
-            logger.error("  - The signature does not match the expected GitHub identity")
-            logger.error("  - The artifact has been tampered with")
-            logger.error("")
-            logger.error("AMI creation will NOT proceed.")
-            logger.error("Please verify the artifact reference and try again.")
-            logger.error("=" * 80)
-
-            raise RuntimeError("SIGNATURE VERIFICATION FAILED")
-
-        # Pull artifact from GHCR
-        logger.info("")
-        logger.info("=" * 80)
-        logger.info("Pulling Artifact from GitHub Container Registry")
-        logger.info("=" * 80)
-        
-        pull_artifact_from_ghcr(ssh_client, args.artifact_ref)
-
-        # Validate artifact files
-        logger.info("")
-        logger.info("Validating artifact files...")
-        validate_artifact_files(ssh_client)
-
-        # Check debug annotation and enforce production gate (Requirement 46.3, 46.4, 46.5)
-        logger.info("")
-        logger.info("Checking debug annotation...")
-        check_debug_annotation(ssh_client, args.artifact_ref, args.allow_debug)
-
-        # Validate and extract PCR measurements
-        logger.info("")
-        logger.info("Validating PCR measurements...")
-        pcr_measurement = validate_pcr_measurements(ssh_client)
-
-        # Upload snapshot and register AMI
-        logger.info("")
-        logger.info("=" * 80)
-        logger.info("Uploading Snapshot and Registering AMI")
-        logger.info("=" * 80)
-        
-        architecture = "x86_64"
-        snapshot_id = upload_snapshot(ssh_client, args.region)
-        wait_for_snapshot(ec2_client, snapshot_id)
-        ami_name = f"attestable-ami-imported-{architecture}-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
-        # C_src: the source commit that triggered this build.  Prefer the explicit
-        # CLI arg (so the workflow can document intent); fall back to GITHUB_SHA.
-        producing_commit = args.producing_commit or os.environ.get("GITHUB_SHA")
-        ami_id = register_ami(
-            ec2_client, snapshot_id, architecture, ami_name,
-            container_image_digest=args.container_image_digest,
-            producing_commit=producing_commit,
-        )
-
-        # Save build results
-        logger.info("")
-        logger.info("=" * 80)
-        logger.info("Save Results")
-        logger.info("=" * 80)
-
-        # Load bucket-① relaxations from file if provided (task 7.2).
-        relaxations: dict = {}
-        if args.relaxations_file:
-            try:
-                with open(args.relaxations_file) as _rf:
-                    relaxations = json.load(_rf)
-            except (FileNotFoundError, json.JSONDecodeError) as _e:
-                logger.warning(f"Could not read relaxations file {args.relaxations_file}: {_e}")
-
-        generate_build_result(
-            ami_id=ami_id,
-            snapshot_id=snapshot_id,
+        results, ssh_client = run_build_driver(
+            ssh_client=ssh_client,
+            ec2_client=ec2_client,
+            flavors=flavors,
+            host=args.host,
+            username='ec2-user',
+            ssh_key_path=args.ssh_key_path,
             region=args.region,
-            pcr_measurements=pcr_measurement,
-            output_file=args.output_file,
-            container_image_digest=args.container_image_digest,
+            run_id=args.run_id,
             producing_commit=producing_commit,
-            relaxations=relaxations,
+            artifacts_base=args.artifacts_base_path,
+            output_dir=args.output_dir,
+            allow_debug=args.allow_debug,
+            expected_workflow=args.expected_workflow,
         )
 
+        # Summarize per-flavor outcomes.
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("Build summary")
+        logger.info("=" * 80)
+        for flavor in flavors:
+            name = flavor["flavor"]
+            logger.info(f"  {name}: {results.get(name, 'unknown')}")
+
+        succeeded = [f for f, s in results.items() if s == "success"]
+        # The whole run fails only if NO flavor produced an AMI — per-flavor failures
+        # are isolated and carried forward by update-flavors-lock (D8). This preserves
+        # the matrix's failure-isolation contract on the shared instance.
+        if not succeeded:
+            logger.error("No flavor produced an AMI — failing the run")
+            return 1
+
+        logger.info(f"✓ {len(succeeded)}/{len(flavors)} flavor(s) succeeded: {', '.join(succeeded)}")
         return 0
 
     except Exception as e:
+        # A gate failure (e.g. install) or connect failure lands here — the whole run
+        # aborts with zero results, which is the intended hard-abort for the gate (D10).
         logger.error("")
         logger.error("=" * 80)
         logger.error("AMI BUILD FAILED")
@@ -1783,18 +2043,17 @@ def main() -> int:
         return 1
 
     finally:
-        # Cleanup infrastructure
-        logger.warning("Cleaning up infrastructure...")
+        # Release only the resources the script owns — SSH + temp key. Infrastructure
+        # teardown is the workflow's always() destroy step (D1).
+        logger.info("Releasing script-owned resources (SSH + temp key)...")
         try:
-            cleanup_infrastructure(
-                region=args.region,
-                instance_type=args.instance_type,
-                allowed_ssh_cidr=allowed_ssh_cidr,
-                ssh_key_path=ssh_key_path,
-                ssh_client=ssh_client
+            cleanup_script_resources(
+                ssh_key_path=args.ssh_key_path,
+                ssh_client=ssh_client,
             )
         except Exception as cleanup_error:
-            logger.error(f"Failed to cleanup infrastructure: {cleanup_error}")
+            logger.error(f"Failed to release script resources: {cleanup_error}")
+
 
 if __name__ == '__main__':
     sys.exit(main())

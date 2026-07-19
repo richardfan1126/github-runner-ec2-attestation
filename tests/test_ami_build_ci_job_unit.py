@@ -271,11 +271,20 @@ class TestScriptInvocationStep:
             "Script must be invoked as 'uv run python scripts/build-ami.py'"
         )
 
-    def test_output_file_flag_present(self, build_ami_steps):
-        """The script invocation must include --output-file ami_build_result.json."""
+    def test_single_instance_invocation_flags(self, build_ami_steps):
+        """The single-instance invocation must pass host, ssh key, run-id, manifest,
+        and output-dir — and must NOT use the removed single-flavor --output-file /
+        --artifact-ref flags."""
         step = self._script_step(build_ami_steps)
-        assert "--output-file ami_build_result.json" in step["run"], (
-            "Script invocation must include '--output-file ami_build_result.json'"
+        run = step["run"]
+        for flag in ("--host", "--ssh-key-path", "--run-id",
+                     "--flavors-manifest", "--output-dir"):
+            assert flag in run, f"Script invocation must include '{flag}'"
+        assert "--output-file" not in run, (
+            "Single-instance invocation must not use the removed --output-file flag"
+        )
+        assert "--artifact-ref" not in run, (
+            "Single-instance invocation must not use the removed --artifact-ref flag"
         )
 
     def test_expected_workflow_flag_present(self, build_ami_steps):
@@ -314,16 +323,23 @@ class TestArtifactUploadStep:
         )
         return step
 
-    def test_upload_step_has_if_success(self, build_ami_steps):
-        """The upload step must have if: success()."""
+    def test_upload_step_runs_always(self, build_ami_steps):
+        """The upload step must run with if: always().
+
+        On the shared single instance a flavor can fail in isolation while others
+        succeed (D8); uploading results only on overall success() would drop the
+        successful flavors' results whenever any flavor failed. always() preserves
+        per-flavor failure isolation into update-flavors-lock's carry-forward.
+        """
         step = self._upload_step(build_ami_steps)
         condition = step.get("if", "")
-        assert "success()" in str(condition), (
-            f"Upload step must have 'if: success()', got {condition!r}"
+        assert "always()" in str(condition), (
+            f"Upload step must have 'if: always()', got {condition!r}"
         )
 
     def test_upload_artifact_name_is_ami_build_result(self, build_ami_steps):
-        """The artifact name must start with 'ami-build-result' (per-flavor suffix is expected)."""
+        """The artifact name must start with 'ami-build-result' (a single combined
+        artifact whose internal layout is ami-build-result-<flavor>/...)."""
         step = self._upload_step(build_ami_steps)
         name = step.get("with", {}).get("name", "")
         assert name.startswith("ami-build-result"), (
@@ -340,78 +356,124 @@ class TestArtifactUploadStep:
 
 
 # ===========================================================================
-# Requirement 7.2 — failure summary step
+# Requirement 7.2 — build summary step (single-job shape)
 # ===========================================================================
 
 
-class TestFailureSummaryStep:
-    """Requirement 7.2: a failure summary step must exist with if: failure()."""
+def _summary_step(steps: list) -> dict | None:
+    """Return the always() summary step that writes GITHUB_STEP_SUMMARY."""
+    for step in steps:
+        if "always()" in str(step.get("if", "")) and "GITHUB_STEP_SUMMARY" in step.get("run", ""):
+            return step
+    return None
 
-    def test_failure_summary_step_present(self, build_ami_steps):
-        """A step with if: failure() must be present."""
-        failure_steps = [
-            s for s in build_ami_steps
-            if "failure()" in str(s.get("if", ""))
-        ]
-        assert failure_steps, (
-            "At least one step with 'if: failure()' must be present in the build-ami job"
+
+class TestBuildSummaryStep:
+    """Requirement 7.2: an always() summary reports per-flavor results.
+
+    The old per-flavor matrix had separate success/failure summary steps. The
+    single job builds all flavors and reports them in one always() summary that
+    also handles the no-results case, so a failed flavor does not hide the others.
+    """
+
+    def test_summary_step_present_and_always(self, build_ami_steps):
+        """An always() step writing to $GITHUB_STEP_SUMMARY must be present."""
+        step = _summary_step(build_ami_steps)
+        assert step is not None, (
+            "An always() summary step writing $GITHUB_STEP_SUMMARY must exist"
         )
 
-    def test_failure_summary_writes_to_github_step_summary(self, build_ami_steps):
-        """The failure step must write to $GITHUB_STEP_SUMMARY."""
-        failure_steps = [
-            s for s in build_ami_steps
-            if "failure()" in str(s.get("if", ""))
-        ]
-        assert failure_steps, "No failure step found"
-        failure_step = failure_steps[0]
-        run_script = failure_step.get("run", "")
-        assert "GITHUB_STEP_SUMMARY" in run_script, (
-            "The failure summary step must write to $GITHUB_STEP_SUMMARY"
+    def test_summary_handles_no_results(self, build_ami_steps):
+        """The summary must handle the case where no flavor produced a result."""
+        step = _summary_step(build_ami_steps)
+        assert step is not None, "No summary step found"
+        run = step.get("run", "")
+        # Reads the per-flavor result files the driver writes.
+        assert "ami_build_result-" in run, (
+            "Summary must reference the per-flavor ami_build_result-<flavor>.json files"
         )
 
 
 # ===========================================================================
-# Requirement 7.3 — debug warning step
+# Requirement 7.3 — debug warning (folded into the always() summary)
 # ===========================================================================
 
 
-class TestDebugWarningStep:
-    """Requirement 7.3: a debug warning step must exist for workflow_dispatch with enable_ssh."""
+class TestDebugWarning:
+    """Requirement 7.3: a debug warning is emitted for workflow_dispatch enable_ssh.
 
-    def _debug_warning_step(self, steps: list) -> dict | None:
-        """Return the debug warning step, or None if not found."""
+    In the single job this is shell-gated inside the always() summary rather than a
+    separate step-level `if:`.
+    """
+
+    def test_debug_warning_present_in_summary(self, build_ami_steps):
+        """The summary must contain shell logic warning about debug (enable_ssh) builds."""
+        step = _summary_step(build_ami_steps)
+        assert step is not None, "No summary step found"
+        run = step.get("run", "")
+        assert "inputs.enable_ssh" in run, (
+            "Summary must gate the debug warning on inputs.enable_ssh"
+        )
+        assert "WARNING" in run and "debug" in run.lower(), (
+            "Summary must emit a debug-build WARNING"
+        )
+
+
+# ===========================================================================
+# Single-instance lifecycle: timeout, provision (apply), teardown (destroy)
+# ===========================================================================
+
+
+class TestSingleInstanceLifecycle:
+    """The single job owns the Terraform apply/destroy lifecycle (D1/D2/D3)."""
+
+    def test_no_matrix(self, build_ami_job):
+        """build-ami must NOT be a per-flavor matrix any more (single shared instance)."""
+        strategy = build_ami_job.get("strategy", {})
+        assert "matrix" not in strategy, (
+            "build-ami must not use a per-flavor matrix (it is one shared instance now)"
+        )
+
+    def test_explicit_timeout_minutes(self, build_ami_job):
+        """The job must set an explicit timeout-minutes well under GitHub's 6 h default."""
+        tmo = build_ami_job.get("timeout-minutes")
+        assert tmo is not None, "build-ami must set an explicit timeout-minutes"
+        assert int(tmo) < 360, f"timeout-minutes must be well under 360, got {tmo!r}"
+
+    def _provision_step(self, steps: list) -> dict | None:
         for step in steps:
-            condition = str(step.get("if", ""))
-            if "workflow_dispatch" in condition and "enable_ssh" in condition and "success()" in condition:
+            run = step.get("run", "")
+            if "terraform apply" in run:
                 return step
         return None
 
-    def test_debug_warning_step_present(self, build_ami_steps):
-        """A debug warning step must exist with a condition checking for workflow_dispatch and enable_ssh."""
-        step = self._debug_warning_step(build_ami_steps)
-        assert step is not None, (
-            "A debug warning step with a condition checking for "
-            "workflow_dispatch and enable_ssh must be present"
-        )
-        condition = str(step.get("if", ""))
-        assert "success()" in condition, (
-            "Debug warning step must include success() in its condition"
-        )
-        assert "workflow_dispatch" in condition, (
-            "Debug warning step must check for workflow_dispatch"
-        )
-        assert "enable_ssh" in condition, (
-            "Debug warning step must check for enable_ssh"
-        )
+    def _destroy_step(self, steps: list) -> dict | None:
+        for step in steps:
+            run = step.get("run", "")
+            if "terraform destroy" in run:
+                return step
+        return None
 
-    def test_debug_warning_writes_to_github_step_summary(self, build_ami_steps):
-        """The debug warning step must write to $GITHUB_STEP_SUMMARY."""
-        step = self._debug_warning_step(build_ami_steps)
-        assert step is not None, "Debug warning step not found"
-        run_script = step.get("run", "")
-        assert "GITHUB_STEP_SUMMARY" in run_script, (
-            "The debug warning step must write to $GITHUB_STEP_SUMMARY"
+    def test_provision_step_passes_run_id_and_right_sized_instance(self, build_ami_steps):
+        """The apply step must pass run_id and instance_type=c5.4xlarge (D9/D11)."""
+        step = self._provision_step(build_ami_steps)
+        assert step is not None, "A terraform apply provisioning step must be present"
+        run = step["run"]
+        assert "run_id=" in run, "terraform apply must pass the run_id var"
+        assert "c5.4xlarge" in run, "terraform apply must right-size to c5.4xlarge"
+
+    def test_destroy_step_is_always_and_retries(self, build_ami_steps):
+        """The teardown must be an always() terraform destroy that retries and passes run_id."""
+        step = self._destroy_step(build_ami_steps)
+        assert step is not None, "An always() terraform destroy step must be present"
+        assert "always()" in str(step.get("if", "")), (
+            "terraform destroy step must run with if: always()"
+        )
+        run = step["run"]
+        assert "run_id=" in run, "terraform destroy must pass the identical run_id var"
+        # Retry-with-backoff + fail-loud: a loop and a non-zero exit on non-convergence.
+        assert "for attempt" in run and "exit 1" in run, (
+            "destroy must retry with backoff and fail loud if it cannot converge"
         )
 
 

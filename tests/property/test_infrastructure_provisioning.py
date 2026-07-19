@@ -221,6 +221,67 @@ def test_ec2_instance_configuration():
         "Instance must have public IP for SSH access"
 
 
+def test_self_terminating_build_instance():
+    """
+    Verify the build instance carries a runner-independent self-destruct (D2).
+
+    The workflow's always() destroy cannot fire on runner hard-death / the ~6 h
+    ceiling / a failed destroy step, so the instance schedules its own shutdown and
+    terminates on it. This is the transient builder instance (no attestation/PCR
+    surface). It is also tagged with the run id so any orphan is attributable.
+
+    Validates: D2 (self-terminating build instance), D9 (orphan tag)
+    """
+    terraform_dir = Path(__file__).parent.parent.parent / "terraform" / "build-ami"
+    ec2_content = (terraform_dir / "ec2.tf").read_text()
+
+    # user_data schedules a shutdown at a TTL comfortably above the job timeout.
+    assert "user_data" in ec2_content, "Instance must set user_data for self-destruct"
+    assert "shutdown -h +150" in ec2_content, \
+        "user_data must schedule 'shutdown -h +150' (TTL above the 120-min job timeout)"
+    # The scheduled shutdown must terminate (not just stop) the instance.
+    assert 'instance_initiated_shutdown_behavior = "terminate"' in ec2_content, \
+        "Instance must terminate on shutdown, not stop"
+    # Orphan attribution: the instance is tagged with the run id.
+    assert "run_id = var.run_id" in ec2_content, \
+        "Instance must be tagged with run_id for orphan attribution"
+
+
+def test_account_unique_names_are_run_scoped():
+    """
+    Verify the account-unique resource names are run-scoped with run_id (D9).
+
+    IAM role/policy/instance-profile names, the SG GroupName, and the SSH key_name
+    are account-global uniqueness constraints, so a fixed name collides across
+    overlapping runs. Each must incorporate var.run_id. The SSH key_name must no
+    longer use the non-deterministic timestamp() suffix.
+
+    Validates: D9 (run-scoped naming)
+    """
+    terraform_dir = Path(__file__).parent.parent.parent / "terraform" / "build-ami"
+    iam = (terraform_dir / "iam.tf").read_text()
+    sg = (terraform_dir / "security_group.tf").read_text()
+    ssh_key = (terraform_dir / "ssh_key.tf").read_text()
+
+    assert 'name = "build-ami-instance-role-${var.run_id}"' in iam, \
+        "IAM role name must be run-scoped"
+    assert 'name        = "build-ami-instance-policy-${var.run_id}"' in iam, \
+        "IAM policy name must be run-scoped"
+    assert 'name = "build-ami-instance-profile-${var.run_id}"' in iam, \
+        "IAM instance-profile name must be run-scoped"
+    assert 'name        = "build-ami-instance-sg-${var.run_id}"' in sg, \
+        "Security group GroupName must be run-scoped"
+    assert 'key_name   = "build-ami-key-${var.run_id}"' in ssh_key, \
+        "SSH key_name must be run-scoped with run_id"
+    # The non-deterministic timestamp() suffix must be gone from the actual config
+    # (comment lines mentioning the old approach are ignored).
+    ssh_key_code = "\n".join(
+        line for line in ssh_key.splitlines() if not line.strip().startswith("#")
+    )
+    assert "timestamp()" not in ssh_key_code, \
+        "SSH key_name must not use the non-deterministic timestamp() suffix"
+
+
 def test_required_outputs():
     """
     Verify all required outputs are defined.
@@ -270,10 +331,14 @@ def test_variables_configuration():
         "Allowed SSH CIDR variable must be defined"
     assert 'variable "instance_type"' in variables_content, \
         "Instance type variable must be defined"
-    
-    # Verify instance_type default
-    assert 'default     = "c5.9xlarge"' in variables_content, \
-        "Instance type must default to c5.9xlarge"
+    # run_id variable (run-scoped naming + orphan tagging, D9)
+    assert 'variable "run_id"' in variables_content, \
+        "run_id variable must be defined"
+
+    # Verify instance_type default is right-sized to c5.4xlarge (D11): the CPU-bound
+    # coldsnap compile now runs once per run, not once per flavor.
+    assert 'default = "c5.4xlarge"' in variables_content, \
+        "Instance type must default to c5.4xlarge"
 
 
 # Property 79: SSH Keepalive Maintenance

@@ -46,15 +46,15 @@ def instance_type_strategy():
 @settings(max_examples=100, deadline=None)
 @given(
     ssh_key_content=ssh_key_content_strategy(),
-    region=region_strategy(),
-    instance_type=instance_type_strategy(),
 )
-def test_secure_ssh_key_deletion(ssh_key_content, region, instance_type):
+def test_secure_ssh_key_deletion(ssh_key_content):
     """
     Property 160: Secure SSH Key Deletion
 
     For any AMI build cleanup, the AMI_Converter should overwrite the
-    temporary SSH key file with random bytes before unlinking.
+    temporary SSH key file with random bytes before unlinking. Teardown of the
+    build instance is now the workflow's job (D1), so the script's cleanup only
+    closes SSH and securely deletes the temp key — no terraform destroy.
 
     **Validates: Requirements 21.15**
     """
@@ -70,9 +70,7 @@ def test_secure_ssh_key_deletion(ssh_key_content, region, instance_type):
         # Track call order to verify overwrite happens before unlink
         call_order = []
 
-        original_urandom = os.urandom
         original_unlink = os.unlink
-        original_open = open
 
         def tracking_urandom(size):
             call_order.append(('urandom', size))
@@ -82,19 +80,10 @@ def test_secure_ssh_key_deletion(ssh_key_content, region, instance_type):
             call_order.append(('unlink', path))
             return original_unlink(path)
 
-        with patch.object(build_ami.subprocess, 'run') as mock_run, \
-             patch.object(build_ami.os, 'urandom', side_effect=tracking_urandom), \
+        with patch.object(build_ami.os, 'urandom', side_effect=tracking_urandom), \
              patch.object(build_ami.os, 'unlink', side_effect=tracking_unlink):
 
-            # Terraform destroy succeeds
-            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
-            build_ami.cleanup_infrastructure(
-                region=region,
-                instance_type=instance_type,
-                allowed_ssh_cidr="10.0.0.0/8",
-                ssh_key_path=ssh_key_path,
-            )
+            build_ami.cleanup_script_resources(ssh_key_path=ssh_key_path)
 
             # Verify the file no longer exists
             assert not os.path.exists(ssh_key_path), \

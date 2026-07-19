@@ -4,7 +4,8 @@ resource "aws_vpc" "build_vpc" {
   enable_dns_support   = true
 
   tags = {
-    Name = "build-ami-vpc"
+    Name   = "build-ami-vpc"
+    run_id = var.run_id
   }
 }
 
@@ -15,7 +16,8 @@ resource "aws_subnet" "public_subnet" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "build-ami-public-subnet"
+    Name   = "build-ami-public-subnet"
+    run_id = var.run_id
   }
 }
 
@@ -23,7 +25,8 @@ resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.build_vpc.id
 
   tags = {
-    Name = "build-ami-igw"
+    Name   = "build-ami-igw"
+    run_id = var.run_id
   }
 }
 
@@ -36,7 +39,8 @@ resource "aws_route_table" "public_rt" {
   }
 
   tags = {
-    Name = "build-ami-public-rt"
+    Name   = "build-ami-public-rt"
+    run_id = var.run_id
   }
 }
 

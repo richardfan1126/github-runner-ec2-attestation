@@ -48,39 +48,29 @@ def test_signature_verification_called_before_artifact_download(artifact_ref: st
     Property 67: Signature Verification Requirement
 
     For any valid artifact reference, verify_artifact_signature must be called
-    before pull_artifact_from_ghcr in the main flow. This ensures that only
-    verified artifacts are downloaded.
+    before pull_artifact_from_ghcr in the per-flavor Pass 1 build. This ensures
+    that only verified artifacts are downloaded (verify-before-download).
 
     **Validates: Requirements 17.9, 17.10, 17.12**
     """
     call_order = []
 
-    with patch.object(build_ami, 'parse_arguments') as mock_args, \
-         patch.object(build_ami, 'validate_artifact_reference'), \
-         patch.object(build_ami, 'validate_aws_region'), \
-         patch.object(build_ami, 'validate_output_file_path'), \
-         patch.object(build_ami, 'boto3') as mock_boto3, \
-         patch.object(build_ami, 'get_user_public_ip', return_value="1.2.3.4"), \
-         patch.object(build_ami, 'provision_ami_build_instance', return_value=("i-123", "1.2.3.4", "key")), \
-         patch.object(build_ami, 'save_ssh_private_key', return_value="/tmp/key"), \
-         patch.object(build_ami, 'wait_for_instance_ready'), \
-         patch.object(build_ami, 'verify_ssh_connectivity', return_value=Mock()), \
-         patch.object(build_ami, 'install_all_tools'), \
+    flavor = {
+        "flavor": "default",
+        "artifact_ref": artifact_ref,
+        "container_image_digest": "sha256:" + "a" * 64,
+        "relaxations": {},
+    }
+
+    with patch.object(build_ami, 'reset_artifacts_dir'), \
          patch.object(build_ami, 'verify_artifact_signature') as mock_verify, \
          patch.object(build_ami, 'pull_artifact_from_ghcr') as mock_pull, \
-         patch.object(build_ami, 'upload_snapshot', return_value="snap-123"), \
-         patch.object(build_ami, 'register_ami', return_value="ami-123"), \
-         patch.object(build_ami, 'cleanup_infrastructure'), \
-         patch.object(build_ami, 'os') as mock_os:
+         patch.object(build_ami, 'validate_artifact_files'), \
+         patch.object(build_ami, 'check_debug_annotation'), \
+         patch.object(build_ami, 'validate_pcr_measurements',
+                      return_value={"Measurements": {"PCR4": "abc", "PCR7": "def"}}), \
+         patch.object(build_ami, 'upload_snapshot', return_value="snap-123"):
 
-        mock_args.return_value = Mock(
-            artifact_ref=artifact_ref,
-            region="us-east-1",
-            instance_type="m5.large",
-            output_file="/tmp/output.json",
-        )
-
-        # Track call order
         def track_verify(*args, **kwargs):
             call_order.append("verify_artifact_signature")
             return True
@@ -88,22 +78,17 @@ def test_signature_verification_called_before_artifact_download(artifact_ref: st
 
         def track_pull(*args, **kwargs):
             call_order.append("pull_artifact_from_ghcr")
-            return {"Measurements": {"PCR4": "abc", "PCR7": "def"}}
         mock_pull.side_effect = track_pull
 
-        mock_boto3.client.return_value = Mock()
-        mock_os.unlink = Mock()
-
-        # Mock open for writing build result
-        from unittest.mock import mock_open
-        with patch("builtins.open", mock_open()):
-            result = build_ami.main()
+        build_ami.build_flavor_pass1(
+            Mock(), flavor, "us-east-1", "123-1", "~/artifacts", False, None
+        )
 
         # Verify both were called
         assert "verify_artifact_signature" in call_order, \
-            "verify_artifact_signature must be called during main flow"
+            "verify_artifact_signature must be called during the flavor build"
         assert "pull_artifact_from_ghcr" in call_order, \
-            "pull_artifact_from_ghcr must be called during main flow"
+            "pull_artifact_from_ghcr must be called during the flavor build"
 
         # Verify order: signature verification BEFORE artifact download
         verify_idx = call_order.index("verify_artifact_signature")
@@ -218,55 +203,37 @@ def test_untrusted_artifact_raises_runtime_error(artifact_ref: str):
     """
     Property 68: Untrusted Artifact Rejection
 
-    For any artifact where signature verification fails, the main flow should
-    raise RuntimeError("SIGNATURE VERIFICATION FAILED") and NOT proceed to
-    pull artifacts or create AMI.
+    For any artifact where signature verification fails, the per-flavor build
+    should raise RuntimeError (an application error) and NOT proceed to pull
+    artifacts, upload a snapshot, or register an AMI.
 
     **Validates: Requirements 17.9, 17.10, 17.12**
     """
-    with patch.object(build_ami, 'parse_arguments') as mock_args, \
-         patch.object(build_ami, 'validate_artifact_reference'), \
-         patch.object(build_ami, 'validate_aws_region'), \
-         patch.object(build_ami, 'validate_output_file_path'), \
-         patch.object(build_ami, 'boto3') as mock_boto3, \
-         patch.object(build_ami, 'get_user_public_ip', return_value="1.2.3.4"), \
-         patch.object(build_ami, 'provision_ami_build_instance', return_value=("i-123", "1.2.3.4", "key")), \
-         patch.object(build_ami, 'save_ssh_private_key', return_value="/tmp/key"), \
-         patch.object(build_ami, 'wait_for_instance_ready'), \
-         patch.object(build_ami, 'verify_ssh_connectivity', return_value=Mock()), \
-         patch.object(build_ami, 'install_all_tools'), \
-         patch.object(build_ami, 'verify_artifact_signature', return_value=False) as mock_verify, \
+    flavor = {
+        "flavor": "default",
+        "artifact_ref": artifact_ref,
+        "container_image_digest": "sha256:" + "a" * 64,
+        "relaxations": {},
+    }
+
+    with patch.object(build_ami, 'reset_artifacts_dir'), \
+         patch.object(build_ami, 'verify_artifact_signature', return_value=False), \
          patch.object(build_ami, 'pull_artifact_from_ghcr') as mock_pull, \
          patch.object(build_ami, 'upload_snapshot') as mock_upload, \
-         patch.object(build_ami, 'register_ami') as mock_register, \
-         patch.object(build_ami, 'cleanup_infrastructure'), \
-         patch.object(build_ami, 'os') as mock_os:
+         patch.object(build_ami, 'register_ami') as mock_register:
 
-        mock_args.return_value = Mock(
-            artifact_ref=artifact_ref,
-            region="us-east-1",
-            instance_type="m5.large",
-            output_file="/tmp/output.json",
-        )
-        mock_boto3.client.return_value = Mock()
+        # An unverified artifact is an application error → RuntimeError.
+        with pytest.raises(RuntimeError):
+            build_ami.build_flavor_pass1(
+                Mock(), flavor, "us-east-1", "123-1", "~/artifacts", False, None
+            )
 
-        # Main should return 1 (failure) due to failed verification
-        # The RuntimeError is caught internally and converted to return code 1
-        result = build_ami.main()
-        assert result == 1, \
-            "main() should return 1 when signature verification fails"
-
-        # Verify that pull_artifact_from_ghcr was NOT called
-        mock_pull.assert_not_called(), \
-            "pull_artifact_from_ghcr must NOT be called when verification fails"
-
+        # Verify that pull_artifact_from_ghcr was NOT called (verify-before-download)
+        mock_pull.assert_not_called()
         # Verify that upload_snapshot was NOT called
-        mock_upload.assert_not_called(), \
-            "upload_snapshot must NOT be called when verification fails"
-
+        mock_upload.assert_not_called()
         # Verify that register_ami was NOT called
-        mock_register.assert_not_called(), \
-            "register_ami must NOT be called when verification fails"
+        mock_register.assert_not_called()
 
 
 @settings(max_examples=5)
