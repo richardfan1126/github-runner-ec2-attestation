@@ -1,16 +1,16 @@
 {
   "gpu-presence": {
-    "ami_id": "ami-0bba478a3df8f7322",
+    "ami_id": "ami-024574702c9113261",
     "container_image_digest": "sha256:8fc066a58f956de53d180c3abfaa5eda9e990164f19603121abc807b6cbfcc22",
-    "pcr4": "97136fcf69055bd796d4dec72cf1cb63002e1cc8a81a70c94f8303c2dedb4c9a58c766a60f1b94ad33440cf2495a05f2",
-    "producing_commit": "9bf72a49c0482039994b8e2d513e2e6de40d9d51",
+    "pcr4": "aadd8761f12a29b9aa5660376ea8d094e607908431126d2668ef8f6ad557db485802e8999ea29c7e2e3a2d8efb3757d0",
+    "producing_commit": "ee63ba95f4bee6390b1fae53495b3dec088ce30c",
     "relaxations": {}
   },
   "rust-build": {
-    "ami_id": "ami-0ab7d731d32aa14e3",
-    "container_image_digest": "sha256:1cd99803ed3bbfa8efa0c50c286819403ff65228e186aaf04c18f686dffc4db5",
-    "pcr4": "3b5b9b84e2ded4453dc8ea23199655833fd6f0aa88c58a218a54e0ca10087186b13ac9b72868819bc9aa8ca12bd090b3",
-    "producing_commit": "9bf72a49c0482039994b8e2d513e2e6de40d9d51",
+    "ami_id": "ami-0b42e0d625a4a54b1",
+    "container_image_digest": "sha256:ee6980d42b05758da5153e153176df468af59d51713d56c9bb43860850d93251",
+    "pcr4": "1f256bf7f84bf94bfc8425f2f433c7efea4c2a64bc5d1df765178a7571e1dc08500e248e2ba8929e99740fe282b67bd6",
+    "producing_commit": "ee63ba95f4bee6390b1fae53495b3dec088ce30c",
     "relaxations": {
       "container_network_mode": "bridge",
       "container_tmpfs_exec": true,
