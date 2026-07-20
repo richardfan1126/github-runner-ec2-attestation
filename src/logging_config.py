@@ -156,65 +156,6 @@ def clear_log_context() -> None:
     _log_context_var.set({})
 
 
-def sanitize_for_logging(data: dict, sensitive_keys: list[str] = None) -> dict:
-    """
-    Sanitize dictionary for logging by removing sensitive data
-    
-    Args:
-        data: Dictionary to sanitize
-        sensitive_keys: List of keys to redact (default: ['github_token', 'token', 'password', 'secret'])
-    
-    Returns:
-        Sanitized dictionary with sensitive values replaced with '[REDACTED]'
-    """
-    if sensitive_keys is None:
-        sensitive_keys = ['github_token', 'token', 'password', 'secret', 'authorization']
-    
-    sanitized = {}
-    for key, value in data.items():
-        if any(sensitive_key in key.lower() for sensitive_key in sensitive_keys):
-            sanitized[key] = '[REDACTED]'
-        elif isinstance(value, dict):
-            sanitized[key] = sanitize_for_logging(value, sensitive_keys)
-        else:
-            sanitized[key] = value
-    
-    return sanitized
-
-
-def sanitize_error_message(message: str) -> str:
-    """
-    Sanitize error message to prevent exposure of internal details
-    
-    Removes:
-    - File paths (absolute paths starting with /)
-    - Stack traces (lines starting with 'File "' or 'Traceback')
-    - Environment variables
-    
-    Args:
-        message: Error message to sanitize
-    
-    Returns:
-        Sanitized error message safe for external exposure
-    """
-    # Remove absolute file paths
-    message = re.sub(r'/[a-zA-Z0-9_/.-]+', '[PATH]', message)
-    
-    # Remove stack trace lines
-    lines = message.split('\n')
-    sanitized_lines = []
-    skip_next = False
-    
-    for line in lines:
-        # Skip traceback lines
-        if 'Traceback' in line or 'File "' in line or skip_next:
-            skip_next = 'File "' in line
-            continue
-        sanitized_lines.append(line)
-    
-    return '\n'.join(sanitized_lines).strip()
-
-
 # Maximum length for user-controlled log fields before truncation
 LOG_FIELD_MAX_LENGTH = 256
 
@@ -299,31 +240,9 @@ class LogSanitizer:
 
         return message
 
-    def sanitize_for_error_response(self, message: str) -> str:
-        """
-        Sanitize a message for inclusion in encrypted error envelopes.
-
-        More aggressive than sanitize() — strips all internal details and
-        returns only a categorized description.
-
-        Args:
-            message: Raw error message
-
-        Returns:
-            Sanitized message suitable for error envelopes
-        """
-        sanitized = self.sanitize(message)
-        # Apply length cap
-        return truncate_field(sanitized)
-
 
 # Module-level singleton for convenience
 _log_sanitizer = LogSanitizer()
-
-
-def get_log_sanitizer() -> LogSanitizer:
-    """Return the module-level LogSanitizer singleton."""
-    return _log_sanitizer
 
 
 def sanitize_log_message(message: str) -> str:

@@ -23,7 +23,7 @@ from src.attestation import AttestationGenerator
 from src.script_executor import ScriptExecutor
 from src.validation import RequestValidator
 from src.models import ExecutionStatus, CloneResult
-from src.logging_config import set_log_context, clear_log_context, sanitize_for_logging, sanitize_error_message, sanitize_log_message, sanitize_nonce_for_logging, truncate_field
+from src.logging_config import set_log_context, clear_log_context, sanitize_log_message, sanitize_nonce_for_logging, truncate_field
 from src.nonce_cache import NonceCache
 from src.output_attestation_rate_limiter import OutputAttestationRateLimiter
 

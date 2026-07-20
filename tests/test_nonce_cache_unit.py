@@ -150,27 +150,6 @@ class TestNonceCacheBasic:
         # After TTL, the nonce should be accepted again
         assert cache.check_and_store("nonce-1") is True
 
-    def test_cleanup_expired_removes_old_entries(self):
-        """cleanup_expired should remove entries past TTL."""
-        cache = NonceCache(ttl_seconds=1)
-        cache.check_and_store("nonce-1")
-        cache.check_and_store("nonce-2")
-        assert len(cache) == 2
-
-        time.sleep(1.1)
-
-        removed = cache.cleanup_expired()
-        assert removed == 2
-        assert len(cache) == 0
-
-    def test_cleanup_expired_keeps_fresh_entries(self):
-        """cleanup_expired should not remove entries within TTL."""
-        cache = NonceCache(ttl_seconds=60)
-        cache.check_and_store("nonce-1")
-        removed = cache.cleanup_expired()
-        assert removed == 0
-        assert len(cache) == 1
-
     def test_invalid_ttl_raises(self):
         """TTL < 1 should raise ValueError."""
         with pytest.raises(ValueError, match="ttl_seconds must be >= 1"):

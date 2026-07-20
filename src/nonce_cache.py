@@ -54,16 +54,6 @@ class NonceCache:
             self._cache[nonce] = now
             return True
 
-    def cleanup_expired(self) -> int:
-        """Remove expired nonce entries.
-
-        Returns:
-            Number of entries removed.
-        """
-        now = time.monotonic()
-        with self._lock:
-            return self._cleanup_expired_locked(now)
-
     def _cleanup_expired_locked(self, now: float) -> int:
         """Remove expired entries (must be called with lock held).
 
@@ -78,8 +68,3 @@ class NonceCache:
         for nonce in expired:
             del self._cache[nonce]
         return len(expired)
-
-    def __len__(self) -> int:
-        """Return the number of entries currently in the cache."""
-        with self._lock:
-            return len(self._cache)

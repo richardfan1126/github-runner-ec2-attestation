@@ -16,8 +16,6 @@ from src.logging_config import (
     setup_logging,
     set_log_context,
     clear_log_context,
-    sanitize_for_logging,
-    sanitize_error_message
 )
 
 
@@ -93,46 +91,6 @@ def test_property_37_error_logging_with_context(error_message, execution_id, req
     
     # Verify log level is ERROR
     assert 'ERROR' in log_output
-
-
-# Property 38: Request Logging without Token
-# **Validates: Requirements 7.2**
-@given(
-    repository_url=st.text(min_size=10, max_size=100),
-    commit_hash=st.text(min_size=40, max_size=40, alphabet='0123456789abcdef'),
-    script_path=st.text(min_size=5, max_size=50),
-    github_token=st.text(min_size=20, max_size=100, alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-').filter(lambda x: x.strip() != '')
-)
-@settings(max_examples=20)
-def test_property_38_request_logging_without_token(
-    repository_url, commit_hash, script_path, github_token
-):
-    """
-    Property 38: Request Logging without Token
-    
-    For any incoming execution request, the server should log the request details
-    (repository URL, commit hash, script path) but exclude the GitHub token.
-    
-    **Validates: Requirements 7.2**
-    """
-    # Create request data
-    request_data = {
-        'repository_url': repository_url,
-        'commit_hash': commit_hash,
-        'script_path': script_path,
-        'github_token': github_token
-    }
-    
-    # Sanitize for logging
-    sanitized = sanitize_for_logging(request_data)
-    
-    # Verify token is redacted
-    assert sanitized['github_token'] == '[REDACTED]'
-    
-    # Verify other fields are preserved
-    assert sanitized['repository_url'] == repository_url
-    assert sanitized['commit_hash'] == commit_hash
-    assert sanitized['script_path'] == script_path
 
 
 # Property 39: Execution Event Logging
@@ -267,17 +225,6 @@ def test_property_42_error_response_security(file_path, stack_trace_line):
     
     **Validates: Requirements 7.6**
     """
-    # Create error message with internal details
-    error_message = f"Error in file {file_path}: {stack_trace_line}"
-    
-    # Sanitize error message
-    sanitized = sanitize_error_message(error_message)
-    
-    # Verify file paths are removed (absolute paths starting with /)
-    assert file_path not in sanitized
-    # Sanitized message should contain [PATH] replacement
-    assert '[PATH]' in sanitized
-    
     # Create error response
     response = create_error_response(
         "internal_server_error",
